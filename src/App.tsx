@@ -4,9 +4,11 @@ import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
   loadTeams, saveTeams,
   loadCancellations, saveCancellations,
+  initServerMode, loadFromServer,
 } from './storage'
 import type { Member, Cancellation, Team } from './types'
 import { createEmptySlots, generateId } from './types'
+import { fetchData, fetchLocks, type SlotLock } from './api'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -46,13 +48,67 @@ function App() {
   const [setRoleSlot, setSetRoleSlot] = useState<number | null>(null)
   const [showCreateTeam, setShowCreateTeam] = useState(false)
   const [notice, setNotice] = useState<Cancellation | null>(null)
+  const [serverMode, setServerMode] = useState(false)
+  const [locks, setLocks] = useState<SlotLock[]>([])
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeam = teams.find(t => t.id === activeTeamId) ?? teams[0]
 
+  useEffect(() => {
+    initServerMode().then(async (sm) => {
+      setServerMode(sm)
+      if (sm) {
+        const ok = await loadFromServer()
+        if (ok) {
+          const loadedTeams = loadTeams()
+          setTeams(loadedTeams)
+          setCancellations(loadCancellations())
+          if (loadedTeams.length > 0) {
+            setActiveTeamId(loadedTeams[0].id)
+          }
+        } else {
+          // Server is empty/new - push local data to server
+          await saveTeams(teams)
+          await saveCancellations(cancellations)
+        }
+      }
+    })
+  }, [])
+
   useEffect(() => { saveTeams(teams) }, [teams])
   useEffect(() => { saveCancellations(cancellations) }, [cancellations])
   useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
+
+  // Poll locks from server (fast polling for editing indicators)
+  useEffect(() => {
+    if (!serverMode) return
+    const poll = async () => {
+      const l = await fetchLocks()
+      setLocks(l)
+    }
+    poll()
+    const interval = setInterval(poll, 1000)
+    return () => clearInterval(interval)
+  }, [serverMode])
+
+  // Poll server for real-time data updates (teams, cancellations)
+  useEffect(() => {
+    if (!serverMode) return
+    let lastTeamsJson = ''
+    const poll = async () => {
+      const data = await fetchData()
+      if (!data) return
+      const teamsJson = JSON.stringify(data.teams || [])
+      if (teamsJson !== lastTeamsJson) {
+        lastTeamsJson = teamsJson
+        setTeams(data.teams || [])
+      }
+      if (data.cancellations) setCancellations(data.cancellations)
+    }
+    poll()
+    const interval = setInterval(poll, 2000)
+    return () => clearInterval(interval)
+  }, [serverMode])
 
   useEffect(() => {
     if (!teams.find(t => t.id === activeTeamId) && teams.length > 0) {
@@ -83,9 +139,24 @@ function App() {
     }
   }
 
+  const handleShowCreateTeam = useCallback(() => setShowCreateTeam(true), [])
+  const handleSignupSlot = useCallback((idx: number) => setSignupSlot(idx), [])
+  const handleEditSlot = useCallback((idx: number) => setEditSlot(idx), [])
+  const handleSetRoleSlotClick = useCallback((idx: number) => setSetRoleSlot(idx), [])
+  const handleSignupFromRole = useCallback(() => {
+    if (setRoleSlot !== null) {
+      setSignupSlot(setRoleSlot)
+      setSetRoleSlot(null)
+    }
+  }, [setRoleSlot])
+
   const updateTeam = useCallback((id: string, updater: (t: Team) => Team) => {
     setTeams(prev => prev.map(t => t.id === id ? updater(t) : t))
   }, [])
+
+  const handleAdminRename = useCallback((name: string) => {
+    if (activeTeam) updateTeam(activeTeam.id, t => ({ ...t, name }))
+  }, [activeTeam, updateTeam])
 
   const handleCreateTeam = (name: string) => {
     const team = createDefaultTeam(name.trim())
@@ -234,12 +305,15 @@ function App() {
       <div className="min-h-screen bg-background">
         <div className="max-w-[960px] mx-auto px-4 py-5">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-semibold text-foreground">团队报名助手</h1>
+            <h1 className="text-xl font-semibold text-foreground">兔扇报名助手</h1>
             <div className="flex items-center gap-3">
               {isAdmin && (
                 <span className="inline-flex items-center rounded-full bg-amber-950/50 border border-amber-800 px-2.5 py-0.5 text-xs font-medium text-amber-400">
                   管理员
                 </span>
+              )}
+              {serverMode && (
+                <span className="text-[11px] text-blue-400 bg-blue-950/30 rounded px-1.5 py-0.5">同步</span>
               )}
               <span className="text-sm text-muted-foreground">{qq}</span>
               <Button variant="outline" size="sm" onClick={handleLogout}>退出</Button>
@@ -251,7 +325,7 @@ function App() {
             activeId={activeTeamId}
             isAdmin={isAdmin}
             onSwitch={switchTeam}
-            onCreate={() => setShowCreateTeam(true)}
+            onCreate={handleShowCreateTeam}
             onDelete={handleDeleteTeam}
             onRename={handleRenameTeam}
           />
@@ -262,7 +336,8 @@ function App() {
                 <AdminConfig
                   teamName={activeTeam.name}
                   note={activeTeam.note}
-                  onRename={(name) => updateTeam(activeTeam!.id, t => ({ ...t, name }))}
+                  serverMode={serverMode}
+                  onRename={handleAdminRename}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
                 />
@@ -272,9 +347,10 @@ function App() {
                 config={activeTeam.config}
                 currentQQ={qq}
                 isAdmin={isAdmin}
-                onSignup={(idx) => setSignupSlot(idx)}
-                onEdit={(idx) => setEditSlot(idx)}
-                onSetRole={(idx) => setSetRoleSlot(idx)}
+                locks={locks.filter(l => l.teamId === activeTeam.id)}
+                onSignup={handleSignupSlot}
+                onEdit={handleEditSlot}
+                onSetRole={handleSetRoleSlotClick}
               />
               {activeTeam.note && (
                 <div className="mt-4 rounded-lg border border-amber-800 bg-amber-950/20 p-3">
@@ -291,6 +367,7 @@ function App() {
         open={signupSlot !== null}
         qq={qq}
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
+        teamId={activeTeam?.id}
         isAdminEditing={false}
         onConfirm={handleSignupConfirm}
         onClose={() => setSignupSlot(null)}
@@ -306,6 +383,7 @@ function App() {
             qq={isAdminEdit ? (existingMember?.qq ?? qq) : qq}
             existing={existingMember}
             slotInfo={activeTeam.slots[editSlot]}
+            teamId={activeTeam.id}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
             onConfirm={handleSignupConfirm}
@@ -332,7 +410,7 @@ function App() {
           isReserved={activeTeam.slots[setRoleSlot]?.status === 'reserved'}
           canSignup={true}
           onSet={(role, maIdx) => { handleSetSlotRole(role, maIdx) }}
-          onSignup={() => { setSignupSlot(setRoleSlot); setSetRoleSlot(null) }}
+          onSignup={handleSignupFromRole}
           onClose={() => setSetRoleSlot(null)}
         />
       )}
@@ -354,7 +432,7 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
   }
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-6">
-      <h1 className="text-2xl font-semibold text-foreground">团队报名助手</h1>
+      <h1 className="text-2xl font-semibold text-foreground">兔扇报名助手</h1>
       <form className="flex gap-2" onSubmit={handleSubmit}>
         <input
           type="text"

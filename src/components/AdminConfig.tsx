@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -6,12 +6,13 @@ import { Textarea } from './ui/textarea'
 interface Props {
   teamName: string
   note: string
+  serverMode: boolean
   onRename: (name: string) => void
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
 }
 
-export function AdminConfig({ teamName, note, onRename, onUpdateNote, onQuickReserve }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, onRename, onUpdateNote, onQuickReserve }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -25,6 +26,12 @@ export function AdminConfig({ teamName, note, onRename, onUpdateNote, onQuickRes
       </Button>
       {open && (
         <div className="mt-3 space-y-4 rounded-lg border border-border p-4">
+          {serverMode && (
+            <div>
+              <h3 className="text-sm font-medium text-foreground mb-2">数据同步</h3>
+              <span className="text-xs text-blue-400">数据已连接服务器，多设备共享中</span>
+            </div>
+          )}
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">团队名称</h3>
             <div className="flex gap-2">
@@ -73,4 +80,4 @@ export function AdminConfig({ teamName, note, onRename, onUpdateNote, onQuickRes
       )}
     </div>
   )
-}
+})

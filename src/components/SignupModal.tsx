@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
+import { acquireSlotLock, releaseSlotLock } from '../api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -14,17 +15,44 @@ interface Props {
   isAdminEditing: boolean
   slotInfo?: Slot | null
   isBossSlot?: boolean
+  teamId?: string
   onConfirm: (data: Omit<Member, 'qq'>) => void
   onClose: () => void
   onLeave?: () => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(existing?.martialArtIndex ?? '')
   const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
   const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
   const [note, setNote] = useState(existing?.note ?? '')
+  const heartbeatRef = useRef<number>(0)
+
+  // Lock management
+  useEffect(() => {
+    if (!open || !teamId || slotInfo == null) return
+    const slotIndex = slotInfo.index
+
+    const lock = async () => {
+      await acquireSlotLock(teamId, slotIndex, qq)
+    }
+
+    lock()
+    heartbeatRef.current = setInterval(lock, 15000)
+
+    return () => {
+      clearInterval(heartbeatRef.current)
+      releaseSlotLock(teamId, slotIndex, qq)
+    }
+  }, [open, teamId, slotInfo?.index, qq])
+
+  const handleClose = () => {
+    if (teamId && slotInfo != null) {
+      releaseSlotLock(teamId, slotInfo.index, qq)
+    }
+    onClose()
+  }
 
   const allowedMartialArts = useMemo(() => {
     if (!slotInfo || slotInfo.status !== 'fixed') return martialArts
@@ -48,7 +76,7 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
   const isFixedSlot = slotInfo?.status === 'fixed' && !existing
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

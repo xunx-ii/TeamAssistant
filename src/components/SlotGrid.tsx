@@ -1,11 +1,14 @@
+import { useMemo, useCallback, memo } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Slot, TeamConfig } from '../types'
+import type { SlotLock } from '../api'
 
 interface Props {
   slots: Slot[]
   config: TeamConfig
   currentQQ: string
   isAdmin: boolean
+  locks: SlotLock[]
   onSignup: (slotIndex: number) => void
   onEdit: (slotIndex: number) => void
   onSetRole: (slotIndex: number) => void
@@ -33,18 +36,31 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   return counts
 }
 
-export function SlotGrid({ slots, config, currentQQ, isAdmin, onSignup, onEdit, onSetRole }: Props) {
+export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, onSignup, onEdit, onSetRole }: Props) {
   const reservedCount = config.reservedSlots.length
   const counts = getRoleCounts(slots, config.reservedSlots)
 
-  const orderedSlots: Slot[] = []
-  for (let row = 0; row < 5; row++) {
-    for (let col = 0; col < 5; col++) {
-      orderedSlots.push(slots[col * 5 + row])
+  const lockMap = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const lock of locks) {
+      if (lock.qq !== currentQQ) {
+        map.set(lock.slotIndex, lock.qq)
+      }
     }
-  }
+    return map
+  }, [locks, currentQQ])
 
-  const handleSlotClick = (slot: Slot) => {
+  const orderedSlots = useMemo(() => {
+    const result: Slot[] = []
+    for (let row = 0; row < 5; row++) {
+      for (let col = 0; col < 5; col++) {
+        result.push(slots[col * 5 + row])
+      }
+    }
+    return result
+  }, [slots])
+
+  const handleSlotClick = useCallback((slot: Slot) => {
     if (slot.status === 'occupied' && slot.member) {
       if (slot.member.qq === currentQQ || isAdmin) {
         onEdit(slot.index)
@@ -55,10 +71,15 @@ export function SlotGrid({ slots, config, currentQQ, isAdmin, onSignup, onEdit, 
       onSetRole(slot.index)
       return
     }
+    if (!isAdmin && lockMap.has(slot.index)) {
+      return
+    }
     if (slot.status === 'empty' || slot.status === 'fixed' || slot.status === 'reserved') {
       onSignup(slot.index)
     }
-  }
+  }, [currentQQ, isAdmin, onEdit, onSetRole, onSignup, lockMap])
+
+  const lockedCount = lockMap.size
 
   const statusBadge = (label: string, count: number, color = '') => (
     <span className={`inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-medium bg-secondary text-secondary-foreground ${color}`}>
@@ -76,6 +97,11 @@ export function SlotGrid({ slots, config, currentQQ, isAdmin, onSignup, onEdit, 
         {statusBadge('老板·奶', counts.bossHealer, 'border-purple-800/50 bg-purple-950/30 text-purple-400')}
         {statusBadge('老板·DPS', counts.bossDPS, 'border-purple-800/50 bg-purple-950/30 text-purple-400')}
         {statusBadge('空老板位', reservedCount - counts.bossT - counts.bossHealer - counts.bossDPS)}
+        {lockedCount > 0 && (
+          <span className="inline-flex items-center rounded-full border border-orange-800 px-2.5 py-0.5 text-xs font-medium bg-orange-950/30 text-orange-400">
+            编辑中 {lockedCount}
+          </span>
+        )}
       </div>
       <div className="grid grid-cols-5 gap-2">
         {orderedSlots.map(slot => {
@@ -147,8 +173,17 @@ export function SlotGrid({ slots, config, currentQQ, isAdmin, onSignup, onEdit, 
           }
 
           return (
-            <div key={slot.index} className={cellClass} onClick={() => handleSlotClick(slot)}>
+            <div
+              key={slot.index}
+              className={`${cellClass} overflow-hidden ${lockMap.has(slot.index) ? 'ring-1 ring-orange-500/60' : ''}`}
+              onClick={() => handleSlotClick(slot)}
+            >
               {content}
+              {lockMap.has(slot.index) && (
+                <div className="absolute top-1 right-2 text-[10px] font-medium bg-orange-600/80 text-white rounded px-1.5 py-0.5 leading-none">
+                  {lockMap.get(slot.index)}
+                </div>
+              )}
             </div>
           )
         })}
@@ -160,7 +195,10 @@ export function SlotGrid({ slots, config, currentQQ, isAdmin, onSignup, onEdit, 
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-950/30 border border-emerald-900"></span>固定位</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-purple-950/20 border border-purple-800/50"></span>老板报名</span>
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-secondary/30 border border-border"></span>老板位</span>
+        {lockedCount > 0 && (
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-orange-950/30 border border-orange-800"></span>编辑中</span>
+        )}
       </div>
     </div>
   )
-}
+})

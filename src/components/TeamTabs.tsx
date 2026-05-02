@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 import { Plus } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -13,7 +13,7 @@ interface Props {
   onRename: (id: string, name: string) => void
 }
 
-export function TeamTabs({ teams, activeId, isAdmin, onSwitch, onCreate, onDelete, onRename }: Props) {
+export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwitch, onCreate, onDelete, onRename }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -90,4 +90,4 @@ export function TeamTabs({ teams, activeId, isAdmin, onSwitch, onCreate, onDelet
       </div>
     </div>
   )
-}
+})
