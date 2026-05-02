@@ -14,6 +14,25 @@ export interface SlotLock {
   timestamp: number
 }
 
+export interface TeamLockInfo {
+  teamId: string
+  timestamp: number
+}
+
+export interface AcquireResult {
+  ok: boolean
+  lockedBy?: string
+  lockedAt?: number
+  reason?: string
+  timestamp?: number
+}
+
+export interface ValidateResult {
+  ok: boolean
+  reason?: string
+  lockedAt?: number
+}
+
 let serverAvailable = false
 let checked = false
 
@@ -50,7 +69,7 @@ export async function pushData(data: Partial<ServerData>): Promise<boolean> {
   }
 }
 
-export async function acquireSlotLock(teamId: string, slotIndex: number, qq: string): Promise<{ ok: boolean; lockedBy?: string }> {
+export async function acquireSlotLock(teamId: string, slotIndex: number, qq: string): Promise<AcquireResult> {
   try {
     const resp = await fetch(`${API}/lock`, {
       method: 'POST',
@@ -87,7 +106,7 @@ export async function fetchLocks(): Promise<SlotLock[]> {
   return []
 }
 
-export async function fetchTeamLocks(): Promise<string[]> {
+export async function fetchTeamLocks(): Promise<TeamLockInfo[]> {
   try {
     const resp = await fetch(`${API}/locks`, noCache)
     if (resp.ok) {
@@ -118,4 +137,17 @@ export async function unlockTeam(teamId: string): Promise<boolean> {
     })
     return resp.ok
   } catch { return false }
+}
+
+export async function validateLock(teamId: string, slotIndex: number, qq: string, lockTimestamp: number): Promise<ValidateResult> {
+  try {
+    const resp = await fetch(`${API}/validate-lock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
+    })
+    return await resp.json()
+  } catch {
+    return { ok: false, reason: 'network' }
+  }
 }

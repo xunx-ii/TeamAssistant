@@ -8,13 +8,15 @@ interface Props {
   note: string
   serverMode: boolean
   locked: boolean
+  isDefault: boolean
   onRename: (name: string) => void
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
   onToggleLock: () => void
+  onSetDefault: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, isDefault, onRename, onUpdateNote, onQuickReserve, onToggleLock, onSetDefault }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -43,6 +45,17 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
               <span className="text-xs text-blue-400">数据已连接服务器，多设备共享中</span>
             </div>
           )}
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isDefault}
+                onChange={onSetDefault}
+                className="w-4 h-4 rounded border-border accent-primary"
+              />
+              <span className="text-sm">默认显示该团队</span>
+            </label>
+          </div>
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">团队名称</h3>
             <div className="flex gap-2">

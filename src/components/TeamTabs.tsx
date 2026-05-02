@@ -11,11 +11,13 @@ interface Props {
   onCreate: () => void
   onDelete: (id: string) => void
   onRename: (id: string, name: string) => void
+  onReorder: (ids: string[]) => void
 }
 
-export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwitch, onCreate, onDelete, onRename }: Props) {
+export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwitch, onCreate, onDelete, onRename, onReorder }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -43,21 +45,46 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
     if (e.key === 'Escape') setEditingId(null)
   }
 
+  const handleDragStart = (index: number) => {
+    if (!isAdmin) return
+    setDragIndex(index)
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+  }
+
+  const handleDrop = (index: number) => {
+    if (dragIndex === null || dragIndex === index) {
+      setDragIndex(null)
+      return
+    }
+    const newOrder = teams.map(t => t.id)
+    const [moved] = newOrder.splice(dragIndex, 1)
+    newOrder.splice(index, 0, moved)
+    onReorder(newOrder)
+    setDragIndex(null)
+  }
+
   if (teams.length === 0) return null
 
   return (
     <div className="overflow-x-auto">
       <div className="flex gap-1 border-b border-border">
-        {teams.map(team => (
+        {teams.map((team, i) => (
           <div
             key={team.id}
+            draggable={isAdmin}
             className={`relative flex items-center gap-1 rounded-t-lg px-4 py-2 text-sm cursor-pointer transition-colors select-none border border-transparent border-b-0 mb-[-1px] ${
               team.id === activeId
                 ? 'bg-background border-border text-foreground font-medium'
                 : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-            }`}
+            } ${dragIndex === i ? 'opacity-50' : ''}`}
             onClick={() => onSwitch(team.id)}
             onDoubleClick={() => startEdit(team.id, team.name)}
+            onDragStart={() => handleDragStart(i)}
+            onDragOver={(e) => handleDragOver(e)}
+            onDrop={() => handleDrop(i)}
           >
             {editingId === team.id ? (
               <Input

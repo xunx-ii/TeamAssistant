@@ -186,13 +186,13 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
           return (
             <div
               key={slot.index}
-              className={`${cellClass} overflow-hidden ${lockMap.has(slot.index) ? 'ring-1 ring-orange-500/60' : ''}`}
+              className={`${cellClass} overflow-hidden ${lockMap.has(slot.index) ? 'ring-2 ring-orange-500 border-orange-500' : ''}`}
               onClick={() => handleSlotClick(slot)}
             >
               {content}
               {lockMap.has(slot.index) && (
-                <div className="absolute top-1 right-2 text-[10px] font-medium bg-orange-600/80 text-white rounded px-1.5 py-0.5 leading-none">
-                  {lockMap.get(slot.index)}
+                <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-orange-600 text-white py-0.5 font-medium z-10">
+                  {lockMap.get(slot.index)} 编辑中
                 </div>
               )}
             </div>

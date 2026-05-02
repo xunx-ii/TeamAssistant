@@ -8,7 +8,8 @@ import {
 } from './storage'
 import type { Member, Cancellation, Team } from './types'
 import { createEmptySlots, generateId } from './types'
-import { fetchData, fetchLocks, fetchTeamLocks, lockTeam, unlockTeam, type SlotLock } from './api'
+import { martialArts } from './data/martialArts'
+import { fetchData, fetchLocks, fetchTeamLocks, lockTeam, unlockTeam, type SlotLock, type TeamLockInfo } from './api'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -24,7 +25,7 @@ function createDefaultTeam(name = '默认团队'): Team {
     id: generateId(),
     name,
     note: '',
-    config: { reservedSlots: [], locked: false },
+    config: { reservedSlots: [], locked: false, default: false },
     slots: createEmptySlots(),
   }
 }
@@ -38,7 +39,11 @@ function App() {
     saveTeams([def])
     return [def]
   })
-  const [activeTeamId, setActiveTeamId] = useState<string>(teams[0]?.id ?? '')
+  const [activeTeamId, setActiveTeamId] = useState<string>(() => {
+    const stored = loadTeams()
+    const dt = stored.find(t => t.config.default)
+    return dt ? dt.id : stored[0]?.id ?? ''
+  })
   const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
   const [adminQQs, setAdminQQs] = useState<string[]>([])
 
@@ -50,7 +55,7 @@ function App() {
   const [notice, setNotice] = useState<Cancellation | null>(null)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
-  const [teamLocks, setTeamLocks] = useState<string[]>([])
+  const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeam = teams.find(t => t.id === activeTeamId) ?? teams[0]
@@ -64,9 +69,8 @@ function App() {
           const loadedTeams = loadTeams()
           setTeams(loadedTeams)
           setCancellations(loadCancellations())
-          if (loadedTeams.length > 0) {
-            setActiveTeamId(loadedTeams[0].id)
-          }
+          const dt = loadedTeams.find(t => t.config.default)
+          setActiveTeamId(dt ? dt.id : loadedTeams[0]?.id ?? '')
         } else {
           // Server is empty/new - push local data to server
           await saveTeams(teams)
@@ -93,13 +97,15 @@ function App() {
     return () => clearInterval(interval)
   }, [serverMode])
 
-  // Poll server for real-time data updates (teams, cancellations)
+  // Poll server for real-time data updates (teams, cancellations, locks fallback)
   useEffect(() => {
     if (!serverMode) return
     let lastTeamsJson = ''
     const poll = async () => {
       const data = await fetchData()
       if (!data) return
+      // Also update locks from data poll as fallback
+      if (data.locks) setLocks(data.locks)
       const teamsJson = JSON.stringify(data.teams || [])
       if (teamsJson !== lastTeamsJson) {
         lastTeamsJson = teamsJson
@@ -185,7 +191,7 @@ function App() {
     updateTeam(activeTeam.id, t => ({ ...t, note }))
   }
 
-  const handleSetSlotRole = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null) => {
+  const handleSetSlotRole = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => {
     const slotIndex = setRoleSlot
     if (slotIndex === null || !activeTeam) return
     updateTeam(activeTeam.id, t => {
@@ -200,10 +206,27 @@ function App() {
         if (role === null) {
           return { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
         }
+        // If QQ is specified, directly occupy the slot
+        if (assignQQ && martialArtIndex != null) {
+          return {
+            ...s,
+            status: 'occupied' as const,
+            fixedRole: null,
+            fixedMartialArtIndex: null,
+            member: {
+              qq: assignQQ,
+              martialArtIndex: String(martialArtIndex),
+              gearScore: '',
+              characterId: '',
+              note: '',
+            },
+          }
+        }
         return { ...s, status: 'fixed' as const, member: null, fixedRole: role, fixedMartialArtIndex: martialArtIndex }
       })
       return { ...t, config, slots }
     })
+    setSetRoleSlot(null)
   }
 
   const handleQuickReserve = (type: 'T' | '治疗' | 'boss', count: number) => {
@@ -295,6 +318,23 @@ function App() {
     clearModals()
   }
 
+  const getDuplicateRoles = (qqToCheck: string, excludeSlot?: number): string[] => {
+    if (!activeTeam) return []
+    const roles: string[] = []
+    for (const s of activeTeam.slots) {
+      if (s.status === 'occupied' && s.member && s.member.qq === qqToCheck) {
+        if (excludeSlot !== undefined && s.index === excludeSlot) continue
+        if (activeTeam.config.reservedSlots.includes(s.index)) continue
+        const idx = parseInt(s.member.martialArtIndex)
+        if (!isNaN(idx) && idx < martialArts.length) {
+          const role = martialArts[idx].role
+          if (role === 'T' || role === '治疗') roles.push(role)
+        }
+      }
+    }
+    return roles
+  }
+
   if (!qq) {
     return <LoginPage onLogin={handleLogin} />
   }
@@ -330,6 +370,12 @@ function App() {
             onCreate={handleShowCreateTeam}
             onDelete={handleDeleteTeam}
             onRename={handleRenameTeam}
+            onReorder={(ids) => {
+              setTeams(prev => {
+                const map = new Map(prev.map(t => [t.id, t]))
+                return ids.map(id => map.get(id)!).filter(Boolean)
+              })
+            }}
           />
 
           {activeTeam && (
@@ -340,6 +386,7 @@ function App() {
                   note={activeTeam.note}
                   serverMode={serverMode}
                   locked={activeTeam.config.locked}
+                  isDefault={activeTeam.config.default}
                   onRename={handleAdminRename}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
@@ -354,6 +401,13 @@ function App() {
                       (newLocked ? lockTeam : unlockTeam)(activeTeam.id)
                     }
                   }}
+                  onSetDefault={() => {
+                    if (!activeTeam) return
+                    setTeams(prev => prev.map(t => ({
+                      ...t,
+                      config: { ...t.config, default: t.id === activeTeam.id },
+                    })))
+                  }}
                 />
               )}
               <SlotGrid
@@ -362,7 +416,7 @@ function App() {
                 currentQQ={qq}
                 isAdmin={isAdmin}
                 locks={locks.filter(l => l.teamId === activeTeam.id)}
-                teamLocked={teamLocks.includes(activeTeam.id)}
+                teamLocked={teamLocks.some(t => t.teamId === activeTeam.id)}
                 onSignup={handleSignupSlot}
                 onEdit={handleEditSlot}
                 onSetRole={handleSetRoleSlotClick}
@@ -384,6 +438,7 @@ function App() {
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
         teamId={activeTeam?.id}
         isAdminEditing={false}
+        duplicateRoles={getDuplicateRoles(qq)}
         onConfirm={handleSignupConfirm}
         onClose={() => setSignupSlot(null)}
       />
@@ -401,6 +456,7 @@ function App() {
             teamId={activeTeam.id}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
+            duplicateRoles={getDuplicateRoles(qq, editSlot)}
             onConfirm={handleSignupConfirm}
             onClose={() => setEditSlot(null)}
             onLeave={!isAdminEdit ? () => handleLeave(editSlot) : undefined}
@@ -424,7 +480,7 @@ function App() {
           currentMartialArt={activeTeam.slots[setRoleSlot]?.fixedMartialArtIndex ?? null}
           isReserved={activeTeam.slots[setRoleSlot]?.status === 'reserved'}
           canSignup={true}
-          onSet={(role, maIdx) => { handleSetSlotRole(role, maIdx) }}
+          onSet={(role, maIdx, assignQQ) => { handleSetSlotRole(role, maIdx, assignQQ) }}
           onSignup={handleSignupFromRole}
           onClose={() => setSetRoleSlot(null)}
         />

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
-import { acquireSlotLock, releaseSlotLock } from '../api'
+import { acquireSlotLock, releaseSlotLock, validateLock } from '../api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -16,26 +16,37 @@ interface Props {
   slotInfo?: Slot | null
   isBossSlot?: boolean
   teamId?: string
+  duplicateRoles: string[]
   onConfirm: (data: Omit<Member, 'qq'>) => void
   onClose: () => void
   onLeave?: () => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, duplicateRoles, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(existing?.martialArtIndex ?? '')
   const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
   const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
   const [note, setNote] = useState(existing?.note ?? '')
+  const [lockTimestamp, setLockTimestamp] = useState<number>(0)
+  const [error, setError] = useState('')
   const heartbeatRef = useRef<number>(0)
 
-  // Lock management
+  // Lock management with timestamp tracking
   useEffect(() => {
     if (!open || !teamId || slotInfo == null) return
     const slotIndex = slotInfo.index
 
     const lock = async () => {
-      await acquireSlotLock(teamId, slotIndex, qq)
+      const result = await acquireSlotLock(teamId, slotIndex, qq)
+      if (result.ok && result.timestamp) {
+        setLockTimestamp(result.timestamp)
+        setError('')
+      } else if (result.reason === 'teamLocked') {
+        setError('表格已被管理员锁定')
+      } else if (result.lockedBy && result.lockedBy !== qq) {
+        setError(`该位置已被 ${result.lockedBy} 先点击`)
+      }
     }
 
     lock()
@@ -54,6 +65,37 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
     onClose()
   }
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!martialArt || !gearScore || !characterId) return
+    setError('')
+
+    // Validate lock before saving (timestamp-based conflict resolution)
+    if (teamId && slotInfo != null && lockTimestamp > 0) {
+      const validation = await validateLock(teamId, slotInfo.index, qq, lockTimestamp)
+      if (!validation.ok) {
+        if (validation.reason === 'teamLocked') {
+          setError('表格已被管理员锁定，无法保存')
+        } else {
+          setError('该位置已被其他人抢占，请重新选择')
+        }
+        return
+      }
+    }
+
+    // Prevent duplicate T/Healer signup by same QQ
+    const maIdx = parseInt(martialArt)
+    const ma = martialArts[maIdx]
+    if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing) {
+      if (duplicateRoles.includes(ma.role)) {
+        setError(ma.role === 'T' ? 'T 心法不能重复报名' : '治疗心法不能重复报名')
+        return
+      }
+    }
+
+    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note })
+  }
+
   const allowedMartialArts = useMemo(() => {
     if (!slotInfo || slotInfo.status !== 'fixed') return martialArts
     if (slotInfo.fixedMartialArtIndex !== null) {
@@ -65,12 +107,6 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
     }
     return martialArts
   }, [slotInfo])
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!martialArt || !gearScore || !characterId) return
-    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note })
-  }
 
   const title = isAdminEditing ? '编辑成员' : existing ? '修改报名' : '报名'
   const isFixedSlot = slotInfo?.status === 'fixed' && !existing
@@ -91,6 +127,11 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
             {slotInfo?.fixedMartialArtIndex !== null
               ? `限定心法：${getMartialArtLabel(martialArts[slotInfo!.fixedMartialArtIndex!])}`
               : `限定：${slotInfo?.fixedRole === 'T' ? 'T' : slotInfo?.fixedRole === '治疗' ? '治疗' : 'DPS'}`}
+          </p>
+        )}
+        {error && (
+          <p className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">
+            {error}
           </p>
         )}
         <form onSubmit={handleSubmit} className="space-y-3">

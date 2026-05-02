@@ -1,12 +1,13 @@
 {
   "teams": [
     {
-      "id": "1777721694639",
-      "name": "默认团队",
+      "id": "1777734691016",
+      "name": "4444",
       "note": "",
       "config": {
         "reservedSlots": [],
-        "locked": true
+        "locked": false,
+        "default": false
       },
       "slots": [
         {
@@ -187,11 +188,16 @@
       ]
     },
     {
-      "id": "1777732798133",
-      "name": "默认团队2",
+      "id": "1777733148737",
+      "name": "123123",
       "note": "",
       "config": {
-        "reservedSlots": []
+        "reservedSlots": [
+          5,
+          10
+        ],
+        "locked": false,
+        "default": true
       },
       "slots": [
         {
@@ -231,8 +237,14 @@
         },
         {
           "index": 5,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "123431",
+            "martialArtIndex": "1",
+            "gearScore": "213",
+            "characterId": "23",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
@@ -266,8 +278,14 @@
         },
         {
           "index": 10,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "2449170205",
+            "martialArtIndex": "27",
+            "gearScore": "123123",
+            "characterId": "123123",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
@@ -301,8 +319,14 @@
         },
         {
           "index": 15,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "2449170205",
+            "martialArtIndex": "27",
+            "gearScore": "1231233",
+            "characterId": "1231233",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
@@ -336,8 +360,14 @@
         },
         {
           "index": 20,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "123456",
+            "martialArtIndex": "2",
+            "gearScore": "",
+            "characterId": "",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },

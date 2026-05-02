@@ -3,6 +3,7 @@ import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import { ArrowLeft } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
+import { Input } from './ui/input'
 
 interface Props {
   open: boolean
@@ -11,16 +12,18 @@ interface Props {
   currentMartialArt: number | null
   isReserved: boolean
   canSignup: boolean
-  onSet: (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null) => void
+  onSet: (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => void
   onSignup: () => void
   onClose: () => void
 }
 
 export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt, isReserved, canSignup, onSet, onSignup, onClose }: Props) {
   const [showMartialArts, setShowMartialArts] = useState(false)
+  const [assignQQ, setAssignQQ] = useState('')
 
   const handlePick = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, maIdx: number | null = null) => {
-    onSet(role, maIdx)
+    const qq = assignQQ.trim() || undefined
+    onSet(role, maIdx, qq)
   }
 
   const hasRestriction = !!currentRole || currentMartialArt !== null || isReserved
@@ -64,6 +67,15 @@ export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt
             <button className="flex items-center gap-1 text-sm text-primary hover:underline mb-3" onClick={() => setShowMartialArts(false)}>
               <ArrowLeft className="h-3 w-3" /> 返回
             </button>
+            <div className="space-y-1.5 mb-3">
+              <span className="text-xs text-muted-foreground">指定QQ（可选，填写后直接占位）</span>
+              <Input
+                className="h-8 text-sm"
+                placeholder="输入QQ号直接占位"
+                value={assignQQ}
+                onChange={e => setAssignQQ(e.target.value)}
+              />
+            </div>
             <div className="grid grid-cols-2 gap-1 max-h-72 overflow-y-auto">
               {martialArts.map((ma, i) => (
                 <button
