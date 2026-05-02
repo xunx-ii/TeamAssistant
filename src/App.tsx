@@ -8,7 +8,7 @@ import {
 } from './storage'
 import type { Member, Cancellation, Team } from './types'
 import { createEmptySlots, generateId } from './types'
-import { fetchData, fetchLocks, type SlotLock } from './api'
+import { fetchData, fetchLocks, fetchTeamLocks, lockTeam, unlockTeam, type SlotLock } from './api'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -24,7 +24,7 @@ function createDefaultTeam(name = '默认团队'): Team {
     id: generateId(),
     name,
     note: '',
-    config: { reservedSlots: [] },
+    config: { reservedSlots: [], locked: false },
     slots: createEmptySlots(),
   }
 }
@@ -50,6 +50,7 @@ function App() {
   const [notice, setNotice] = useState<Cancellation | null>(null)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
+  const [teamLocks, setTeamLocks] = useState<string[]>([])
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeam = teams.find(t => t.id === activeTeamId) ?? teams[0]
@@ -79,12 +80,13 @@ function App() {
   useEffect(() => { saveCancellations(cancellations) }, [cancellations])
   useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
 
-  // Poll locks from server (fast polling for editing indicators)
+  // Poll locks from server (fast polling for editing indicators + team locks)
   useEffect(() => {
     if (!serverMode) return
     const poll = async () => {
-      const l = await fetchLocks()
-      setLocks(l)
+      const [slots, teams] = await Promise.all([fetchLocks(), fetchTeamLocks()])
+      setLocks(slots)
+      setTeamLocks(teams)
     }
     poll()
     const interval = setInterval(poll, 1000)
@@ -191,10 +193,10 @@ function App() {
       const slots = t.slots.map(s => {
         if (s.index !== slotIndex) return s
         if (role === 'boss') {
-          config = { reservedSlots: [...new Set([...config.reservedSlots, slotIndex])].sort((a, b) => a - b) }
+          config = { ...t.config, reservedSlots: [...new Set([...config.reservedSlots, slotIndex])].sort((a, b) => a - b) }
           return { ...s, status: 'reserved' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
         }
-        config = { reservedSlots: config.reservedSlots.filter(i => i !== slotIndex) }
+        config = { ...t.config, reservedSlots: config.reservedSlots.filter(i => i !== slotIndex) }
         if (role === null) {
           return { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
         }
@@ -337,9 +339,21 @@ function App() {
                   teamName={activeTeam.name}
                   note={activeTeam.note}
                   serverMode={serverMode}
+                  locked={activeTeam.config.locked}
                   onRename={handleAdminRename}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
+                  onToggleLock={() => {
+                    if (!activeTeam) return
+                    const newLocked = !activeTeam.config.locked
+                    updateTeam(activeTeam.id, t => ({
+                      ...t,
+                      config: { ...t.config, locked: newLocked },
+                    }))
+                    if (serverMode) {
+                      (newLocked ? lockTeam : unlockTeam)(activeTeam.id)
+                    }
+                  }}
                 />
               )}
               <SlotGrid
@@ -348,6 +362,7 @@ function App() {
                 currentQQ={qq}
                 isAdmin={isAdmin}
                 locks={locks.filter(l => l.teamId === activeTeam.id)}
+                teamLocked={teamLocks.includes(activeTeam.id)}
                 onSignup={handleSignupSlot}
                 onEdit={handleEditSlot}
                 onSetRole={handleSetRoleSlotClick}

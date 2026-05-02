@@ -5,6 +5,192 @@
       "name": "默认团队",
       "note": "",
       "config": {
+        "reservedSlots": [],
+        "locked": true
+      },
+      "slots": [
+        {
+          "index": 0,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 1,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 2,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 3,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 4,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 5,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 6,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 7,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 8,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 9,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 10,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 11,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 12,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 13,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 14,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 15,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 16,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 17,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 18,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 19,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 20,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 21,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 22,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 23,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        },
+        {
+          "index": 24,
+          "status": "empty",
+          "member": null,
+          "fixedRole": null,
+          "fixedMartialArtIndex": null
+        }
+      ]
+    },
+    {
+      "id": "1777732798133",
+      "name": "默认团队2",
+      "note": "",
+      "config": {
         "reservedSlots": []
       },
       "slots": [

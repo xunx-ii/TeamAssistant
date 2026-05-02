@@ -28,6 +28,7 @@ export interface Cancellation {
 
 export interface TeamConfig {
   reservedSlots: number[]
+  locked: boolean
 }
 
 export interface Team {
@@ -40,6 +41,7 @@ export interface Team {
 
 export const DEFAULT_TEAM_CONFIG: TeamConfig = {
   reservedSlots: [],
+  locked: false,
 }
 
 export const TOTAL_SLOTS = 25

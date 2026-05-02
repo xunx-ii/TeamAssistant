@@ -79,7 +79,43 @@ export async function releaseSlotLock(teamId: string, slotIndex: number, qq: str
 export async function fetchLocks(): Promise<SlotLock[]> {
   try {
     const resp = await fetch(`${API}/locks`, noCache)
-    if (resp.ok) return await resp.json()
+    if (resp.ok) {
+      const data = await resp.json()
+      return data.slots || []
+    }
   } catch { /* */ }
   return []
+}
+
+export async function fetchTeamLocks(): Promise<string[]> {
+  try {
+    const resp = await fetch(`${API}/locks`, noCache)
+    if (resp.ok) {
+      const data = await resp.json()
+      return data.teams || []
+    }
+  } catch { /* */ }
+  return []
+}
+
+export async function lockTeam(teamId: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`${API}/team-lock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teamId }),
+    })
+    return resp.ok
+  } catch { return false }
+}
+
+export async function unlockTeam(teamId: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`${API}/team-lock`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teamId }),
+    })
+    return resp.ok
+  } catch { return false }
 }

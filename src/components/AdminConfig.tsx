@@ -7,12 +7,14 @@ interface Props {
   teamName: string
   note: string
   serverMode: boolean
+  locked: boolean
   onRename: (name: string) => void
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
+  onToggleLock: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, onRename, onUpdateNote, onQuickReserve }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -21,9 +23,18 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
 
   return (
     <div className="mb-4">
-      <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
-        {open ? '收起设置' : '团队设置'}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
+          {open ? '收起设置' : '团队设置'}
+        </Button>
+        <Button
+          variant={locked ? 'default' : 'outline'}
+          size="sm"
+          onClick={onToggleLock}
+        >
+          {locked ? '已锁定' : '锁定表格'}
+        </Button>
+      </div>
       {open && (
         <div className="mt-3 space-y-4 rounded-lg border border-border p-4">
           {serverMode && (

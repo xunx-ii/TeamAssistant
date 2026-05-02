@@ -9,6 +9,7 @@ interface Props {
   currentQQ: string
   isAdmin: boolean
   locks: SlotLock[]
+  teamLocked: boolean
   onSignup: (slotIndex: number) => void
   onEdit: (slotIndex: number) => void
   onSetRole: (slotIndex: number) => void
@@ -36,7 +37,7 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   return counts
 }
 
-export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, onSignup, onEdit, onSetRole }: Props) {
+export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole }: Props) {
   const reservedCount = config.reservedSlots.length
   const counts = getRoleCounts(slots, config.reservedSlots)
 
@@ -61,6 +62,9 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
   }, [slots])
 
   const handleSlotClick = useCallback((slot: Slot) => {
+    // Team locked via config or real-time server: only admin can interact
+    if ((config.locked || teamLocked) && !isAdmin) return
+
     if (slot.status === 'occupied' && slot.member) {
       if (slot.member.qq === currentQQ || isAdmin) {
         onEdit(slot.index)
@@ -77,7 +81,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
     if (slot.status === 'empty' || slot.status === 'fixed' || slot.status === 'reserved') {
       onSignup(slot.index)
     }
-  }, [currentQQ, isAdmin, onEdit, onSetRole, onSignup, lockMap])
+  }, [currentQQ, isAdmin, onEdit, onSetRole, onSignup, lockMap, config.locked, teamLocked])
 
   const lockedCount = lockMap.size
 
@@ -89,6 +93,11 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
 
   return (
     <div>
+      {(config.locked || teamLocked) && !isAdmin && (
+        <div className="mb-3 rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-xs text-destructive">
+          🔒 表格已锁定，仅管理员可编辑
+        </div>
+      )}
       <div className="flex flex-wrap gap-2 mb-3">
         {statusBadge('T', counts.T)}
         {statusBadge('治疗', counts['治疗'])}

@@ -23,6 +23,8 @@ function acquireWriteLock() {
 
 // Slot editing locks (in-memory, key: "teamId:slotIndex")
 const slotLocks = new Map()
+// Team-level locks (in-memory, instantly propagated)
+const teamLocks = new Set()
 const LOCK_LOG = process.env.DEBUG === '1'
 
 function cleanLocks() {
@@ -82,11 +84,12 @@ api.post('/data', async (req, res) => {
   res.json({ ok: true })
 })
 
-// Dedicated locks endpoint
+// Dedicated locks endpoint (responds within 1s polling)
 api.get('/locks', (_req, res) => {
-  const locks = getLocks()
-  if (LOCK_LOG) console.log(`[lock] GET /locks → ${locks.length} active`)
-  res.json(locks)
+  const sl = getLocks()
+  const tl = [...teamLocks]
+  if (LOCK_LOG) console.log(`[lock] GET /locks → ${sl.length} slots, ${tl.length} teams`)
+  res.json({ slots: sl, teams: tl })
 })
 
 api.post('/lock', (req, res) => {
@@ -118,6 +121,23 @@ api.delete('/lock', (req, res) => {
     slotLocks.delete(key)
     if (LOCK_LOG) console.log(`[lock] RELEASED: ${key}`)
   }
+  res.json({ ok: true })
+})
+
+// Team-level lock API
+api.post('/team-lock', (req, res) => {
+  const { teamId } = req.body
+  if (!teamId) return res.status(400).json({ ok: false })
+  teamLocks.add(teamId)
+  if (LOCK_LOG) console.log(`[lock] TEAM LOCKED: ${teamId}`)
+  res.json({ ok: true })
+})
+
+api.delete('/team-lock', (req, res) => {
+  const { teamId } = req.body
+  if (!teamId) return res.status(400).json({ ok: false })
+  teamLocks.delete(teamId)
+  if (LOCK_LOG) console.log(`[lock] TEAM UNLOCKED: ${teamId}`)
   res.json({ ok: true })
 })
 
