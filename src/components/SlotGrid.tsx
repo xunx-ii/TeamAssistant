@@ -111,10 +111,11 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
 
           if (slot.status === 'reserved') {
             cellClass += ' bg-secondary/30 border-border hover:bg-secondary/50'
+            const label = lockMap.has(slot.index) ? '正在报名' : '老板位'
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-muted-foreground">#{slot.index + 1}</span>
-                <span className="text-xs text-muted-foreground">老板位</span>
+                <span className="text-xs text-muted-foreground">{label}</span>
               </>
             )
           } else if (slot.status === 'fixed') {
@@ -122,12 +123,12 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const ma = slot.fixedMartialArtIndex !== null && slot.fixedMartialArtIndex < martialArts.length
               ? martialArts[slot.fixedMartialArtIndex]
               : null
+            const fixedLabel = lockMap.has(slot.index) ? '正在报名' :
+              (ma ? getMartialArtLabel(ma) : slot.fixedRole === 'T' ? 'T 位' : slot.fixedRole === '治疗' ? '奶 位' : 'DPS 位')
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-emerald-600">#{slot.index + 1}</span>
-                <span className="text-xs text-emerald-400 font-medium">
-                  {ma ? getMartialArtLabel(ma) : slot.fixedRole === 'T' ? 'T 位' : slot.fixedRole === '治疗' ? '奶 位' : 'DPS 位'}
-                </span>
+                <span className="text-xs text-emerald-400 font-medium">{fixedLabel}</span>
                 {isAdmin && <span className="text-[10px] text-emerald-700 mt-0.5">点击设置</span>}
               </>
             )
@@ -164,10 +165,11 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             )
           } else {
             cellClass += ' bg-secondary/10 border-border hover:bg-secondary/20 hover:border-primary/50'
+            const label = lockMap.has(slot.index) ? '正在报名' : '可选'
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-muted-foreground">#{slot.index + 1}</span>
-                <span className="text-xs text-muted-foreground">可选</span>
+                <span className="text-xs text-muted-foreground">{label}</span>
               </>
             )
           }
