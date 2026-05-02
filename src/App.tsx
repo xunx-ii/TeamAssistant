@@ -1,0 +1,373 @@
+import { useState, useEffect, useCallback } from 'react'
+import { loadAdminQQs } from './config'
+import {
+  getStoredQQ, setStoredQQ, removeStoredQQ,
+  loadTeams, saveTeams,
+  loadCancellations, saveCancellations,
+} from './storage'
+import type { Member, Cancellation, Team } from './types'
+import { createEmptySlots, generateId } from './types'
+import { TeamTabs } from './components/TeamTabs'
+import { AdminConfig } from './components/AdminConfig'
+import { SlotGrid } from './components/SlotGrid'
+import { SlotRolePicker } from './components/SlotRolePicker'
+import { SignupModal } from './components/SignupModal'
+import { CancelModal } from './components/CancelModal'
+import { CancellationNotice } from './components/CancellationNotice'
+import { CreateTeamDialog } from './components/CreateTeamDialog'
+import { Button } from './components/ui/button'
+
+function createDefaultTeam(name = '默认团队'): Team {
+  return {
+    id: generateId(),
+    name,
+    note: '',
+    config: { reservedSlots: [] },
+    slots: createEmptySlots(),
+  }
+}
+
+function App() {
+  const [qq, setQq] = useState<string | null>(getStoredQQ)
+  const [teams, setTeams] = useState<Team[]>(() => {
+    const stored = loadTeams()
+    if (stored.length > 0) return stored
+    const def = createDefaultTeam()
+    saveTeams([def])
+    return [def]
+  })
+  const [activeTeamId, setActiveTeamId] = useState<string>(teams[0]?.id ?? '')
+  const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
+  const [adminQQs, setAdminQQs] = useState<string[]>([])
+
+  const [signupSlot, setSignupSlot] = useState<number | null>(null)
+  const [editSlot, setEditSlot] = useState<number | null>(null)
+  const [cancelSlot, setCancelSlot] = useState<number | null>(null)
+  const [setRoleSlot, setSetRoleSlot] = useState<number | null>(null)
+  const [showCreateTeam, setShowCreateTeam] = useState(false)
+  const [notice, setNotice] = useState<Cancellation | null>(null)
+
+  const isAdmin = qq ? adminQQs.includes(qq) : false
+  const activeTeam = teams.find(t => t.id === activeTeamId) ?? teams[0]
+
+  useEffect(() => { saveTeams(teams) }, [teams])
+  useEffect(() => { saveCancellations(cancellations) }, [cancellations])
+  useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
+
+  useEffect(() => {
+    if (!teams.find(t => t.id === activeTeamId) && teams.length > 0) {
+      setActiveTeamId(teams[0].id)
+    }
+  }, [teams, activeTeamId])
+
+  useEffect(() => {
+    if (qq) {
+      const pending = cancellations.filter(c => c.qq === qq)
+      if (pending.length > 0) setNotice(pending[0])
+    }
+  }, [qq])
+
+  const clearModals = () => {
+    setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
+  }
+
+  const switchTeam = (id: string) => { setActiveTeamId(id); clearModals() }
+
+  const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
+  const handleLogout = () => { removeStoredQQ(); setQq(null); setNotice(null); clearModals() }
+
+  const dismissNotice = () => {
+    if (notice) {
+      setCancellations(prev => prev.filter(c => !(c.qq === notice.qq && c.timestamp === notice.timestamp)))
+      setNotice(null)
+    }
+  }
+
+  const updateTeam = useCallback((id: string, updater: (t: Team) => Team) => {
+    setTeams(prev => prev.map(t => t.id === id ? updater(t) : t))
+  }, [])
+
+  const handleCreateTeam = (name: string) => {
+    const team = createDefaultTeam(name.trim())
+    setTeams(prev => [...prev, team])
+    setActiveTeamId(team.id)
+    clearModals()
+    setShowCreateTeam(false)
+  }
+
+  const handleDeleteTeam = (id: string) => {
+    if (!confirm('确定删除此团队？')) return
+    setTeams(prev => {
+      const next = prev.filter(t => t.id !== id)
+      return next.length > 0 ? next : [createDefaultTeam()]
+    })
+  }
+
+  const handleRenameTeam = (id: string, name: string) => {
+    updateTeam(id, t => ({ ...t, name }))
+  }
+
+  const handleUpdateNote = (note: string) => {
+    if (!activeTeam) return
+    updateTeam(activeTeam.id, t => ({ ...t, note }))
+  }
+
+  const handleSetSlotRole = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null) => {
+    const slotIndex = setRoleSlot
+    if (slotIndex === null || !activeTeam) return
+    updateTeam(activeTeam.id, t => {
+      let config = t.config
+      const slots = t.slots.map(s => {
+        if (s.index !== slotIndex) return s
+        if (role === 'boss') {
+          config = { reservedSlots: [...new Set([...config.reservedSlots, slotIndex])].sort((a, b) => a - b) }
+          return { ...s, status: 'reserved' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
+        }
+        config = { reservedSlots: config.reservedSlots.filter(i => i !== slotIndex) }
+        if (role === null) {
+          return { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
+        }
+        return { ...s, status: 'fixed' as const, member: null, fixedRole: role, fixedMartialArtIndex: martialArtIndex }
+      })
+      return { ...t, config, slots }
+    })
+  }
+
+  const handleQuickReserve = (type: 'T' | '治疗' | 'boss', count: number) => {
+    if (!activeTeam) return
+    updateTeam(activeTeam.id, t => {
+      let slots = [...t.slots]
+      let reserved = [...t.config.reservedSlots]
+      const current = type === 'boss'
+        ? reserved.length
+        : slots.filter(s => s.status === 'fixed' && s.fixedRole === type).length
+
+      if (type === 'boss') {
+        if (count < current) {
+          const toRemove = reserved.slice(current - count)
+          reserved = reserved.filter(i => !toRemove.includes(i))
+          slots = slots.map(s => toRemove.includes(s.index) ? { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null } : s)
+        } else {
+          let need = count - current
+          for (let i = 0; i < slots.length && need > 0; i++) {
+            if (slots[i].status === 'empty' && !reserved.includes(i)) {
+              reserved = [...reserved, i].sort((a, b) => a - b)
+              slots[i] = { ...slots[i], status: 'reserved' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
+              need--
+            }
+          }
+        }
+      } else {
+        if (count < current) {
+          const toRemove = slots.filter(s => s.status === 'fixed' && s.fixedRole === type).slice(0, current - count)
+          slots = slots.map(s => toRemove.some(r => r.index === s.index) ? { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null } : s)
+        } else {
+          let need = count - current
+          for (let i = 0; i < slots.length && need > 0; i++) {
+            if (slots[i].status === 'empty' && !reserved.includes(i)) {
+              slots[i] = { ...slots[i], status: 'fixed' as const, member: null, fixedRole: type, fixedMartialArtIndex: null }
+              need--
+            }
+          }
+        }
+      }
+      return { ...t, slots, config: { ...t.config, reservedSlots: reserved } }
+    })
+  }
+
+  const handleSignupConfirm = (data: Omit<Member, 'qq'>) => {
+    const slotIndex = signupSlot ?? editSlot
+    if (slotIndex === null || !qq || !activeTeam) return
+    const originalQq = editSlot !== null ? activeTeam.slots[editSlot]?.member?.qq : null
+    if (originalQq && originalQq !== qq && !isAdmin) return
+    const member: Member = { qq: originalQq || qq, ...data }
+    updateTeam(activeTeam.id, t => ({
+      ...t,
+      slots: t.slots.map(s => s.index === slotIndex ? { ...s, status: 'occupied' as const, member } : s),
+    }))
+    clearModals()
+  }
+
+  const handleCancelConfirm = (reason: string) => {
+    if (cancelSlot === null || !qq || !activeTeam) return
+    const slot = activeTeam.slots[cancelSlot]
+    if (slot?.member) {
+      setCancellations(prev => [...prev, {
+        qq: slot.member!.qq, reason, cancelledBy: qq,
+        teamId: activeTeam.id, teamName: activeTeam.name,
+        slotIndex: cancelSlot, timestamp: Date.now(),
+      }])
+      updateTeam(activeTeam.id, t => ({
+        ...t,
+        slots: t.slots.map(s =>
+          s.index === cancelSlot
+            ? { ...s, status: s.fixedRole || s.fixedMartialArtIndex !== null ? 'fixed' as const : t.config.reservedSlots.includes(s.index) ? 'reserved' as const : 'empty' as const, member: null }
+            : s
+        ),
+      }))
+    }
+    setCancelSlot(null)
+  }
+
+  const handleLeave = (slotIndex: number) => {
+    if (!activeTeam) return
+    updateTeam(activeTeam.id, t => ({
+      ...t,
+      slots: t.slots.map(s =>
+        s.index === slotIndex
+          ? { ...s, status: s.fixedRole || s.fixedMartialArtIndex !== null ? 'fixed' as const : t.config.reservedSlots.includes(s.index) ? 'reserved' as const : 'empty' as const, member: null }
+          : s
+      ),
+    }))
+    clearModals()
+  }
+
+  if (!qq) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
+  return (
+    <>
+      {notice && (
+        <CancellationNotice open={!!notice} notice={notice} onDismiss={dismissNotice} />
+      )}
+      <div className="min-h-screen bg-background">
+        <div className="max-w-[960px] mx-auto px-4 py-5">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-xl font-semibold text-foreground">团队报名助手</h1>
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <span className="inline-flex items-center rounded-full bg-amber-950/50 border border-amber-800 px-2.5 py-0.5 text-xs font-medium text-amber-400">
+                  管理员
+                </span>
+              )}
+              <span className="text-sm text-muted-foreground">{qq}</span>
+              <Button variant="outline" size="sm" onClick={handleLogout}>退出</Button>
+            </div>
+          </div>
+
+          <TeamTabs
+            teams={teams.map(t => ({ id: t.id, name: t.name }))}
+            activeId={activeTeamId}
+            isAdmin={isAdmin}
+            onSwitch={switchTeam}
+            onCreate={() => setShowCreateTeam(true)}
+            onDelete={handleDeleteTeam}
+            onRename={handleRenameTeam}
+          />
+
+          {activeTeam && (
+            <div className="mt-4">
+              {isAdmin && (
+                <AdminConfig
+                  teamName={activeTeam.name}
+                  note={activeTeam.note}
+                  onRename={(name) => updateTeam(activeTeam!.id, t => ({ ...t, name }))}
+                  onUpdateNote={handleUpdateNote}
+                  onQuickReserve={handleQuickReserve}
+                />
+              )}
+              <SlotGrid
+                slots={activeTeam.slots}
+                config={activeTeam.config}
+                currentQQ={qq}
+                isAdmin={isAdmin}
+                onSignup={(idx) => setSignupSlot(idx)}
+                onEdit={(idx) => setEditSlot(idx)}
+                onSetRole={(idx) => setSetRoleSlot(idx)}
+              />
+              {activeTeam.note && (
+                <div className="mt-4 rounded-lg border border-amber-800 bg-amber-950/20 p-3">
+                  <p className="text-xs font-medium text-amber-400 mb-1">团队备注</p>
+                  <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <SignupModal
+        open={signupSlot !== null}
+        qq={qq}
+        slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
+        isAdminEditing={false}
+        onConfirm={handleSignupConfirm}
+        onClose={() => setSignupSlot(null)}
+      />
+
+      {editSlot !== null && activeTeam && (() => {
+        const existingMember = activeTeam.slots[editSlot]?.member ?? undefined
+        const isOwnSlot = existingMember?.qq === qq
+        const isAdminEdit = isAdmin && !isOwnSlot
+        return (
+          <SignupModal
+            open={true}
+            qq={isAdminEdit ? (existingMember?.qq ?? qq) : qq}
+            existing={existingMember}
+            slotInfo={activeTeam.slots[editSlot]}
+            isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
+            isAdminEditing={isAdminEdit}
+            onConfirm={handleSignupConfirm}
+            onClose={() => setEditSlot(null)}
+            onLeave={!isAdminEdit ? () => handleLeave(editSlot) : undefined}
+            onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlot); setEditSlot(null) } : undefined}
+          />
+        )
+      })()}
+
+      <CancelModal
+        open={cancelSlot !== null}
+        memberName={cancelSlot !== null && activeTeam ? activeTeam.slots[cancelSlot]?.member?.characterId ?? '' : ''}
+        onConfirm={handleCancelConfirm}
+        onClose={() => setCancelSlot(null)}
+      />
+
+      {setRoleSlot !== null && activeTeam && (
+        <SlotRolePicker
+          open={true}
+          slotIndex={setRoleSlot}
+          currentRole={activeTeam.slots[setRoleSlot]?.fixedRole ?? null}
+          currentMartialArt={activeTeam.slots[setRoleSlot]?.fixedMartialArtIndex ?? null}
+          isReserved={activeTeam.slots[setRoleSlot]?.status === 'reserved'}
+          canSignup={true}
+          onSet={(role, maIdx) => { handleSetSlotRole(role, maIdx) }}
+          onSignup={() => { setSignupSlot(setRoleSlot); setSetRoleSlot(null) }}
+          onClose={() => setSetRoleSlot(null)}
+        />
+      )}
+      <CreateTeamDialog
+        open={showCreateTeam}
+        onConfirm={handleCreateTeam}
+        onClose={() => setShowCreateTeam(false)}
+      />
+    </>
+  )
+}
+
+function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
+  const [inputQq, setInputQq] = useState('')
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const t = inputQq.trim()
+    if (t) onLogin(t)
+  }
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-6">
+      <h1 className="text-2xl font-semibold text-foreground">团队报名助手</h1>
+      <form className="flex gap-2" onSubmit={handleSubmit}>
+        <input
+          type="text"
+          className="flex h-10 rounded-md border border-input bg-transparent px-4 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring w-60"
+          placeholder="输入QQ号登录/注册"
+          value={inputQq}
+          onChange={e => setInputQq(e.target.value)}
+          autoFocus
+        />
+        <Button type="submit">进入</Button>
+      </form>
+    </div>
+  )
+}
+
+export default App
