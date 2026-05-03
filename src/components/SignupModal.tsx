@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
 import { acquireSlotLock, releaseSlotLock, validateLock } from '../api'
+import { ChevronsUpDown, Search, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -109,6 +110,17 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     })
   }, [slotInfo, maSearch])
 
+  useEffect(() => {
+    if (!showMaDropdown) return
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowMaDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showMaDropdown])
+
   const selectMartialArt = (idx: number) => {
     setMartialArt(String(idx))
     setMaSearch('')
@@ -144,45 +156,84 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
           </div>
           <div className="space-y-1.5 relative" ref={dropdownRef}>
             <Label>心法</Label>
-            <div className="relative">
-              <Input
-                placeholder={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : '搜索心法...'}
-                value={martialArt ? '' : maSearch}
-                onChange={e => { setMaSearch(e.target.value); setShowMaDropdown(true) }}
-                onFocus={() => setShowMaDropdown(true)}
-                onBlur={() => setTimeout(() => setShowMaDropdown(false), 150)}
-                readOnly={!!martialArt}
-              />
-              {martialArt && (
-                <button
-                  type="button"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive"
-                  onClick={() => { setMartialArt(''); setMaSearch(''); setShowMaDropdown(false) }}
-                >
-                  ×
-                </button>
-              )}
+            <div
+              className={`rounded-md border bg-background shadow-sm transition-colors ${showMaDropdown ? 'border-ring ring-1 ring-ring' : 'border-input'}`}
+            >
+              <div className="flex items-center gap-2 px-3 py-2">
+                <Search className="h-4 w-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  placeholder={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : '搜索心法'}
+                  value={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch}
+                  onChange={e => {
+                    setMartialArt('')
+                    setMaSearch(e.target.value)
+                    setShowMaDropdown(true)
+                  }}
+                  onFocus={() => {
+                    if (!martialArt) setShowMaDropdown(true)
+                  }}
+                  readOnly={!!martialArt}
+                />
+                {martialArt ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => {
+                      setMartialArt('')
+                      setMaSearch('')
+                      setShowMaDropdown(true)
+                    }}
+                    aria-label="清空心法"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => setShowMaDropdown(v => !v)}
+                    aria-label="展开心法列表"
+                  >
+                    <ChevronsUpDown className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
             {showMaDropdown && (
-              <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md">
+              <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
                 {allowedMartialArts.length === 0 ? (
-                  <p className="px-3 py-2 text-xs text-muted-foreground">无匹配心法</p>
+                  <p className="px-3 py-3 text-sm text-muted-foreground">无匹配心法</p>
                 ) : (
-                  allowedMartialArts.map(ma => {
-                    const idx = martialArts.indexOf(ma)
-                    return (
-                      <div
-                        key={idx}
-                        className={`px-3 py-1.5 text-sm cursor-pointer hover:bg-accent ${String(idx) === martialArt ? 'bg-accent' : ''}`}
-                        onClick={() => selectMartialArt(idx)}
-                      >
-                        <span className="text-xs text-muted-foreground mr-2">
-                          {ma.role === 'T' ? 'T' : ma.role === '治疗' ? '奶' : 'DPS'}
-                        </span>
-                        {getMartialArtLabel(ma)}
-                      </div>
-                    )
-                  })
+                  <div className="max-h-60 overflow-y-auto py-1">
+                    {allowedMartialArts.map(ma => {
+                      const idx = martialArts.indexOf(ma)
+                      const selected = String(idx) === martialArt
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors ${
+                            selected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/70'
+                          }`}
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => selectMartialArt(idx)}
+                        >
+                          <span className={`inline-flex min-w-9 items-center justify-center rounded-sm px-2 py-0.5 text-[11px] font-medium ${
+                            ma.role === 'T'
+                              ? 'bg-orange-950/25 text-orange-500'
+                              : ma.role === '治疗'
+                                ? 'bg-emerald-950/25 text-emerald-500'
+                                : 'bg-blue-950/25 text-blue-500'
+                          }`}>
+                            {ma.role === 'T' ? 'T' : ma.role === '治疗' ? '奶' : 'DPS'}
+                          </span>
+                          <span className="truncate text-foreground">{getMartialArtLabel(ma)}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
             )}

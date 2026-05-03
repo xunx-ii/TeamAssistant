@@ -409,6 +409,7 @@ function App() {
       </div>
 
       <SignupModal
+        key={`signup-${activeTeam?.id ?? 'none'}-${signupSlot ?? 'none'}`}
         open={signupSlot !== null}
         qq={qq}
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
@@ -426,6 +427,7 @@ function App() {
         const isAdminEdit = isAdmin && !isOwnSlot
         return (
           <SignupModal
+            key={`edit-${activeTeam.id}-${editSlot}-${existingMember?.qq ?? 'empty'}-${existingMember?.martialArtIndex ?? 'none'}`}
             open={true}
             qq={isAdminEdit ? (existingMember?.qq ?? qq) : qq}
             existing={existingMember}
