@@ -10,19 +10,20 @@ import { Label } from './ui/label'
 interface Props {
   open: boolean
   qq: string
+  lockOwnerQq?: string
   existing?: Member
   isAdminEditing: boolean
   slotInfo?: Slot | null
   isBossSlot?: boolean
   teamId?: string
   takenMartialArts: number[]
-  onConfirm: (data: Omit<Member, 'qq'>) => void
+  onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void
   onClose: () => void
-  onLeave?: () => void
+  onLeave?: (lockTimestamp?: number) => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(existing?.martialArtIndex ?? '')
   const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
   const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
@@ -33,6 +34,7 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
   const [showMaDropdown, setShowMaDropdown] = useState(false)
   const heartbeatRef = useRef<number>(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const lockQq = lockOwnerQq ?? qq
 
   const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
   const isDPS = selectedMa?.role === 'DPS'
@@ -42,7 +44,7 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
     if (!open || !teamId || slotInfo == null) return
     const slotIndex = slotInfo.index
     const lock = async () => {
-      const result = await acquireSlotLock(teamId, slotIndex, qq)
+      const result = await acquireSlotLock(teamId, slotIndex, lockQq)
       if (result.ok && result.timestamp) {
         setLockTimestamp(result.timestamp)
         setError('')
@@ -52,16 +54,16 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
         setError(`该位置已被 ${result.lockedBy} 先点击`)
       }
     }
-    lock()
+    void lock()
     heartbeatRef.current = setInterval(lock, 15000)
     return () => {
       clearInterval(heartbeatRef.current)
-      releaseSlotLock(teamId, slotIndex, qq)
+      void releaseSlotLock(teamId, slotIndex, lockQq)
     }
-  }, [open, teamId, slotInfo?.index, qq])
+  }, [open, teamId, slotInfo, lockQq, qq])
 
   const handleClose = () => {
-    if (teamId && slotInfo != null) releaseSlotLock(teamId, slotInfo.index, qq)
+    if (teamId && slotInfo != null) void releaseSlotLock(teamId, slotInfo.index, lockQq)
     onClose()
   }
 
@@ -86,7 +88,7 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
         return
       }
     }
-    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note })
+    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note }, lockTimestamp)
   }
 
   // Filter martial arts by search
@@ -205,7 +207,7 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
           <div className="flex gap-2 pt-1">
             <Button type="submit" className="flex-1">{existing ? '保存修改' : '确认报名'}</Button>
             {onLeave && (
-              <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={onLeave}>
+              <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => onLeave(lockTimestamp)}>
                 退出报名
               </Button>
             )}

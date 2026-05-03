@@ -3,14 +3,15 @@ import { loadAdminQQs } from './config'
 import { initTheme } from './storage/theme'
 import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
-  loadTeams, saveTeams,
-  loadCancellations, saveCancellations,
+  loadTeams, saveTeams, setTeamsLocal,
+  loadCancellations, saveCancellations, setCancellationsLocal,
   initServerMode, loadFromServer,
 } from './storage'
 import type { Member, Cancellation, Team } from './types'
 import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLocks, fetchTeamLocks, lockTeam, unlockTeam, type SlotLock, type TeamLockInfo } from './api'
+import { fetchData, fetchLocks, fetchTeamLocks, lockTeam, mutateData, unlockTeam, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
+import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -32,6 +33,11 @@ function createDefaultTeam(name = '默认团队'): Team {
   }
 }
 
+function findPendingNotice(qq: string | null, cancellations: Cancellation[]) {
+  if (!qq) return null
+  return cancellations.find(item => item.qq === qq) ?? null
+}
+
 function App() {
   const [qq, setQq] = useState<string | null>(getStoredQQ)
   const [teams, setTeams] = useState<Team[]>(() => {
@@ -50,13 +56,23 @@ function App() {
   const [cancelSlot, setCancelSlot] = useState<number | null>(null)
   const [setRoleSlot, setSetRoleSlot] = useState<number | null>(null)
   const [showCreateTeam, setShowCreateTeam] = useState(false)
-  const [notice, setNotice] = useState<Cancellation | null>(null)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
+  const [mutationError, setMutationError] = useState('')
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
-  const activeTeam = teams.find(t => t.id === activeTeamId) ?? teams[0]
+  const activeTeamExists = teams.some(t => t.id === activeTeamId)
+  const resolvedActiveTeamId = activeTeamExists ? activeTeamId : (teams[0]?.id ?? '')
+  const activeTeam = teams.find(t => t.id === resolvedActiveTeamId) ?? teams[0]
+  const notice = findPendingNotice(qq, cancellations)
+
+  const syncSnapshot = useCallback((snapshot: Snapshot) => {
+    setTeams(snapshot.teams)
+    setCancellations(snapshot.cancellations)
+    setTeamsLocal(snapshot.teams)
+    setCancellationsLocal(snapshot.cancellations)
+  }, [])
 
   useEffect(() => {
     initServerMode().then(async (sm) => {
@@ -65,22 +81,20 @@ function App() {
         const ok = await loadFromServer()
         if (ok) {
           const loadedTeams = loadTeams()
-          setTeams(loadedTeams)
-          setCancellations(loadCancellations())
+          const loadedCancellations = loadCancellations()
+          syncSnapshot({ teams: loadedTeams, cancellations: loadedCancellations })
           if (loadedTeams.length > 0) {
             setActiveTeamId(loadedTeams[0].id)
           }
         } else {
           // Server is empty/new - push local data to server
-          await saveTeams(teams)
-          await saveCancellations(cancellations)
+          await saveTeams(loadTeams())
+          await saveCancellations(loadCancellations())
         }
       }
     })
-  }, [])
+  }, [syncSnapshot])
 
-  useEffect(() => { saveTeams(teams) }, [teams])
-  useEffect(() => { saveCancellations(cancellations) }, [cancellations])
   useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
   useEffect(() => { initTheme() }, [])
 
@@ -100,53 +114,72 @@ function App() {
   // Poll server for real-time data updates (teams, cancellations, locks fallback)
   useEffect(() => {
     if (!serverMode) return
-    let lastTeamsJson = ''
+    let lastSnapshotJson = ''
     const poll = async () => {
       const data = await fetchData()
       if (!data) return
       // Also update locks from data poll as fallback
       if (data.locks) setLocks(data.locks)
-      const teamsJson = JSON.stringify(data.teams || [])
-      if (teamsJson !== lastTeamsJson) {
-        lastTeamsJson = teamsJson
-        setTeams(data.teams || [])
+      const snapshot = { teams: data.teams || [], cancellations: data.cancellations || [] }
+      const snapshotJson = JSON.stringify(snapshot)
+      if (snapshotJson !== lastSnapshotJson) {
+        lastSnapshotJson = snapshotJson
+        syncSnapshot(snapshot)
       }
-      if (data.cancellations) setCancellations(data.cancellations)
     }
     poll()
     const interval = setInterval(poll, 2000)
     return () => clearInterval(interval)
-  }, [serverMode])
-
-  useEffect(() => {
-    if (!teams.find(t => t.id === activeTeamId) && teams.length > 0) {
-      setActiveTeamId(teams[0].id)
-    }
-  }, [teams, activeTeamId])
-
-  // Show cancellation notice when online (checked on login + every poll)
-  useEffect(() => {
-    if (qq) {
-      const pending = cancellations.filter(c => c.qq === qq)
-      if (pending.length > 0 && !notice) {
-        setNotice(pending[0])
-      }
-    }
-  }, [qq, cancellations, notice])
+  }, [serverMode, syncSnapshot])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
   }
 
-  const switchTeam = (id: string) => { setActiveTeamId(id); clearModals() }
+  const applyLocalMutation = useCallback((mutation: Mutation) => {
+    const next = applyMutation({ teams, cancellations }, mutation)
+    syncSnapshot(next)
+    return next
+  }, [teams, cancellations, syncSnapshot])
+
+  const runMutation = useCallback(async (mutation: Mutation): Promise<MutationResult> => {
+    setMutationError('')
+    if (!serverMode) {
+      applyLocalMutation(mutation)
+      return { ok: true }
+    }
+
+    const result = await mutateData(mutation)
+    if (result.ok && result.data) {
+      syncSnapshot({ teams: result.data.teams, cancellations: result.data.cancellations })
+      return result
+    }
+
+    if (!result.ok) {
+      if (result.reason === 'teamLocked') {
+        setMutationError('表格已被管理员锁定')
+      } else if (result.reason === 'expired') {
+        setMutationError('该位置已被其他人抢占，请刷新后重试')
+      } else if (result.reason === 'slotChanged') {
+        setMutationError('该位置内容已变更，请刷新后重试')
+      } else if (result.error) {
+        setMutationError(result.error)
+      } else {
+        setMutationError('保存失败，请稍后再试')
+      }
+    }
+
+    return result
+  }, [applyLocalMutation, serverMode, syncSnapshot])
+
+  const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
 
   const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
-  const handleLogout = () => { removeStoredQQ(); setQq(null); setNotice(null); clearModals() }
+  const handleLogout = () => { removeStoredQQ(); setQq(null); setMutationError(''); clearModals() }
 
-  const dismissNotice = () => {
+  const dismissNotice = async () => {
     if (notice) {
-      setCancellations(prev => prev.filter(c => !(c.qq === notice.qq && c.timestamp === notice.timestamp)))
-      setNotice(null)
+      await runMutation({ type: 'dismissCancellation', qq: notice.qq, timestamp: notice.timestamp })
     }
   }
 
@@ -161,164 +194,115 @@ function App() {
     }
   }, [setRoleSlot])
 
-  const updateTeam = useCallback((id: string, updater: (t: Team) => Team) => {
-    setTeams(prev => prev.map(t => t.id === id ? updater(t) : t))
-  }, [])
-
   const handleAdminRename = useCallback((name: string) => {
-    if (activeTeam) updateTeam(activeTeam.id, t => ({ ...t, name }))
-  }, [activeTeam, updateTeam])
+    if (activeTeam) {
+      void runMutation({ type: 'renameTeam', teamId: activeTeam.id, name })
+    }
+  }, [activeTeam, runMutation])
 
-  const handleCreateTeam = (name: string) => {
+  const handleCreateTeam = async (name: string) => {
     const team = createDefaultTeam(name.trim())
-    setTeams(prev => [...prev, team])
-    setActiveTeamId(team.id)
-    clearModals()
-    setShowCreateTeam(false)
+    const result = await runMutation({ type: 'createTeam', team })
+    if (result.ok) {
+      setActiveTeamId(team.id)
+      clearModals()
+      setShowCreateTeam(false)
+    }
   }
 
-  const handleDeleteTeam = (id: string) => {
+  const handleDeleteTeam = async (id: string) => {
     if (!confirm('确定删除此团队？')) return
-    setTeams(prev => {
-      const next = prev.filter(t => t.id !== id)
-      return next.length > 0 ? next : [createDefaultTeam()]
-    })
+    const remaining = teams.filter(team => team.id !== id)
+    const fallbackTeam = remaining.length > 0 ? undefined : createDefaultTeam()
+    const result = await runMutation({ type: 'deleteTeam', teamId: id, fallbackTeam })
+    if (result.ok && resolvedActiveTeamId === id) {
+      const nextActive = remaining[0]?.id ?? fallbackTeam?.id ?? ''
+      setActiveTeamId(nextActive)
+    }
   }
 
-  const handleRenameTeam = (id: string, name: string) => {
-    updateTeam(id, t => ({ ...t, name }))
-  }
+  const handleRenameTeam = (id: string, name: string) => { void runMutation({ type: 'renameTeam', teamId: id, name }) }
 
   const handleUpdateNote = (note: string) => {
     if (!activeTeam) return
-    updateTeam(activeTeam.id, t => ({ ...t, note }))
+    void runMutation({ type: 'updateTeamNote', teamId: activeTeam.id, note })
   }
 
-  const handleSetSlotRole = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => {
+  const handleSetSlotRole = async (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => {
     const slotIndex = setRoleSlot
     if (slotIndex === null || !activeTeam) return
-    updateTeam(activeTeam.id, t => {
-      let config = t.config
-      const slots = t.slots.map(s => {
-        if (s.index !== slotIndex) return s
-        if (role === 'boss') {
-          config = { ...t.config, reservedSlots: [...new Set([...config.reservedSlots, slotIndex])].sort((a, b) => a - b) }
-          return { ...s, status: 'reserved' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
-        }
-        config = { ...t.config, reservedSlots: config.reservedSlots.filter(i => i !== slotIndex) }
-        if (role === null) {
-          return { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
-        }
-        // If QQ is specified, directly occupy the slot
-        if (assignQQ && martialArtIndex != null) {
-          return {
-            ...s,
-            status: 'occupied' as const,
-            fixedRole: null,
-            fixedMartialArtIndex: null,
-            member: {
-              qq: assignQQ,
-              martialArtIndex: String(martialArtIndex),
-              gearScore: '',
-              characterId: '',
-              note: '',
-            },
-          }
-        }
-        return { ...s, status: 'fixed' as const, member: null, fixedRole: role, fixedMartialArtIndex: martialArtIndex }
-      })
-      return { ...t, config, slots }
+    const result = await runMutation({
+      type: 'setSlotRole',
+      teamId: activeTeam.id,
+      slotIndex,
+      role,
+      martialArtIndex,
+      assignQQ,
     })
-    setSetRoleSlot(null)
+    if (result.ok) {
+      setSetRoleSlot(null)
+    }
   }
 
   const handleQuickReserve = (type: 'T' | '治疗' | 'boss', count: number) => {
     if (!activeTeam) return
-    updateTeam(activeTeam.id, t => {
-      let slots = [...t.slots]
-      let reserved = [...t.config.reservedSlots]
-      const current = type === 'boss'
-        ? reserved.length
-        : slots.filter(s => s.status === 'fixed' && s.fixedRole === type).length
-
-      if (type === 'boss') {
-        if (count < current) {
-          const toRemove = reserved.slice(current - count)
-          reserved = reserved.filter(i => !toRemove.includes(i))
-          slots = slots.map(s => toRemove.includes(s.index) ? { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null } : s)
-        } else {
-          let need = count - current
-          for (let i = 0; i < slots.length && need > 0; i++) {
-            if (slots[i].status === 'empty' && !reserved.includes(i)) {
-              reserved = [...reserved, i].sort((a, b) => a - b)
-              slots[i] = { ...slots[i], status: 'reserved' as const, member: null, fixedRole: null, fixedMartialArtIndex: null }
-              need--
-            }
-          }
-        }
-      } else {
-        if (count < current) {
-          const toRemove = slots.filter(s => s.status === 'fixed' && s.fixedRole === type).slice(0, current - count)
-          slots = slots.map(s => toRemove.some(r => r.index === s.index) ? { ...s, status: 'empty' as const, member: null, fixedRole: null, fixedMartialArtIndex: null } : s)
-        } else {
-          let need = count - current
-          for (let i = 0; i < slots.length && need > 0; i++) {
-            if (slots[i].status === 'empty' && !reserved.includes(i)) {
-              slots[i] = { ...slots[i], status: 'fixed' as const, member: null, fixedRole: type, fixedMartialArtIndex: null }
-              need--
-            }
-          }
-        }
-      }
-      return { ...t, slots, config: { ...t.config, reservedSlots: reserved } }
-    })
+    void runMutation({ type: 'quickReserve', teamId: activeTeam.id, reserveType: type, count })
   }
 
-  const handleSignupConfirm = (data: Omit<Member, 'qq'>) => {
+  const handleSignupConfirm = async (data: Omit<Member, 'qq'>, lockTimestamp?: number) => {
     const slotIndex = signupSlot ?? editSlot
     if (slotIndex === null || !qq || !activeTeam) return
     const originalQq = editSlot !== null ? activeTeam.slots[editSlot]?.member?.qq : null
     if (originalQq && originalQq !== qq && !isAdmin) return
     const member: Member = { qq: originalQq || qq, ...data }
-    updateTeam(activeTeam.id, t => ({
-      ...t,
-      slots: t.slots.map(s => s.index === slotIndex ? { ...s, status: 'occupied' as const, member } : s),
-    }))
-    clearModals()
+    const result = await runMutation({
+      type: 'signupSlot',
+      teamId: activeTeam.id,
+      slotIndex,
+      member,
+      actorQq: qq,
+      lockTimestamp,
+      expectedMemberQq: originalQq ?? null,
+    })
+    if (result.ok) {
+      clearModals()
+    }
   }
 
-  const handleCancelConfirm = (reason: string) => {
+  const handleCancelConfirm = async (reason: string, lockTimestamp?: number) => {
     if (cancelSlot === null || !qq || !activeTeam) return
     const slot = activeTeam.slots[cancelSlot]
     if (slot?.member) {
-      setCancellations(prev => [...prev, {
-        qq: slot.member!.qq, reason, cancelledBy: qq,
-        teamId: activeTeam.id, teamName: activeTeam.name,
-        slotIndex: cancelSlot, timestamp: Date.now(),
-      }])
-      updateTeam(activeTeam.id, t => ({
-        ...t,
-        slots: t.slots.map(s =>
-          s.index === cancelSlot
-            ? { ...s, status: s.fixedRole || s.fixedMartialArtIndex !== null ? 'fixed' as const : t.config.reservedSlots.includes(s.index) ? 'reserved' as const : 'empty' as const, member: null }
-            : s
-        ),
-      }))
+      const result = await runMutation({
+        type: 'cancelSlot',
+        teamId: activeTeam.id,
+        slotIndex: cancelSlot,
+        reason,
+        cancelledBy: qq,
+        actorQq: qq,
+        lockTimestamp,
+        expectedMemberQq: slot.member.qq,
+      })
+      if (result.ok) {
+        setCancelSlot(null)
+      }
     }
-    setCancelSlot(null)
   }
 
-  const handleLeave = (slotIndex: number) => {
-    if (!activeTeam) return
-    updateTeam(activeTeam.id, t => ({
-      ...t,
-      slots: t.slots.map(s =>
-        s.index === slotIndex
-          ? { ...s, status: s.fixedRole || s.fixedMartialArtIndex !== null ? 'fixed' as const : t.config.reservedSlots.includes(s.index) ? 'reserved' as const : 'empty' as const, member: null }
-          : s
-      ),
-    }))
-    clearModals()
+  const handleLeave = async (slotIndex: number, lockTimestamp?: number) => {
+    if (!activeTeam || !qq) return
+    const expectedMemberQq = activeTeam.slots[slotIndex]?.member?.qq ?? null
+    const result = await runMutation({
+      type: 'leaveSlot',
+      teamId: activeTeam.id,
+      slotIndex,
+      actorQq: qq,
+      lockTimestamp,
+      expectedMemberQq,
+    })
+    if (result.ok) {
+      clearModals()
+    }
   }
 
   // Get T/Healer martial art indices already taken in the team (excludes boss slots, excludes current editing slot)
@@ -346,7 +330,7 @@ function App() {
   return (
     <>
       {notice && (
-        <CancellationNotice open={!!notice} notice={notice} onDismiss={dismissNotice} />
+        <CancellationNotice open={!!notice} notice={notice} onDismiss={() => { void dismissNotice() }} />
       )}
       <div className="min-h-screen bg-background">
         <div className="max-w-[960px] mx-auto px-4 py-5">
@@ -368,17 +352,14 @@ function App() {
 
           <TeamTabs
             teams={teams.map(t => ({ id: t.id, name: t.name }))}
-            activeId={activeTeamId}
+            activeId={resolvedActiveTeamId}
             isAdmin={isAdmin}
             onSwitch={switchTeam}
             onCreate={handleShowCreateTeam}
             onDelete={handleDeleteTeam}
             onRename={handleRenameTeam}
             onReorder={(ids) => {
-              setTeams(prev => {
-                const map = new Map(prev.map(t => [t.id, t]))
-                return ids.map(id => map.get(id)!).filter(Boolean)
-              })
+              void runMutation({ type: 'reorderTeams', ids })
             }}
           />
 
@@ -393,15 +374,12 @@ function App() {
                   onRename={handleAdminRename}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
-                  onToggleLock={() => {
+                  onToggleLock={async () => {
                     if (!activeTeam) return
                     const newLocked = !activeTeam.config.locked
-                    updateTeam(activeTeam.id, t => ({
-                      ...t,
-                      config: { ...t.config, locked: newLocked },
-                    }))
-                    if (serverMode) {
-                      (newLocked ? lockTeam : unlockTeam)(activeTeam.id)
+                    const result = await runMutation({ type: 'toggleTeamConfigLock', teamId: activeTeam.id, locked: newLocked })
+                    if (result.ok && serverMode) {
+                      void (newLocked ? lockTeam : unlockTeam)(activeTeam.id)
                     }
                   }}
                 />
@@ -417,6 +395,11 @@ function App() {
                 onEdit={handleEditSlot}
                 onSetRole={handleSetRoleSlotClick}
               />
+              {mutationError && (
+                <div className="mt-3 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {mutationError}
+                </div>
+              )}
               {activeTeam.note && (
                 <div className="mt-4 rounded-lg border border-amber-800 bg-amber-950/20 p-3">
                   <p className="text-xs font-medium text-amber-400 mb-1">团队备注</p>
@@ -436,7 +419,7 @@ function App() {
         isAdminEditing={false}
         isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
         takenMartialArts={getTakenMartialArts()}
-        onConfirm={handleSignupConfirm}
+        onConfirm={(data, lockTimestamp) => { void handleSignupConfirm(data, lockTimestamp) }}
         onClose={() => setSignupSlot(null)}
       />
 
@@ -454,9 +437,9 @@ function App() {
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
             takenMartialArts={getTakenMartialArts(editSlot)}
-            onConfirm={handleSignupConfirm}
+            onConfirm={(data, lockTimestamp) => { void handleSignupConfirm(data, lockTimestamp) }}
             onClose={() => setEditSlot(null)}
-            onLeave={!isAdminEdit ? () => handleLeave(editSlot) : undefined}
+            onLeave={!isAdminEdit ? (lockTimestamp) => { void handleLeave(editSlot, lockTimestamp) } : undefined}
             onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlot); setEditSlot(null) } : undefined}
           />
         )
@@ -465,7 +448,10 @@ function App() {
       <CancelModal
         open={cancelSlot !== null}
         memberName={cancelSlot !== null && activeTeam ? activeTeam.slots[cancelSlot]?.member?.characterId ?? '' : ''}
-        onConfirm={handleCancelConfirm}
+        qq={qq}
+        teamId={activeTeam?.id}
+        slotIndex={cancelSlot}
+        onConfirm={(reason, lockTimestamp) => { void handleCancelConfirm(reason, lockTimestamp) }}
         onClose={() => setCancelSlot(null)}
       />
 

@@ -2,6 +2,7 @@ import express from 'express'
 import { readFileSync, writeFileSync, renameSync, existsSync, unlinkSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { applyMutation, normalizeData, validateExpectedSlotMember, validateSlotMutationLock } from './server/data-store.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -50,7 +51,7 @@ function getLocks() {
 function loadData() {
   try {
     if (existsSync(DATA_FILE)) {
-      return JSON.parse(readFileSync(DATA_FILE, 'utf-8'))
+      return normalizeData(JSON.parse(readFileSync(DATA_FILE, 'utf-8')))
     }
   } catch { /* */ }
   return { teams: [], cancellations: [] }
@@ -59,10 +60,26 @@ function loadData() {
 async function saveData(data) {
   const release = await acquireWriteLock()
   try {
-    writeFileSync(TMP_FILE, JSON.stringify(data, null, 2))
+    writeFileSync(TMP_FILE, JSON.stringify(normalizeData(data), null, 2))
     renameSync(TMP_FILE, DATA_FILE)
   } catch {
     try { unlinkSync(TMP_FILE) } catch { /* */ }
+  } finally {
+    release()
+  }
+}
+
+async function mutateData(mutator) {
+  const release = await acquireWriteLock()
+  try {
+    const current = loadData()
+    const next = normalizeData(await mutator(current))
+    writeFileSync(TMP_FILE, JSON.stringify(next, null, 2))
+    renameSync(TMP_FILE, DATA_FILE)
+    return next
+  } catch (error) {
+    try { unlinkSync(TMP_FILE) } catch { /* */ }
+    throw error
   } finally {
     release()
   }
@@ -82,6 +99,56 @@ api.get('/data', (_req, res) => {
 api.post('/data', async (req, res) => {
   await saveData(req.body)
   res.json({ ok: true })
+})
+
+api.post('/mutate', async (req, res) => {
+  const { mutation } = req.body ?? {}
+  if (!mutation?.type) {
+    return res.status(400).json({ ok: false, error: 'Missing mutation' })
+  }
+
+  try {
+    const data = await mutateData(current => {
+      if (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') {
+        const lockResult = validateSlotMutationLock({
+          slotLocks,
+          teamLocks,
+          teamId: mutation.teamId,
+          slotIndex: mutation.slotIndex,
+          qq: mutation.actorQq ?? mutation.member?.qq ?? mutation.cancelledBy,
+          lockTimestamp: mutation.lockTimestamp,
+          lockTimeout: LOCK_TIMEOUT,
+        })
+        if (!lockResult.ok) {
+          const error = new Error(lockResult.reason)
+          error.details = lockResult
+          throw error
+        }
+      }
+
+      if (
+        (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') &&
+        Object.prototype.hasOwnProperty.call(mutation, 'expectedMemberQq')
+      ) {
+        const expected = validateExpectedSlotMember(current, mutation.teamId, mutation.slotIndex, mutation.expectedMemberQq)
+        if (!expected.ok) {
+          const error = new Error(expected.reason)
+          error.details = expected
+          throw error
+        }
+      }
+
+      return applyMutation(current, mutation)
+    })
+    res.json({ ok: true, data })
+  } catch (error) {
+    const details = error && typeof error === 'object' && 'details' in error ? error.details : undefined
+    const message = error instanceof Error ? error.message : 'Mutation failed'
+    if (details?.reason === 'teamLocked' || details?.reason === 'expired' || details?.reason === 'slotChanged') {
+      return res.status(409).json({ ok: false, ...details })
+    }
+    res.status(400).json({ ok: false, error: message })
+  }
 })
 
 // Dedicated locks endpoint (responds within 1s polling)

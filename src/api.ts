@@ -1,9 +1,12 @@
+import type { Cancellation, Team } from './types'
+import type { Mutation } from './dataStore'
+
 const API = '/api'
 const noCache = { cache: 'no-store' as const }
 
 export interface ServerData {
-  teams: any[]
-  cancellations: any[]
+  teams: Team[]
+  cancellations: Cancellation[]
   locks?: SlotLock[]
 }
 
@@ -31,6 +34,15 @@ export interface ValidateResult {
   ok: boolean
   reason?: string
   lockedAt?: number
+}
+
+export interface MutationResult {
+  ok: boolean
+  data?: ServerData
+  reason?: string
+  lockedAt?: number
+  currentMemberQq?: string | null
+  error?: string
 }
 
 let serverAvailable = false
@@ -66,6 +78,19 @@ export async function pushData(data: Partial<ServerData>): Promise<boolean> {
     return resp.ok
   } catch {
     return false
+  }
+}
+
+export async function mutateData(mutation: Mutation): Promise<MutationResult> {
+  try {
+    const resp = await fetch(`${API}/mutate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mutation }),
+    })
+    return await resp.json()
+  } catch {
+    return { ok: false, reason: 'network', error: 'Network error' }
   }
 }
 

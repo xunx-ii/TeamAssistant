@@ -19,15 +19,23 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   const counts = { T: 0, 治疗: 0, DPS: 0, bossT: 0, bossHealer: 0, bossDPS: 0 }
   for (const slot of slots) {
     if (slot.status === 'occupied' && slot.member) {
-      const idx = parseInt(slot.member.martialArtIndex)
-      if (!isNaN(idx) && idx < martialArts.length) {
-        const r = martialArts[idx].role
-        const isBoss = reservedSlots.includes(slot.index)
-        if (r === 'T') isBoss ? counts.bossT++ : counts.T++
-        else if (r === '治疗') isBoss ? counts.bossHealer++ : counts['治疗']++
-        else isBoss ? counts.bossDPS++ : counts.DPS++
+        const idx = parseInt(slot.member.martialArtIndex)
+        if (!isNaN(idx) && idx < martialArts.length) {
+          const r = martialArts[idx].role
+          const isBoss = reservedSlots.includes(slot.index)
+          if (r === 'T') {
+            if (isBoss) counts.bossT += 1
+            else counts.T += 1
+          } else if (r === '治疗') {
+            if (isBoss) counts.bossHealer += 1
+            else counts['治疗'] += 1
+          } else if (isBoss) {
+            counts.bossDPS += 1
+          } else {
+            counts.DPS += 1
+          }
+        }
       }
-    }
     if (slot.status === 'fixed' && slot.fixedRole) {
       if (slot.fixedRole === 'T') counts.T++
       else if (slot.fixedRole === '治疗') counts['治疗']++

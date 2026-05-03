@@ -35,8 +35,12 @@ export function loadTeams(): Team[] {
   return loadTeamsLocal()
 }
 
-export async function saveTeams(teams: Team[]) {
+export function setTeamsLocal(teams: Team[]) {
   localStorage.setItem(KEYS.teams, JSON.stringify(teams))
+}
+
+export async function saveTeams(teams: Team[]) {
+  setTeamsLocal(teams)
   if (serverMode) {
     await pushData({ teams, cancellations: loadCancellationsLocal() })
   }
@@ -46,8 +50,12 @@ export function loadCancellations(): Cancellation[] {
   return loadCancellationsLocal()
 }
 
-export async function saveCancellations(cancellations: Cancellation[]) {
+export function setCancellationsLocal(cancellations: Cancellation[]) {
   localStorage.setItem(KEYS.cancellations, JSON.stringify(cancellations))
+}
+
+export async function saveCancellations(cancellations: Cancellation[]) {
+  setCancellationsLocal(cancellations)
   if (serverMode) {
     await pushData({ teams: loadTeamsLocal(), cancellations })
   }
@@ -71,12 +79,8 @@ export async function loadFromServer(): Promise<boolean> {
   try {
     const data = await fetchData()
     if (!data) return false
-    if (data.teams && data.teams.length > 0) {
-      localStorage.setItem(KEYS.teams, JSON.stringify(data.teams))
-    }
-    if (data.cancellations && data.cancellations.length > 0) {
-      localStorage.setItem(KEYS.cancellations, JSON.stringify(data.cancellations))
-    }
+    setTeamsLocal(data.teams ?? [])
+    setCancellationsLocal(data.cancellations ?? [])
     return true
   } catch {
     return false
