@@ -73,7 +73,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     if (isDPS && !gearScore) return
     setError('')
     if (teamId && slotInfo != null && lockTimestamp > 0) {
-      const validation = await validateLock(teamId, slotInfo.index, qq, lockTimestamp)
+      const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)
       if (!validation.ok) {
         if (validation.reason === 'teamLocked') setError('表格已被管理员锁定，无法保存')
         else setError('该位置已被其他人抢占，请重新选择')
