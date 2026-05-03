@@ -10,7 +10,7 @@ import {
 import type { Member, Cancellation, Team } from './types'
 import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLocks, fetchTeamLocks, lockTeam, mutateData, unlockTeam, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
+import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
@@ -377,10 +377,7 @@ function App() {
                   onToggleLock={async () => {
                     if (!activeTeam) return
                     const newLocked = !activeTeam.config.locked
-                    const result = await runMutation({ type: 'toggleTeamConfigLock', teamId: activeTeam.id, locked: newLocked })
-                    if (result.ok && serverMode) {
-                      void (newLocked ? lockTeam : unlockTeam)(activeTeam.id)
-                    }
+                    await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
                   }}
                 />
               )}

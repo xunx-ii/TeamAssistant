@@ -12,6 +12,7 @@ export type Mutation =
   | { type: 'updateTeamNote'; teamId: string; note: string }
   | { type: 'reorderTeams'; ids: string[] }
   | { type: 'toggleTeamConfigLock'; teamId: string; locked: boolean }
+  | { type: 'setTeamLockState'; teamId: string; locked: boolean }
   | {
       type: 'setSlotRole'
       teamId: string
@@ -119,6 +120,12 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
     }
 
     case 'toggleTeamConfigLock': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      team.config.locked = mutation.locked
+      return next
+    }
+
+    case 'setTeamLockState': {
       const team = getTeamOrThrow(next, mutation.teamId)
       team.config.locked = mutation.locked
       return next

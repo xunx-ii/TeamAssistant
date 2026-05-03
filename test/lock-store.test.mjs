@@ -26,21 +26,25 @@ async function withTempDir(run) {
 test('withFileLock serializes concurrent access on shared lock file', async () => {
   await withTempDir(async (dir) => {
     const lockFile = join(dir, '.storage.lock')
-    const steps = []
+    let activeCount = 0
+    let maxActiveCount = 0
 
     const first = withFileLock(lockFile, async () => {
-      steps.push('first-start')
+      activeCount += 1
+      maxActiveCount = Math.max(maxActiveCount, activeCount)
       await new Promise(resolve => setTimeout(resolve, 40))
-      steps.push('first-end')
+      activeCount -= 1
     }, { retryMs: 5, timeoutMs: 500 })
 
     const second = withFileLock(lockFile, async () => {
-      steps.push('second-start')
-      steps.push('second-end')
+      activeCount += 1
+      maxActiveCount = Math.max(maxActiveCount, activeCount)
+      activeCount -= 1
     }, { retryMs: 5, timeoutMs: 500 })
 
     await Promise.all([first, second])
-    assert.deepEqual(steps, ['first-start', 'first-end', 'second-start', 'second-end'])
+    assert.equal(maxActiveCount, 1)
+    assert.equal(activeCount, 0)
   })
 })
 

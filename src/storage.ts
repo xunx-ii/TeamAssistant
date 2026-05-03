@@ -79,6 +79,9 @@ export async function loadFromServer(): Promise<boolean> {
   try {
     const data = await fetchData()
     if (!data) return false
+    if (!Array.isArray(data.teams) || data.teams.length === 0) {
+      return false
+    }
     setTeamsLocal(data.teams ?? [])
     setCancellationsLocal(data.cancellations ?? [])
     return true

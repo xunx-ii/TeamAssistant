@@ -125,3 +125,21 @@ test('cancelSlot appends cancellation and restores reserved status', () => {
   assert.equal(next.teams[0].slots[2].status, 'reserved')
   assert.equal(next.teams[0].slots[2].member, null)
 })
+
+test('setTeamLockState updates team config lock flag', () => {
+  const snapshot = createSnapshot()
+
+  const locked = applyMutation(snapshot, {
+    type: 'setTeamLockState',
+    teamId: 'team-1',
+    locked: true,
+  })
+  assert.equal(locked.teams[0].config.locked, true)
+
+  const unlocked = applyMutation(locked, {
+    type: 'setTeamLockState',
+    teamId: 'team-1',
+    locked: false,
+  })
+  assert.equal(unlocked.teams[0].config.locked, false)
+})

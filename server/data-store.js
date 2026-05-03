@@ -136,6 +136,12 @@ export function applyMutation(currentData, mutation) {
       return data
     }
 
+    case 'setTeamLockState': {
+      const team = getTeamOrThrow(data, mutation.teamId)
+      team.config.locked = Boolean(mutation.locked)
+      return data
+    }
+
     case 'setSlotRole': {
       const team = getTeamOrThrow(data, mutation.teamId)
       const slot = getSlotOrThrow(team, mutation.slotIndex)

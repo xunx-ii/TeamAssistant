@@ -154,3 +154,7 @@ export function removeTeamLock(lockData, { teamId }) {
     },
   }
 }
+
+export function getTeamLockTimestamp(lockData, teamId) {
+  return normalizeLockData(lockData).teams.find(lock => lock.teamId === teamId)?.timestamp
+}

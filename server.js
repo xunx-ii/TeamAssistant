@@ -9,6 +9,7 @@ import {
   buildTeamLockMap,
   cleanExpiredLocks,
   getPublicLocks,
+  getTeamLockTimestamp,
   readLockData,
   releaseSlotLock,
   removeTeamLock,
@@ -97,7 +98,7 @@ api.post('/mutate', async (req, res) => {
 
   try {
     const data = await withSharedStorage(() => {
-      const lockState = loadLocks()
+      let lockState = loadLocks()
       if (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') {
         const lockResult = validateSlotMutationLock({
           slotLocks: buildSlotLockMap(lockState),
@@ -116,6 +117,16 @@ api.post('/mutate', async (req, res) => {
       }
 
       const current = loadData()
+      if (mutation.type === 'setTeamLockState') {
+        const updatedLockState = mutation.locked
+          ? setTeamLock(lockState, {
+              teamId: mutation.teamId,
+              timestamp: getTeamLockTimestamp(lockState, mutation.teamId) ?? Date.now(),
+            })
+          : removeTeamLock(lockState, { teamId: mutation.teamId })
+        lockState = updatedLockState.lockData
+        writeLockData(LOCKS_FILE, LOCKS_TMP_FILE, lockState)
+      }
       if (
         (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') &&
         Object.prototype.hasOwnProperty.call(mutation, 'expectedMemberQq')
