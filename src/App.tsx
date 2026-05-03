@@ -25,7 +25,7 @@ function createDefaultTeam(name = '默认团队'): Team {
     id: generateId(),
     name,
     note: '',
-    config: { reservedSlots: [], locked: false, default: false },
+    config: { reservedSlots: [], locked: false },
     slots: createEmptySlots(),
   }
 }
@@ -39,11 +39,7 @@ function App() {
     saveTeams([def])
     return [def]
   })
-  const [activeTeamId, setActiveTeamId] = useState<string>(() => {
-    const stored = loadTeams()
-    const dt = stored.find(t => t.config.default)
-    return dt ? dt.id : stored[0]?.id ?? ''
-  })
+  const [activeTeamId, setActiveTeamId] = useState<string>(teams[0]?.id ?? '')
   const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
   const [adminQQs, setAdminQQs] = useState<string[]>([])
 
@@ -69,8 +65,9 @@ function App() {
           const loadedTeams = loadTeams()
           setTeams(loadedTeams)
           setCancellations(loadCancellations())
-          const dt = loadedTeams.find(t => t.config.default)
-          setActiveTeamId(dt ? dt.id : loadedTeams[0]?.id ?? '')
+          if (loadedTeams.length > 0) {
+            setActiveTeamId(loadedTeams[0].id)
+          }
         } else {
           // Server is empty/new - push local data to server
           await saveTeams(teams)
@@ -124,12 +121,15 @@ function App() {
     }
   }, [teams, activeTeamId])
 
+  // Show cancellation notice when online (checked on login + every poll)
   useEffect(() => {
     if (qq) {
       const pending = cancellations.filter(c => c.qq === qq)
-      if (pending.length > 0) setNotice(pending[0])
+      if (pending.length > 0 && !notice) {
+        setNotice(pending[0])
+      }
     }
-  }, [qq])
+  }, [qq, cancellations, notice])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
@@ -386,7 +386,6 @@ function App() {
                   note={activeTeam.note}
                   serverMode={serverMode}
                   locked={activeTeam.config.locked}
-                  isDefault={activeTeam.config.default}
                   onRename={handleAdminRename}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
@@ -400,13 +399,6 @@ function App() {
                     if (serverMode) {
                       (newLocked ? lockTeam : unlockTeam)(activeTeam.id)
                     }
-                  }}
-                  onSetDefault={() => {
-                    if (!activeTeam) return
-                    setTeams(prev => prev.map(t => ({
-                      ...t,
-                      config: { ...t.config, default: t.id === activeTeam.id },
-                    })))
                   }}
                 />
               )}
