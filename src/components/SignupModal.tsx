@@ -37,14 +37,14 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   const dropdownRef = useRef<HTMLDivElement>(null)
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const lockQq = lockOwnerQq ?? qq
+  const slotIndex = slotInfo?.index ?? null
 
   const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
   const isDPS = selectedMa?.role === 'DPS'
 
   // Lock management
   useEffect(() => {
-    if (!open || !teamId || slotInfo == null) return
-    const slotIndex = slotInfo.index
+    if (!open || !teamId || slotIndex == null) return
     const lock = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, lockQq)
       if (result.ok && result.timestamp) {
@@ -62,10 +62,10 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
       clearInterval(heartbeatRef.current)
       void releaseSlotLock(teamId, slotIndex, lockQq)
     }
-  }, [open, teamId, slotInfo, lockQq, qq])
+  }, [open, teamId, slotIndex, lockQq, qq])
 
   const handleClose = () => {
-    if (teamId && slotInfo != null) void releaseSlotLock(teamId, slotInfo.index, lockQq)
+    if (teamId && slotIndex != null) void releaseSlotLock(teamId, slotIndex, lockQq)
     onClose()
   }
 
