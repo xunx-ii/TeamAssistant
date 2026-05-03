@@ -3,6 +3,10 @@ import type { Mutation } from './dataStore'
 
 const API = '/api'
 const noCache = { cache: 'no-store' as const }
+const SERVER_UNAVAILABLE_ERROR = '无法连接到报名服务，请确认后端已启动'
+const HTML_RESPONSE_ERROR = '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api 代理'
+const NON_JSON_RESPONSE_ERROR = '接口返回了非 JSON 响应，请确认后端服务是否正常'
+const INVALID_JSON_ERROR = '接口返回的数据无法解析'
 
 export interface ServerData {
   teams: Team[]
@@ -28,12 +32,14 @@ export interface AcquireResult {
   lockedAt?: number
   reason?: string
   timestamp?: number
+  error?: string
 }
 
 export interface ValidateResult {
   ok: boolean
   reason?: string
   lockedAt?: number
+  error?: string
 }
 
 export interface MutationResult {
@@ -45,134 +51,148 @@ export interface MutationResult {
   error?: string
 }
 
-let serverAvailable = false
-let checked = false
+type RequestFailure = {
+  ok: false
+  reason: 'network' | 'invalidResponse'
+  error: string
+}
+
+function isServerData(value: unknown): value is ServerData {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    Array.isArray((value as Partial<ServerData>).teams) &&
+    Array.isArray((value as Partial<ServerData>).cancellations),
+  )
+}
+
+function isResultPayload(value: unknown): value is { ok: boolean } {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'ok' in value &&
+    typeof (value as { ok?: unknown }).ok === 'boolean',
+  )
+}
+
+async function readJsonBody<T>(resp: Response): Promise<{ ok: true, data: T } | { ok: false, error: string }> {
+  const contentType = resp.headers.get('content-type')?.toLowerCase() ?? ''
+  if (!contentType.includes('json')) {
+    const text = await resp.text().catch(() => '')
+    const error = /<!doctype html|<html/i.test(text) ? HTML_RESPONSE_ERROR : NON_JSON_RESPONSE_ERROR
+    return { ok: false, error }
+  }
+
+  try {
+    return { ok: true, data: await resp.json() as T }
+  } catch {
+    return { ok: false, error: INVALID_JSON_ERROR }
+  }
+}
+
+async function requestData<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T | null> {
+  try {
+    const resp = await fetch(input, init)
+    if (!resp.ok) return null
+    const parsed = await readJsonBody<T>(resp)
+    return parsed.ok ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+async function requestResult<T extends { ok: boolean }>(input: RequestInfo | URL, init?: RequestInit): Promise<T | RequestFailure> {
+  try {
+    const resp = await fetch(input, init)
+    const parsed = await readJsonBody<T>(resp)
+    if (!parsed.ok) {
+      return { ok: false, reason: 'invalidResponse', error: parsed.error }
+    }
+    if (!isResultPayload(parsed.data)) {
+      return { ok: false, reason: 'invalidResponse', error: INVALID_JSON_ERROR }
+    }
+    return parsed.data
+  } catch {
+    return { ok: false, reason: 'network', error: SERVER_UNAVAILABLE_ERROR }
+  }
+}
 
 export async function checkServer(): Promise<boolean> {
-  if (checked) return serverAvailable
-  try {
-    const resp = await fetch(`${API}/data`, noCache)
-    serverAvailable = resp.ok
-  } catch {
-    serverAvailable = false
-  }
-  checked = true
-  return serverAvailable
+  const data = await requestData<unknown>(`${API}/data`, noCache)
+  return isServerData(data)
 }
 
 export async function fetchData(): Promise<ServerData | null> {
-  try {
-    const resp = await fetch(`${API}/data`, noCache)
-    if (resp.ok) return await resp.json()
-  } catch { /* */ }
-  return null
+  const data = await requestData<unknown>(`${API}/data`, noCache)
+  return isServerData(data) ? data : null
 }
 
 export async function pushData(data: Partial<ServerData>): Promise<boolean> {
-  try {
-    const resp = await fetch(`${API}/data`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    return resp.ok
-  } catch {
-    return false
-  }
+  const result = await requestResult<{ ok: boolean }>(`${API}/data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return result.ok
 }
 
 export async function mutateData(mutation: Mutation): Promise<MutationResult> {
-  try {
-    const resp = await fetch(`${API}/mutate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mutation }),
-    })
-    return await resp.json()
-  } catch {
-    return { ok: false, reason: 'network', error: 'Network error' }
-  }
+  return requestResult<MutationResult>(`${API}/mutate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mutation }),
+  })
 }
 
 export async function acquireSlotLock(teamId: string, slotIndex: number, qq: string): Promise<AcquireResult> {
-  try {
-    const resp = await fetch(`${API}/lock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teamId, slotIndex, qq }),
-    })
-    return await resp.json()
-  } catch {
-    return { ok: false }
-  }
+  return requestResult<AcquireResult>(`${API}/lock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId, slotIndex, qq }),
+  })
 }
 
 export async function releaseSlotLock(teamId: string, slotIndex: number, qq: string): Promise<boolean> {
-  try {
-    const resp = await fetch(`${API}/lock`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teamId, slotIndex, qq }),
-    })
-    return resp.ok
-  } catch {
-    return false
-  }
+  const result = await requestResult<{ ok: boolean }>(`${API}/lock`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId, slotIndex, qq }),
+  })
+  return result.ok
 }
 
 export async function fetchLocks(): Promise<SlotLock[]> {
-  try {
-    const resp = await fetch(`${API}/locks`, noCache)
-    if (resp.ok) {
-      const data = await resp.json()
-      return data.slots || []
-    }
-  } catch { /* */ }
-  return []
+  const data = await requestData<{ slots?: SlotLock[] }>(`${API}/locks`, noCache)
+  return Array.isArray(data?.slots) ? data.slots : []
 }
 
 export async function fetchTeamLocks(): Promise<TeamLockInfo[]> {
-  try {
-    const resp = await fetch(`${API}/locks`, noCache)
-    if (resp.ok) {
-      const data = await resp.json()
-      return data.teams || []
-    }
-  } catch { /* */ }
-  return []
+  const data = await requestData<{ teams?: TeamLockInfo[] }>(`${API}/locks`, noCache)
+  return Array.isArray(data?.teams) ? data.teams : []
 }
 
 export async function lockTeam(teamId: string): Promise<boolean> {
-  try {
-    const resp = await fetch(`${API}/team-lock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teamId }),
-    })
-    return resp.ok
-  } catch { return false }
+  const result = await requestResult<{ ok: boolean }>(`${API}/team-lock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId }),
+  })
+  return result.ok
 }
 
 export async function unlockTeam(teamId: string): Promise<boolean> {
-  try {
-    const resp = await fetch(`${API}/team-lock`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teamId }),
-    })
-    return resp.ok
-  } catch { return false }
+  const result = await requestResult<{ ok: boolean }>(`${API}/team-lock`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId }),
+  })
+  return result.ok
 }
 
 export async function validateLock(teamId: string, slotIndex: number, qq: string, lockTimestamp: number): Promise<ValidateResult> {
-  try {
-    const resp = await fetch(`${API}/validate-lock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
-    })
-    return await resp.json()
-  } catch {
-    return { ok: false, reason: 'network' }
-  }
+  return requestResult<ValidateResult>(`${API}/validate-lock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
+  })
 }
