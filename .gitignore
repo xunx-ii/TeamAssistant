@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 data.json
+locks.json
+*.tmp
+.storage.lock
