@@ -35,6 +35,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   const [showMaDropdown, setShowMaDropdown] = useState(false)
   const heartbeatRef = useRef<number>(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const gearScoreRef = useRef<HTMLInputElement>(null)
   const lockQq = lockOwnerQq ?? qq
 
   const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
@@ -132,7 +133,15 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent
+        className="max-w-sm"
+        onOpenAutoFocus={(event) => {
+          if (existing) {
+            event.preventDefault()
+            gearScoreRef.current?.focus()
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
@@ -241,6 +250,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
           <div className="space-y-1.5">
             <Label>{isDPS ? '装分' : '层数'}</Label>
             <Input
+              ref={gearScoreRef}
               type="number"
               value={gearScore}
               onChange={e => setGearScore(e.target.value)}
