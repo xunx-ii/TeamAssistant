@@ -5,7 +5,9 @@
       "name": "123123",
       "note": "",
       "config": {
-        "reservedSlots": [],
+        "reservedSlots": [
+          12
+        ],
         "locked": false,
         "default": true
       },
@@ -82,21 +84,33 @@
         },
         {
           "index": 10,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "123123123",
+            "martialArtIndex": "1",
+            "gearScore": "111",
+            "characterId": "11",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
         {
           "index": 11,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "123123123",
+            "martialArtIndex": "12",
+            "gearScore": "11122",
+            "characterId": "1122",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
         {
           "index": 12,
-          "status": "empty",
+          "status": "reserved",
           "member": null,
           "fixedRole": null,
           "fixedMartialArtIndex": null
@@ -117,29 +131,53 @@
         },
         {
           "index": 15,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "123123123",
+            "martialArtIndex": "8",
+            "gearScore": "1112",
+            "characterId": "112",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
         {
           "index": 16,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "123123123",
+            "martialArtIndex": "27",
+            "gearScore": "111223",
+            "characterId": "11223",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
         {
           "index": 17,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "1651611",
+            "martialArtIndex": "19",
+            "gearScore": "123123",
+            "characterId": "123123",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },
         {
           "index": 18,
-          "status": "empty",
-          "member": null,
+          "status": "occupied",
+          "member": {
+            "qq": "1651611",
+            "martialArtIndex": "10",
+            "gearScore": "123123",
+            "characterId": "123123",
+            "note": ""
+          },
           "fixedRole": null,
           "fixedMartialArtIndex": null
         },

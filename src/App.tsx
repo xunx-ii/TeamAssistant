@@ -318,21 +318,22 @@ function App() {
     clearModals()
   }
 
-  const getDuplicateRoles = (qqToCheck: string, excludeSlot?: number): string[] => {
+  // Get T/Healer martial art indices already taken in the team (excludes boss slots, excludes current editing slot)
+  const getTakenMartialArts = (excludeSlot?: number): number[] => {
     if (!activeTeam) return []
-    const roles: string[] = []
+    const indices: number[] = []
     for (const s of activeTeam.slots) {
-      if (s.status === 'occupied' && s.member && s.member.qq === qqToCheck) {
+      if (s.status === 'occupied' && s.member) {
         if (excludeSlot !== undefined && s.index === excludeSlot) continue
         if (activeTeam.config.reservedSlots.includes(s.index)) continue
         const idx = parseInt(s.member.martialArtIndex)
         if (!isNaN(idx) && idx < martialArts.length) {
           const role = martialArts[idx].role
-          if (role === 'T' || role === '治疗') roles.push(role)
+          if (role === 'T' || role === '治疗') indices.push(idx)
         }
       }
     }
-    return roles
+    return indices
   }
 
   if (!qq) {
@@ -430,7 +431,8 @@ function App() {
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
         teamId={activeTeam?.id}
         isAdminEditing={false}
-        duplicateRoles={getDuplicateRoles(qq)}
+        isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
+        takenMartialArts={getTakenMartialArts()}
         onConfirm={handleSignupConfirm}
         onClose={() => setSignupSlot(null)}
       />
@@ -448,7 +450,7 @@ function App() {
             teamId={activeTeam.id}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
-            duplicateRoles={getDuplicateRoles(qq, editSlot)}
+            takenMartialArts={getTakenMartialArts(editSlot)}
             onConfirm={handleSignupConfirm}
             onClose={() => setEditSlot(null)}
             onLeave={!isAdminEdit ? () => handleLeave(editSlot) : undefined}

@@ -16,14 +16,14 @@ interface Props {
   slotInfo?: Slot | null
   isBossSlot?: boolean
   teamId?: string
-  duplicateRoles: string[]
+  takenMartialArts: number[]
   onConfirm: (data: Omit<Member, 'qq'>) => void
   onClose: () => void
   onLeave?: () => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, duplicateRoles, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(existing?.martialArtIndex ?? '')
   const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
   const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
@@ -83,12 +83,12 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
       }
     }
 
-    // Prevent duplicate T/Healer signup by same QQ
+    // Prevent duplicate T/Healer martial art in the team (boss slots exempt)
     const maIdx = parseInt(martialArt)
     const ma = martialArts[maIdx]
-    if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing) {
-      if (duplicateRoles.includes(ma.role)) {
-        setError(ma.role === 'T' ? 'T 心法不能重复报名' : '治疗心法不能重复报名')
+    if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing && !isBossSlot) {
+      if (takenMartialArts.includes(maIdx)) {
+        setError(`${ma.school}·${ma.name} 已有他人报名`)
         return
       }
     }
