@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { loadAdminQQs } from './config'
+import { initTheme } from './storage/theme'
 import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
   loadTeams, saveTeams,
@@ -19,6 +20,7 @@ import { CancelModal } from './components/CancelModal'
 import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { Button } from './components/ui/button'
+import { ThemeToggle } from './components/ThemeToggle'
 
 function createDefaultTeam(name = '默认团队'): Team {
   return {
@@ -80,6 +82,7 @@ function App() {
   useEffect(() => { saveTeams(teams) }, [teams])
   useEffect(() => { saveCancellations(cancellations) }, [cancellations])
   useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
+  useEffect(() => { initTheme() }, [])
 
   // Poll locks from server (fast polling for editing indicators + team locks)
   useEffect(() => {
@@ -484,6 +487,7 @@ function App() {
         onConfirm={handleCreateTeam}
         onClose={() => setShowCreateTeam(false)}
       />
+      <ThemeToggle />
     </>
   )
 }
