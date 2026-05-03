@@ -167,7 +167,9 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
                   {isBoss ? `老板·${roleLabel}` : roleLabel}
                 </span>
                 {ma && <span className="text-xs font-medium text-foreground truncate max-w-full mt-1">{getMartialArtLabel(ma)}</span>}
-                <span className="text-[11px] text-muted-foreground">装分：{m.gearScore}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}
+                </span>
                 <span className="text-[11px] text-muted-foreground">ID：{m.characterId}</span>
                 {m.note && <span className="text-[10px] text-muted-foreground truncate max-w-full">{m.note}</span>}
               </>

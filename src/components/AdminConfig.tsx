@@ -46,14 +46,8 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">团队名称</h3>
             <div className="flex gap-2">
-              <Input
-                className="h-8 text-sm"
-                value={editName}
-                onChange={e => setEditName(e.target.value)}
-              />
-              <Button size="xs" variant="outline" onClick={() => onRename(editName.trim() || teamName)}>
-                保存
-              </Button>
+              <Input className="h-8 text-sm" value={editName} onChange={e => setEditName(e.target.value)} />
+              <Button size="xs" variant="outline" onClick={() => onRename(editName.trim() || teamName)}>保存</Button>
             </div>
           </div>
           <div>
@@ -66,26 +60,17 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
               ]).map(item => (
                 <div key={item.type} className="flex items-center gap-2">
                   <span className="text-sm font-medium min-w-[24px]">{item.label}</span>
-                  <Input
-                    type="number" min={0} max={25}
-                    className="w-14 h-8 text-center text-sm"
-                    value={item.val} onChange={e => item.set(Math.max(0, parseInt(e.target.value) || 0))}
-                  />
-                  <Button size="xs" variant="outline" onClick={() => { onQuickReserve(item.type, item.val); item.set(0) }}>
-                    预留
-                  </Button>
+                  <Input type="number" min={0} max={25} className="w-14 h-8 text-center text-sm"
+                    value={item.val} onChange={e => item.set(Math.max(0, parseInt(e.target.value) || 0))} />
+                  <Button size="xs" variant="outline" onClick={() => { onQuickReserve(item.type, item.val); item.set(0) }}>预留</Button>
                 </div>
               ))}
             </div>
           </div>
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">团队备注</h3>
-            <Textarea
-              value={note}
-              onChange={e => onUpdateNote(e.target.value)}
-              placeholder="填写团队备注，显示在表格下方"
-              rows={3}
-            />
+            <Textarea value={note} onChange={e => onUpdateNote(e.target.value)}
+              placeholder="填写团队备注，显示在表格下方" rows={3} />
           </div>
         </div>
       )}

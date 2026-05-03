@@ -6,7 +6,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
 interface Props {
   open: boolean
@@ -30,13 +29,18 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
   const [note, setNote] = useState(existing?.note ?? '')
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [error, setError] = useState('')
+  const [maSearch, setMaSearch] = useState('')
+  const [showMaDropdown, setShowMaDropdown] = useState(false)
   const heartbeatRef = useRef<number>(0)
+  const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Lock management with timestamp tracking
+  const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
+  const isDPS = selectedMa?.role === 'DPS'
+
+  // Lock management
   useEffect(() => {
     if (!open || !teamId || slotInfo == null) return
     const slotIndex = slotInfo.index
-
     const lock = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, qq)
       if (result.ok && result.timestamp) {
@@ -48,10 +52,8 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
         setError(`该位置已被 ${result.lockedBy} 先点击`)
       }
     }
-
     lock()
     heartbeatRef.current = setInterval(lock, 15000)
-
     return () => {
       clearInterval(heartbeatRef.current)
       releaseSlotLock(teamId, slotIndex, qq)
@@ -59,31 +61,23 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
   }, [open, teamId, slotInfo?.index, qq])
 
   const handleClose = () => {
-    if (teamId && slotInfo != null) {
-      releaseSlotLock(teamId, slotInfo.index, qq)
-    }
+    if (teamId && slotInfo != null) releaseSlotLock(teamId, slotInfo.index, qq)
     onClose()
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!martialArt || !gearScore || !characterId) return
+    if (!martialArt || !characterId) return
+    if (isDPS && !gearScore) return
     setError('')
-
-    // Validate lock before saving (timestamp-based conflict resolution)
     if (teamId && slotInfo != null && lockTimestamp > 0) {
       const validation = await validateLock(teamId, slotInfo.index, qq, lockTimestamp)
       if (!validation.ok) {
-        if (validation.reason === 'teamLocked') {
-          setError('表格已被管理员锁定，无法保存')
-        } else {
-          setError('该位置已被其他人抢占，请重新选择')
-        }
+        if (validation.reason === 'teamLocked') setError('表格已被管理员锁定，无法保存')
+        else setError('该位置已被其他人抢占，请重新选择')
         return
       }
     }
-
-    // Prevent duplicate T/Healer martial art in the team (boss slots exempt)
     const maIdx = parseInt(martialArt)
     const ma = martialArts[maIdx]
     if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing && !isBossSlot) {
@@ -92,21 +86,32 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
         return
       }
     }
-
     onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note })
   }
 
+  // Filter martial arts by search
   const allowedMartialArts = useMemo(() => {
-    if (!slotInfo || slotInfo.status !== 'fixed') return martialArts
-    if (slotInfo.fixedMartialArtIndex !== null) {
-      const ma = martialArts[slotInfo.fixedMartialArtIndex]
-      return ma ? [ma] : martialArts
+    let list = martialArts
+    if (slotInfo && slotInfo.status === 'fixed') {
+      if (slotInfo.fixedMartialArtIndex !== null) {
+        list = [martialArts[slotInfo.fixedMartialArtIndex]].filter(Boolean)
+      } else if (slotInfo.fixedRole) {
+        list = martialArts.filter(ma => ma.role === slotInfo.fixedRole)
+      }
     }
-    if (slotInfo.fixedRole) {
-      return martialArts.filter(ma => ma.role === slotInfo.fixedRole)
-    }
-    return martialArts
-  }, [slotInfo])
+    if (!maSearch.trim()) return list
+    const q = maSearch.trim().toLowerCase()
+    return list.filter(ma => {
+      const label = getMartialArtLabel(ma).toLowerCase()
+      return label.includes(q) || ma.school.toLowerCase().includes(q) || ma.name.toLowerCase().includes(q)
+    })
+  }, [slotInfo, maSearch])
+
+  const selectMartialArt = (idx: number) => {
+    setMartialArt(String(idx))
+    setMaSearch('')
+    setShowMaDropdown(false)
+  }
 
   const title = isAdminEditing ? '编辑成员' : existing ? '修改报名' : '报名'
   const isFixedSlot = slotInfo?.status === 'fixed' && !existing
@@ -118,9 +123,7 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         {isBossSlot && (
-          <p className="text-xs text-purple-400 bg-purple-950/30 rounded-md px-3 py-2">
-            此位置为老板位
-          </p>
+          <p className="text-xs text-purple-400 bg-purple-950/30 rounded-md px-3 py-2">此位置为老板位</p>
         )}
         {isFixedSlot && (
           <p className="text-xs text-emerald-400 bg-emerald-950/30 rounded-md px-3 py-2">
@@ -130,32 +133,66 @@ export function SignupModal({ open, qq, existing, isAdminEditing, slotInfo, isBo
           </p>
         )}
         {error && (
-          <p className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">
-            {error}
-          </p>
+          <p className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">{error}</p>
         )}
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
             <Label>QQ</Label>
             <Input value={qq} disabled />
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 relative" ref={dropdownRef}>
             <Label>心法</Label>
-            <Select value={martialArt} onValueChange={setMartialArt}>
-              <SelectTrigger>
-                <SelectValue placeholder="选择心法" />
-              </SelectTrigger>
-              <SelectContent>
-                {allowedMartialArts.map(ma => {
-                  const idx = martialArts.indexOf(ma)
-                  return <SelectItem key={idx} value={String(idx)}>{getMartialArtLabel(ma)}</SelectItem>
-                })}
-              </SelectContent>
-            </Select>
+            <div className="relative">
+              <Input
+                placeholder={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : '搜索心法...'}
+                value={martialArt ? '' : maSearch}
+                onChange={e => { setMaSearch(e.target.value); setShowMaDropdown(true) }}
+                onFocus={() => setShowMaDropdown(true)}
+                onBlur={() => setTimeout(() => setShowMaDropdown(false), 150)}
+                readOnly={!!martialArt}
+              />
+              {martialArt && (
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive"
+                  onClick={() => { setMartialArt(''); setMaSearch(''); setShowMaDropdown(false) }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {showMaDropdown && (
+              <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md">
+                {allowedMartialArts.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">无匹配心法</p>
+                ) : (
+                  allowedMartialArts.map(ma => {
+                    const idx = martialArts.indexOf(ma)
+                    return (
+                      <div
+                        key={idx}
+                        className={`px-3 py-1.5 text-sm cursor-pointer hover:bg-accent ${String(idx) === martialArt ? 'bg-accent' : ''}`}
+                        onClick={() => selectMartialArt(idx)}
+                      >
+                        <span className="text-xs text-muted-foreground mr-2">
+                          {ma.role === 'T' ? 'T' : ma.role === '治疗' ? '奶' : 'DPS'}
+                        </span>
+                        {getMartialArtLabel(ma)}
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            )}
           </div>
           <div className="space-y-1.5">
-            <Label>装分</Label>
-            <Input type="number" value={gearScore} onChange={e => setGearScore(e.target.value)} placeholder="装分" />
+            <Label>{isDPS ? '装分' : '层数'}</Label>
+            <Input
+              type="number"
+              value={gearScore}
+              onChange={e => setGearScore(e.target.value)}
+              placeholder={isDPS ? '装分' : '层数'}
+            />
           </div>
           <div className="space-y-1.5">
             <Label>角色ID</Label>
