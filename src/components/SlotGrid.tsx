@@ -53,12 +53,10 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
   const lockMap = useMemo(() => {
     const map = new Map<number, string>()
     for (const lock of locks) {
-      if (lock.qq !== currentQQ) {
-        map.set(lock.slotIndex, lock.qq)
-      }
+      map.set(lock.slotIndex, lock.qq)
     }
     return map
-  }, [locks, currentQQ])
+  }, [locks])
 
   const orderedSlots = useMemo(() => {
     const result: Slot[] = []
