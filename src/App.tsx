@@ -447,17 +447,18 @@ function App() {
         const existingMember = activeTeam.slots[editSlot]?.member ?? undefined
         const isOwnSlot = existingMember?.qq === qq
         const isAdminEdit = isAdmin && !isOwnSlot
+        const isViewOnly = !!existingMember && !isOwnSlot && !isAdmin
         return (
           <SignupModal
             key={`edit-${activeTeam.id}-${editSlot}-${existingMember?.qq ?? 'empty'}-${existingMember?.martialArtIndex ?? 'none'}`}
             open={true}
-            qq={isAdminEdit ? (existingMember?.qq ?? qq) : qq}
+            qq={isViewOnly ? (existingMember?.qq ?? qq) : (isAdminEdit ? (existingMember?.qq ?? qq) : qq)}
             existing={existingMember}
             slotInfo={activeTeam.slots[editSlot]}
             teamId={activeTeam.id}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
-            readOnly={!isAdminEdit && existingMember?.qq !== qq}
+            readOnly={isViewOnly}
             takenMartialArts={getTakenMartialArts(editSlot)}
             onConfirm={(data, lockTimestamp) => { void handleSignupConfirm(data, lockTimestamp) }}
             onClose={() => setEditSlot(null)}
