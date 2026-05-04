@@ -93,30 +93,32 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
 
   const lockedCount = lockMap.size
 
-  const statusBadge = (label: string, count: number, color = '') => (
-    <span className={`inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-medium bg-secondary text-secondary-foreground ${color}`}>
-      {label} {count}
+  const statusBadge = (emoji: string, label: string, count: number, color = '') => (
+    <span className={`inline-flex items-center gap-1 pixel-badge bg-secondary text-secondary-foreground ${color}`}>
+      <span className="leading-none">{emoji}</span>
+      <span className="leading-none">{label}</span>
+      <span className="leading-none font-bold">{count}</span>
     </span>
   )
 
   return (
     <div>
       {(config.locked || teamLocked) && !isAdmin && (
-        <div className="mb-3 rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-xs text-destructive">
+        <div className="mb-3 pixel-notification bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-600 dark:text-red-400">
           🔒 表格已锁定，仅管理员可编辑
         </div>
       )}
       <div className="flex flex-wrap gap-2 mb-3">
-        {statusBadge('T', counts.T)}
-        {statusBadge('治疗', counts['治疗'])}
-        {statusBadge('DPS', counts.DPS)}
-        {statusBadge('老板·T', counts.bossT, 'border-purple-800/50 bg-purple-950/30 text-purple-400')}
-        {statusBadge('老板·奶', counts.bossHealer, 'border-purple-800/50 bg-purple-950/30 text-purple-400')}
-        {statusBadge('老板·DPS', counts.bossDPS, 'border-purple-800/50 bg-purple-950/30 text-purple-400')}
-        {statusBadge('空老板位', reservedCount - counts.bossT - counts.bossHealer - counts.bossDPS)}
+        {statusBadge('🛡️', 'T', counts.T)}
+        {statusBadge('💚', '治疗', counts['治疗'])}
+        {statusBadge('⚔️', 'DPS', counts.DPS)}
+        {statusBadge('👑', 'T', counts.bossT, 'bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400')}
+        {statusBadge('👑', '奶', counts.bossHealer, 'bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400')}
+        {statusBadge('👑', 'DPS', counts.bossDPS, 'bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400')}
+        {statusBadge('🐰', '空位', reservedCount - counts.bossT - counts.bossHealer - counts.bossDPS)}
         {lockedCount > 0 && (
-          <span className="inline-flex items-center rounded-full border border-orange-800 px-2.5 py-0.5 text-xs font-medium bg-orange-950/30 text-orange-400">
-            编辑中 {lockedCount}
+          <span className="pixel-badge bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400">
+            ✏️ {lockedCount}
           </span>
         )}
       </div>
@@ -127,26 +129,26 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
           let content: React.ReactNode
 
           if (slot.status === 'reserved') {
-            cellClass += ' bg-secondary/30 border-border hover:bg-secondary/50'
-            const label = lockMap.has(slot.index) ? '正在报名' : '老板位'
+            cellClass += ' pixel-slot pixel-slot-reserved'
+            const label = lockMap.has(slot.index) ? '⏳ 报名中' : '🐰 老板位'
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-muted-foreground">#{slot.index + 1}</span>
-                <span className="text-xs text-muted-foreground">{label}</span>
+                <span className="absolute top-1 left-2 text-[10px] text-purple-500 font-mono">#{slot.index + 1}</span>
+                <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">{label}</span>
               </>
             )
           } else if (slot.status === 'fixed') {
-            cellClass += ' bg-emerald-950/30 border-emerald-900 hover:bg-emerald-950/50'
+            cellClass += ' pixel-slot pixel-slot-fixed'
             const ma = slot.fixedMartialArtIndex !== null && slot.fixedMartialArtIndex < martialArts.length
               ? martialArts[slot.fixedMartialArtIndex]
               : null
-            const fixedLabel = lockMap.has(slot.index) ? '正在报名' :
-              (ma ? getMartialArtLabel(ma) : slot.fixedRole === 'T' ? 'T 位' : slot.fixedRole === '治疗' ? '奶 位' : 'DPS 位')
+            const fixedLabel = lockMap.has(slot.index) ? '⏳ 报名中' :
+              (ma ? getMartialArtLabel(ma) : slot.fixedRole === 'T' ? '🛡️ T 位' : slot.fixedRole === '治疗' ? '💚 奶 位' : '⚔️ DPS 位')
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-emerald-600">#{slot.index + 1}</span>
-                <span className="text-xs text-emerald-400 font-medium">{fixedLabel}</span>
-                {isAdmin && <span className="text-[10px] text-emerald-700 mt-0.5">点击设置</span>}
+                <span className="absolute top-1 left-2 text-[10px] text-teal-500 font-mono">#{slot.index + 1}</span>
+                <span className="text-xs text-teal-600 dark:text-teal-400 font-medium">{fixedLabel}</span>
+                {isAdmin && <span className="text-[10px] text-teal-500 mt-0.5">⚙️ 设置</span>}
               </>
             )
           } else if (slot.status === 'occupied' && slot.member) {
@@ -155,40 +157,40 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const isBoss = config.reservedSlots.includes(slot.index)
             if (isBoss) {
               cellClass += isMine
-                ? ' bg-purple-950/40 border-purple-800 hover:bg-purple-950/60'
-                : ' bg-purple-950/20 border-purple-800/50 hover:bg-purple-950/30'
+                ? ' pixel-slot pixel-slot-boss'
+                : ' pixel-slot pixel-slot-boss opacity-90'
             } else {
               cellClass += isMine
-                ? ' bg-amber-950/30 border-amber-800 hover:bg-amber-950/50'
-                : ' bg-blue-950/20 border-blue-900/50 hover:bg-blue-950/30'
+                ? ' pixel-slot pixel-slot-mine'
+                : ' pixel-slot pixel-slot-occupied'
             }
             const maIdx = parseInt(m.martialArtIndex)
             const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null
             const roleLabel = ma?.role === 'T' ? 'T' : ma?.role === '治疗' ? '奶' : 'DPS'
-            const roleColor = ma?.role === 'T' ? 'text-orange-400 bg-orange-950/40 border-orange-800' :
-                              ma?.role === '治疗' ? 'text-emerald-400 bg-emerald-950/40 border-emerald-800' :
-                              'text-blue-400 bg-blue-950/40 border-blue-800'
+            const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300 dark:text-orange-400 dark:bg-orange-950/40 dark:border-orange-800' :
+                              ma?.role === '治疗' ? 'text-emerald-600 bg-emerald-100 border-emerald-300 dark:text-emerald-400 dark:bg-emerald-950/40 dark:border-emerald-800' :
+                              'text-blue-600 bg-blue-100 border-blue-300 dark:text-blue-400 dark:bg-blue-950/40 dark:border-blue-800'
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-muted-foreground">#{slot.index + 1}</span>
-                <span className={`absolute top-1 right-2 text-[10px] font-medium px-1 rounded border ${roleColor}`}>
-                  {isBoss ? `老板·${roleLabel}` : roleLabel}
+                <span className="absolute top-1 left-2 text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
+                <span className={`absolute top-1 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleColor}`}>
+                  {isBoss ? `👑${roleLabel}` : roleLabel}
                 </span>
-                {ma && <span className="text-xs font-medium text-foreground truncate max-w-full mt-1">{getMartialArtLabel(ma)}</span>}
+                {ma && <span className="text-xs font-bold text-foreground truncate max-w-full mt-1">{getMartialArtLabel(ma)}</span>}
                 <span className="text-[11px] text-muted-foreground">
                   {ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}
                 </span>
                 <span className="text-[11px] text-muted-foreground">ID：{m.characterId}</span>
-                {m.note && <span className="text-[10px] text-muted-foreground truncate max-w-full">{m.note}</span>}
+                {m.note && <span className="text-[10px] text-muted-foreground truncate max-w-full italic">{m.note}</span>}
               </>
             )
           } else {
-            cellClass += ' bg-secondary/10 border-border hover:bg-secondary/20 hover:border-primary/50'
-            const label = lockMap.has(slot.index) ? '正在报名' : '可选'
+            cellClass += ' pixel-slot pixel-slot-available'
+            const label = lockMap.has(slot.index) ? '⏳ 报名中' : '✨ 可选'
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-muted-foreground">#{slot.index + 1}</span>
-                <span className="text-xs text-muted-foreground">{label}</span>
+                <span className="absolute top-1 left-2 text-[10px] text-pink-400 font-mono">#{slot.index + 1}</span>
+                <span className="text-xs text-pink-500 dark:text-pink-400 font-medium">{label}</span>
               </>
             )
           }
@@ -209,15 +211,15 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
           )
         })}
       </div>
-      <div className="flex flex-wrap gap-4 mt-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-secondary/10 border border-border"></span>可选</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-blue-950/20 border border-blue-900/50"></span>已报名</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-amber-950/30 border border-amber-800"></span>我的</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-950/30 border border-emerald-900"></span>固定位</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-purple-950/20 border border-purple-800/50"></span>老板报名</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-secondary/30 border border-border"></span>老板位</span>
+      <div className="flex flex-wrap gap-3 mt-3 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-available inline-block"></span>可选</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-occupied inline-block"></span>已报名</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-mine inline-block"></span>我的</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-fixed inline-block"></span>固定位</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-boss inline-block"></span>老板报名</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-reserved inline-block"></span>老板位</span>
         {lockedCount > 0 && (
-          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-orange-950/30 border border-orange-800"></span>编辑中</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-orange-400 inline-block border-2 border-orange-600"></span>编辑中</span>
         )}
       </div>
     </div>

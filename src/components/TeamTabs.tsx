@@ -69,16 +69,16 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
   if (teams.length === 0) return null
 
   return (
-    <div className="overflow-x-auto">
-      <div className="flex gap-1 border-b border-border">
+    <div className="w-full pixel-tabs-container">
+      <div className="flex flex-wrap items-end gap-1">
         {teams.map((team, i) => (
           <div
             key={team.id}
             draggable={isAdmin}
-            className={`relative flex items-center gap-1 rounded-t-lg px-4 py-2 text-sm cursor-pointer transition-colors select-none border border-transparent border-b-0 mb-[-1px] ${
+            className={`relative flex items-center gap-1 px-4 py-2 text-sm cursor-pointer transition-colors select-none pixel-tab ${
               team.id === activeId
-                ? 'bg-background border-border text-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                ? 'active text-foreground font-bold'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
             } ${dragIndex === i ? 'opacity-50' : ''}`}
             onClick={() => onSwitch(team.id)}
             onDoubleClick={() => startEdit(team.id, team.name)}
@@ -89,7 +89,7 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
             {editingId === team.id ? (
               <Input
                 ref={inputRef}
-                className="h-6 w-[100px] text-sm px-1 py-0"
+                className="h-6 w-[100px] text-sm px-1 py-0 pixel-input"
                 value={editValue}
                 onChange={e => setEditValue(e.target.value)}
                 onBlur={commitEdit}
@@ -110,7 +110,7 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
           </div>
         ))}
         {isAdmin && (
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={onCreate} title="创建团队">
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded border-2 border-border bg-transparent inline-flex items-center justify-center mb-0.5" onClick={onCreate} title="创建团队">
             <Plus className="h-4 w-4" />
           </Button>
         )}

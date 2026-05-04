@@ -22,6 +22,7 @@ import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { Button } from './components/ui/button'
 import { ThemeToggle } from './components/ThemeToggle'
+import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 
 function createDefaultTeam(name = '默认团队'): Team {
   return {
@@ -87,7 +88,6 @@ function App() {
             setActiveTeamId(loadedTeams[0].id)
           }
         } else {
-          // Server is empty/new - push local data to server
           await saveTeams(loadTeams())
           await saveCancellations(loadCancellations())
         }
@@ -98,7 +98,6 @@ function App() {
   useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
   useEffect(() => { initTheme() }, [])
 
-  // Poll locks from server (fast polling for editing indicators + team locks)
   useEffect(() => {
     if (!serverMode) return
     const poll = async () => {
@@ -111,14 +110,12 @@ function App() {
     return () => clearInterval(interval)
   }, [serverMode])
 
-  // Poll server for real-time data updates (teams, cancellations, locks fallback)
   useEffect(() => {
     if (!serverMode) return
     let lastSnapshotJson = ''
     const poll = async () => {
       const data = await fetchData()
       if (!data) return
-      // Also update locks from data poll as fallback
       if (data.locks) setLocks(data.locks)
       const snapshot = { teams: data.teams || [], cancellations: data.cancellations || [] }
       const snapshotJson = JSON.stringify(snapshot)
@@ -305,7 +302,6 @@ function App() {
     }
   }
 
-  // Get T/Healer martial art indices already taken in the team (excludes boss slots, excludes current editing slot)
   const getTakenMartialArts = (excludeSlot?: number): number[] => {
     if (!activeTeam) return []
     const indices: number[] = []
@@ -332,36 +328,58 @@ function App() {
       {notice && (
         <CancellationNotice open={!!notice} notice={notice} onDismiss={() => { void dismissNotice() }} />
       )}
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen bg-background pixel-bg-pattern">
+        {/* Decorative floating elements */}
+        <div className="fixed top-20 left-4 opacity-20 pointer-events-none pixel-carrot-float hidden lg:block">
+          <PixelCarrot size={32} />
+        </div>
+        <div className="fixed top-40 right-8 opacity-20 pointer-events-none pixel-heart-float hidden lg:block">
+          <PixelHeart size={28} />
+        </div>
+        <div className="fixed bottom-32 left-8 opacity-20 pointer-events-none pixel-star-float hidden lg:block">
+          <PixelStar size={24} />
+        </div>
+        <div className="fixed bottom-20 right-16 opacity-15 pointer-events-none pixel-carrot-float hidden lg:block" style={{ animationDelay: '1.5s' }}>
+          <PixelCarrot size={20} />
+        </div>
+
         <div className="max-w-[960px] mx-auto px-4 py-5">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-semibold text-foreground">兔扇报名助手</h1>
-            <div className="flex items-center gap-3">
-              {isAdmin && (
-                <span className="inline-flex items-center rounded-full bg-amber-950/50 border border-amber-800 px-2.5 py-0.5 text-xs font-medium text-amber-400">
-                  管理员
-                </span>
-              )}
-              {serverMode && (
-                <span className="text-[11px] text-blue-400 bg-blue-950/30 rounded px-1.5 py-0.5">同步</span>
-              )}
-              <span className="text-sm text-muted-foreground">{qq}</span>
-              <Button variant="outline" size="sm" onClick={handleLogout}>退出</Button>
+          {/* Header */}
+          <div className="pixel-card p-3">
+            <div className="flex items-center justify-between">
+              <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
+              <div className="flex items-center gap-3">
+                {isAdmin && (
+                  <span className="pixel-badge bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                    GM
+                  </span>
+                )}
+                {serverMode && (
+                  <span className="pixel-badge bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                    SYNC
+                  </span>
+                )}
+                <span className="text-sm text-muted-foreground font-mono">{qq}</span>
+                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
+              </div>
             </div>
           </div>
 
-          <TeamTabs
-            teams={teams.map(t => ({ id: t.id, name: t.name }))}
-            activeId={resolvedActiveTeamId}
-            isAdmin={isAdmin}
-            onSwitch={switchTeam}
-            onCreate={handleShowCreateTeam}
-            onDelete={handleDeleteTeam}
-            onRename={handleRenameTeam}
-            onReorder={(ids) => {
-              void runMutation({ type: 'reorderTeams', ids })
-            }}
-          />
+          {/* Tabs */}
+          <div className="mt-3">
+            <TeamTabs
+              teams={teams.map(t => ({ id: t.id, name: t.name }))}
+              activeId={resolvedActiveTeamId}
+              isAdmin={isAdmin}
+              onSwitch={switchTeam}
+              onCreate={handleShowCreateTeam}
+              onDelete={handleDeleteTeam}
+              onRename={handleRenameTeam}
+              onReorder={(ids) => {
+                void runMutation({ type: 'reorderTeams', ids })
+              }}
+            />
+          </div>
 
           {activeTeam && (
             <div className="mt-4">
@@ -393,13 +411,16 @@ function App() {
                 onSetRole={handleSetRoleSlotClick}
               />
               {mutationError && (
-                <div className="mt-3 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {mutationError}
+                <div className="mt-3 pixel-notification bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+                  ⚠️ {mutationError}
                 </div>
               )}
               {activeTeam.note && (
-                <div className="mt-4 rounded-lg border border-amber-800 bg-amber-950/20 p-3">
-                  <p className="text-xs font-medium text-amber-400 mb-1">团队备注</p>
+                <div className="mt-4 pixel-card p-3 border-l-4 border-l-amber-400">
+                  <div className="flex items-center gap-2 mb-1">
+                    <PixelCarrot size={16} />
+                    <p className="text-xs font-bold text-amber-600 dark:text-amber-400 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
+                  </div>
                   <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
                 </div>
               )}
@@ -485,19 +506,73 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
     if (t) onLogin(t)
   }
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-6">
-      <h1 className="text-2xl font-semibold text-foreground">兔扇报名助手</h1>
-      <form className="flex gap-2" onSubmit={handleSubmit}>
-        <input
-          type="text"
-          className="flex h-10 rounded-md border border-input bg-transparent px-4 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring w-60"
-          placeholder="输入QQ号登录/注册"
-          value={inputQq}
-          onChange={e => setInputQq(e.target.value)}
-          autoFocus
-        />
-        <Button type="submit">进入</Button>
-      </form>
+    <div className="min-h-screen flex flex-col items-center justify-center gap-6 pixel-bg-pattern relative overflow-hidden">
+      {/* Floating decorations */}
+      <div className="absolute top-[15%] left-[10%] opacity-30 pixel-carrot-float">
+        <PixelCarrot size={40} />
+      </div>
+      <div className="absolute top-[20%] right-[15%] opacity-30 pixel-heart-float">
+        <PixelHeart size={36} />
+      </div>
+      <div className="absolute bottom-[25%] left-[15%] opacity-25 pixel-star-float">
+        <PixelStar size={32} />
+      </div>
+      <div className="absolute bottom-[20%] right-[10%] opacity-25 pixel-carrot-float" style={{ animationDelay: '2s' }}>
+        <PixelCarrot size={28} />
+      </div>
+      <div className="absolute top-[45%] left-[5%] opacity-20 pixel-heart-float" style={{ animationDelay: '1s' }}>
+        <PixelHeart size={24} />
+      </div>
+      <div className="absolute top-[50%] right-[5%] opacity-20 pixel-star-float" style={{ animationDelay: '1.5s' }}>
+        <PixelStar size={28} />
+      </div>
+
+      {/* Main login card */}
+        <div className="pixel-card p-8 flex flex-col items-center gap-5 relative z-10 max-w-sm w-full mx-4">
+        {/* Pixel border top decoration */}
+        <div className="pixel-border-top absolute top-0 left-0 right-0" />
+
+        {/* Logo area */}
+        <div className="flex flex-col items-center gap-3 mt-2">
+          <h1 className="text-lg font-bold text-foreground pixel-font tracking-wider">
+            兔扇报名助手
+          </h1>
+          <p className="text-xs text-muted-foreground pixel-font" style={{ fontSize: '8px' }}>
+            RABBIT SIGNUP HELPER
+          </p>
+        </div>
+
+        {/* Pixel divider */}
+        <div className="pixel-divider w-full" />
+
+        {/* Login form */}
+        <form className="flex flex-col gap-3 w-full" onSubmit={handleSubmit}>
+          <div className="relative">
+            <input
+              type="text"
+              className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
+              placeholder="输入QQ号开始冒险..."
+              value={inputQq}
+              onChange={e => setInputQq(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <Button type="submit" className="pixel-btn w-full h-11 bg-primary text-primary-foreground font-bold tracking-wider hover:bg-primary/90">
+            <PixelHeart size={16} className="mr-2" />
+            开始冒险
+            <PixelHeart size={16} className="ml-2" />
+          </Button>
+        </form>
+
+        {/* Bottom decoration */}
+        <div className="flex items-center gap-2 mt-1">
+          <PixelStar size={12} className="opacity-50" />
+          <span className="text-[10px] text-muted-foreground pixel-font" style={{ fontSize: '7px' }}>
+            ENTER THE ADVENTURE
+          </span>
+          <PixelStar size={12} className="opacity-50" />
+        </div>
+      </div>
     </div>
   )
 }
