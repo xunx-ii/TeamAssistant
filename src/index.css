@@ -1,7 +1,5 @@
 @import 'tailwindcss';
 
-@custom-variant dark (&:is(.dark *));
-
 /* Pixel theme animations */
 @keyframes pixel-bounce {
   0%, 100% { transform: translateY(0); }
@@ -125,40 +123,6 @@
   --sidebar-accent: #FFD1DC;
   --sidebar-accent-foreground: #8B4557;
   --sidebar-border: #D4A574;
-  --sidebar-ring: #FF69B4;
-}
-
-.dark {
-  --background: #1A1028;
-  --foreground: #F5E6D3;
-  --card: #2A1F3D;
-  --card-foreground: #F5E6D3;
-  --popover: #2A1F3D;
-  --popover-foreground: #F5E6D3;
-  --primary: #FF69B4;
-  --primary-foreground: #FFF;
-  --secondary: #3D2B50;
-  --secondary-foreground: #FFB6C1;
-  --muted: #2A1F3D;
-  --muted-foreground: #A89BB5;
-  --accent: #4A3560;
-  --accent-foreground: #FFB6C1;
-  --destructive: #FF4757;
-  --border: #4A3560;
-  --input: #3D2B50;
-  --ring: #FF69B4;
-  --chart-1: #FF6B6B;
-  --chart-2: #FF69B4;
-  --chart-3: #FFD700;
-  --chart-4: #7BED9F;
-  --chart-5: #70A1FF;
-  --sidebar: #1A1028;
-  --sidebar-foreground: #F5E6D3;
-  --sidebar-primary: #FF69B4;
-  --sidebar-primary-foreground: #FFF;
-  --sidebar-accent: #3D2B50;
-  --sidebar-accent-foreground: #FFB6C1;
-  --sidebar-border: #4A3560;
   --sidebar-ring: #FF69B4;
 }
 
@@ -407,25 +371,6 @@ body {
   font-family: 'ZCOOL QingKe HuangYou', 'Press Start 2P', monospace;
   font-size: 10px;
   padding: 4px 8px;
-}
-
-/* Scanline effect for dark mode */
-.dark .scanline-effect::after {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 0, 0, 0.03) 2px,
-    rgba(0, 0, 0, 0.03) 4px
-  );
-  z-index: 9999;
 }
 
 /* Pixel divider */

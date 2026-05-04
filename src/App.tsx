@@ -21,7 +21,6 @@ import { CancelModal } from './components/CancelModal'
 import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { Button } from './components/ui/button'
-import { ThemeToggle } from './components/ThemeToggle'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 
 function createDefaultTeam(name = '默认团队'): Team {
@@ -350,12 +349,12 @@ function App() {
               <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
               <div className="flex items-center gap-3">
                 {isAdmin && (
-                  <span className="pixel-badge bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                  <span className="pixel-badge bg-amber-100 text-amber-700">
                     GM
                   </span>
                 )}
                 {serverMode && (
-                  <span className="pixel-badge bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                  <span className="pixel-badge bg-blue-100 text-blue-700">
                     SYNC
                   </span>
                 )}
@@ -411,7 +410,7 @@ function App() {
                 onSetRole={handleSetRoleSlotClick}
               />
               {mutationError && (
-                <div className="mt-3 pixel-notification bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+                <div className="mt-3 pixel-notification bg-red-50 px-3 py-2 text-xs text-red-600">
                   ⚠️ {mutationError}
                 </div>
               )}
@@ -419,7 +418,7 @@ function App() {
                 <div className="mt-4 pixel-card p-3 border-l-4 border-l-amber-400">
                   <div className="flex items-center gap-2 mb-1">
                     <PixelCarrot size={16} />
-                    <p className="text-xs font-bold text-amber-600 dark:text-amber-400 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
+                    <p className="text-xs font-bold text-amber-600 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
                   </div>
                   <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
                 </div>
@@ -493,7 +492,6 @@ function App() {
         onConfirm={handleCreateTeam}
         onClose={() => setShowCreateTeam(false)}
       />
-      <ThemeToggle />
     </>
   )
 }

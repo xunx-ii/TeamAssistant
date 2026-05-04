@@ -104,7 +104,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
   return (
     <div>
       {(config.locked || teamLocked) && !isAdmin && (
-        <div className="mb-3 pixel-notification bg-red-50 dark:bg-red-950/30 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <div className="mb-3 pixel-notification bg-red-50 px-3 py-2 text-xs text-red-600">
           🔒 表格已锁定，仅管理员可编辑
         </div>
       )}
@@ -112,12 +112,12 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
         {statusBadge('🛡️', 'T', counts.T)}
         {statusBadge('💚', '治疗', counts['治疗'])}
         {statusBadge('⚔️', 'DPS', counts.DPS)}
-        {statusBadge('👑', 'T', counts.bossT, 'bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400')}
-        {statusBadge('👑', '奶', counts.bossHealer, 'bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400')}
-        {statusBadge('👑', 'DPS', counts.bossDPS, 'bg-purple-100 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400')}
+        {statusBadge('👑', 'T', counts.bossT, 'bg-purple-100 text-purple-700')}
+        {statusBadge('👑', '奶', counts.bossHealer, 'bg-purple-100 text-purple-700')}
+        {statusBadge('👑', 'DPS', counts.bossDPS, 'bg-purple-100 text-purple-700')}
         {statusBadge('🐰', '空位', reservedCount - counts.bossT - counts.bossHealer - counts.bossDPS)}
         {lockedCount > 0 && (
-          <span className="pixel-badge bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400">
+          <span className="pixel-badge bg-orange-100 text-orange-700">
             ✏️ {lockedCount}
           </span>
         )}
@@ -134,7 +134,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-purple-500 font-mono">#{slot.index + 1}</span>
-                <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">{label}</span>
+                <span className="text-xs text-purple-600 font-medium">{label}</span>
               </>
             )
           } else if (slot.status === 'fixed') {
@@ -147,7 +147,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-teal-500 font-mono">#{slot.index + 1}</span>
-                <span className="text-xs text-teal-600 dark:text-teal-400 font-medium">{fixedLabel}</span>
+                <span className="text-xs text-teal-600 font-medium">{fixedLabel}</span>
                 {isAdmin && <span className="text-[10px] text-teal-500 mt-0.5">⚙️ 设置</span>}
               </>
             )
@@ -167,9 +167,9 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const maIdx = parseInt(m.martialArtIndex)
             const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null
             const roleLabel = ma?.role === 'T' ? 'T' : ma?.role === '治疗' ? '奶' : 'DPS'
-            const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300 dark:text-orange-400 dark:bg-orange-950/40 dark:border-orange-800' :
-                              ma?.role === '治疗' ? 'text-emerald-600 bg-emerald-100 border-emerald-300 dark:text-emerald-400 dark:bg-emerald-950/40 dark:border-emerald-800' :
-                              'text-blue-600 bg-blue-100 border-blue-300 dark:text-blue-400 dark:bg-blue-950/40 dark:border-blue-800'
+            const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300' :
+                              ma?.role === '治疗' ? 'text-emerald-600 bg-emerald-100 border-emerald-300' :
+                              'text-blue-600 bg-blue-100 border-blue-300'
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
@@ -190,7 +190,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             content = (
               <>
                 <span className="absolute top-1 left-2 text-[10px] text-pink-400 font-mono">#{slot.index + 1}</span>
-                <span className="text-xs text-pink-500 dark:text-pink-400 font-medium">{label}</span>
+                <span className="text-xs text-pink-500 font-medium">{label}</span>
               </>
             )
           }
