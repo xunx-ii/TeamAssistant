@@ -45,7 +45,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
 
   // Lock management
   useEffect(() => {
-    if (!open || !teamId || slotIndex == null) return
+    if (!open || !teamId || slotIndex == null || readOnly) return
     const lock = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, lockQq)
       if (result.ok && result.timestamp) {
@@ -63,7 +63,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
       clearInterval(heartbeatRef.current)
       void releaseSlotLock(teamId, slotIndex, lockQq)
     }
-  }, [open, teamId, slotIndex, lockQq, qq])
+  }, [open, teamId, slotIndex, lockQq, qq, readOnly])
 
   const handleClose = () => {
     if (teamId && slotIndex != null) void releaseSlotLock(teamId, slotIndex, lockQq)
