@@ -47,7 +47,6 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
 }
 
 export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole, onView }: Props) {
-  const reservedCount = config.reservedSlots.length
   const counts = getRoleCounts(slots, config.reservedSlots)
 
   const lockMap = useMemo(() => {
@@ -113,10 +112,9 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
         {statusBadge('🛡️', 'T', counts.T)}
         {statusBadge('💚', '治疗', counts['治疗'])}
         {statusBadge('⚔️', 'DPS', counts.DPS)}
-        {statusBadge('👑', 'T', counts.bossT, 'bg-purple-100 text-purple-700')}
-        {statusBadge('👑', '奶', counts.bossHealer, 'bg-purple-100 text-purple-700')}
-        {statusBadge('👑', 'DPS', counts.bossDPS, 'bg-purple-100 text-purple-700')}
-        {statusBadge('🐰', '空位', reservedCount - counts.bossT - counts.bossHealer - counts.bossDPS)}
+        {statusBadge('老板', 'T', counts.bossT, 'bg-purple-100 text-purple-700')}
+        {statusBadge('老板', '奶', counts.bossHealer, 'bg-purple-100 text-purple-700')}
+        {statusBadge('老板', 'DPS', counts.bossDPS, 'bg-purple-100 text-purple-700')}
         {lockedCount > 0 && (
           <span className="pixel-badge bg-orange-100 text-orange-700">
             ✏️ {lockedCount}
