@@ -399,6 +399,12 @@ function App() {
                   }}
                 />
               )}
+              <div className="mb-3 pixel-card p-3">
+                <div className="flex items-center gap-2">
+                  <PixelHeart size={16} />
+                  <h2 className="text-sm font-bold text-foreground break-all">{activeTeam.name}</h2>
+                </div>
+              </div>
               <SlotGrid
                 slots={activeTeam.slots}
                 config={activeTeam.config}
