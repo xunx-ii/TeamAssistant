@@ -18,13 +18,14 @@ interface Props {
   isBossSlot?: boolean
   teamId?: string
   takenMartialArts: number[]
+  readOnly?: boolean
   onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void
   onClose: () => void
   onLeave?: (lockTimestamp?: number) => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(existing?.martialArtIndex ?? '')
   const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
   const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
@@ -128,8 +129,9 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     setShowMaDropdown(false)
   }
 
-  const title = isAdminEditing ? '编辑成员' : existing ? '修改报名' : '报名'
+  const title = readOnly ? '查看报名' : isAdminEditing ? '编辑成员' : existing ? '修改报名' : '报名'
   const isFixedSlot = slotInfo?.status === 'fixed' && !existing
+  const showActions = !readOnly
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
@@ -176,20 +178,24 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                   placeholder={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : '搜索心法'}
                   value={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch}
                   onChange={e => {
+                    if (readOnly) return
                     setMartialArt('')
                     setMaSearch(e.target.value)
                     setShowMaDropdown(true)
                   }}
                   onFocus={() => {
+                    if (readOnly) return
                     if (!martialArt) setShowMaDropdown(true)
                   }}
-                  readOnly={!!martialArt}
+                  readOnly={!!martialArt || readOnly}
+                  disabled={readOnly}
                 />
                 {martialArt ? (
                   <button
                     type="button"
                     className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     onClick={() => {
+                      if (readOnly) return
                       setMartialArt('')
                       setMaSearch('')
                       setShowMaDropdown(true)
@@ -202,7 +208,10 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                   <button
                     type="button"
                     className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    onClick={() => setShowMaDropdown(v => !v)}
+                    onClick={() => {
+                      if (readOnly) return
+                      setShowMaDropdown(v => !v)
+                    }}
                     aria-label="展开心法列表"
                   >
                     <ChevronsUpDown className="h-4 w-4" />
@@ -249,35 +258,38 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
           </div>
           <div className="space-y-1.5">
             <Label>{isDPS ? '装分' : '层数'}</Label>
-            <Input
-              ref={gearScoreRef}
-              type="number"
-              value={gearScore}
-              onChange={e => setGearScore(e.target.value)}
-              placeholder={isDPS ? '装分' : '层数'}
-            />
+              <Input
+                ref={gearScoreRef}
+                type="number"
+                value={gearScore}
+                onChange={e => { if (!readOnly) setGearScore(e.target.value) }}
+                placeholder={isDPS ? '装分' : '层数'}
+                disabled={readOnly}
+              />
           </div>
           <div className="space-y-1.5">
             <Label>角色ID</Label>
-            <Input value={characterId} onChange={e => setCharacterId(e.target.value)} placeholder="角色ID" />
+            <Input value={characterId} onChange={e => { if (!readOnly) setCharacterId(e.target.value) }} placeholder="角色ID" disabled={readOnly} />
           </div>
           <div className="space-y-1.5">
             <Label>备注</Label>
-            <Input value={note} onChange={e => setNote(e.target.value)} placeholder="备注" />
+            <Input value={note} onChange={e => { if (!readOnly) setNote(e.target.value) }} placeholder="备注" disabled={readOnly} />
           </div>
-          <div className="flex gap-2 pt-1">
-            <Button type="submit" className="flex-1">{existing ? '保存修改' : '确认报名'}</Button>
-            {onLeave && (
-              <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => onLeave(lockTimestamp)}>
-                退出报名
-              </Button>
-            )}
-            {onCancelMember && (
-              <Button type="button" variant="destructive" className="flex-1" onClick={onCancelMember}>
-                取消该成员
-              </Button>
-            )}
-          </div>
+          {showActions && (
+            <div className="flex gap-2 pt-1">
+              <Button type="submit" className="flex-1">{existing ? '保存修改' : '确认报名'}</Button>
+              {onLeave && (
+                <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => onLeave(lockTimestamp)}>
+                  退出报名
+                </Button>
+              )}
+              {onCancelMember && (
+                <Button type="button" variant="destructive" className="flex-1" onClick={onCancelMember}>
+                  取消该成员
+                </Button>
+              )}
+            </div>
+          )}
         </form>
       </DialogContent>
     </Dialog>

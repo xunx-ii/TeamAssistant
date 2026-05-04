@@ -13,6 +13,7 @@ interface Props {
   onSignup: (slotIndex: number) => void
   onEdit: (slotIndex: number) => void
   onSetRole: (slotIndex: number) => void
+  onView: (slotIndex: number) => void
 }
 
 function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
@@ -45,7 +46,7 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   return counts
 }
 
-export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole }: Props) {
+export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole, onView }: Props) {
   const reservedCount = config.reservedSlots.length
   const counts = getRoleCounts(slots, config.reservedSlots)
 
@@ -76,6 +77,8 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
     if (slot.status === 'occupied' && slot.member) {
       if (slot.member.qq === currentQQ || isAdmin) {
         onEdit(slot.index)
+      } else {
+        onView(slot.index)
       }
       return
     }

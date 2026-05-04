@@ -182,6 +182,7 @@ function App() {
   const handleShowCreateTeam = useCallback(() => setShowCreateTeam(true), [])
   const handleSignupSlot = useCallback((idx: number) => setSignupSlot(idx), [])
   const handleEditSlot = useCallback((idx: number) => setEditSlot(idx), [])
+  const handleViewSlot = useCallback((idx: number) => setEditSlot(idx), [])
   const handleSetRoleSlotClick = useCallback((idx: number) => setSetRoleSlot(idx), [])
   const handleSignupFromRole = useCallback(() => {
     if (setRoleSlot !== null) {
@@ -408,6 +409,7 @@ function App() {
                 onSignup={handleSignupSlot}
                 onEdit={handleEditSlot}
                 onSetRole={handleSetRoleSlotClick}
+                onView={handleViewSlot}
               />
               {mutationError && (
                 <div className="mt-3 pixel-notification bg-red-50 px-3 py-2 text-xs text-red-600">
@@ -455,6 +457,7 @@ function App() {
             teamId={activeTeam.id}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
+            readOnly={!isAdminEdit && existingMember?.qq !== qq}
             takenMartialArts={getTakenMartialArts(editSlot)}
             onConfirm={(data, lockTimestamp) => { void handleSignupConfirm(data, lockTimestamp) }}
             onClose={() => setEditSlot(null)}
