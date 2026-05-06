@@ -182,7 +182,6 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
                               'text-blue-600 bg-blue-100 border-blue-300'
             content = (
               <>
-                {!hasOrangeWeapon && <span className="pixel-slot-ornament" aria-hidden="true"></span>}
                 <span className="absolute top-1 left-2 z-[1] text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
                 <span className={`absolute top-1 right-2 z-[1] text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleColor}`}>
                   {isBoss ? `👑${roleLabel}` : roleLabel}
