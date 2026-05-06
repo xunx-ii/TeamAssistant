@@ -345,7 +345,6 @@ body {
 }
 
 .pixel-slot-cw > * {
-  position: relative;
   z-index: 2;
 }
 
