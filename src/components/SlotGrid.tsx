@@ -130,7 +130,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
       </div>
       <div className="grid grid-cols-5 gap-2">
         {orderedSlots.map(slot => {
-          let cellClass = 'relative rounded-lg border text-center cursor-pointer transition-colors flex flex-col items-center justify-center min-h-[72px] p-2 gap-0.5 select-none'
+          let cellClass = 'relative flex h-[120px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border p-2 text-center transition-colors select-none'
 
           let content: React.ReactNode
 
@@ -182,16 +182,23 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
                               'text-blue-600 bg-blue-100 border-blue-300'
             content = (
               <>
+                {!hasOrangeWeapon && <span className="pixel-slot-ornament" aria-hidden="true"></span>}
                 <span className="absolute top-1 left-2 z-[1] text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
                 <span className={`absolute top-1 right-2 z-[1] text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleColor}`}>
                   {isBoss ? `👑${roleLabel}` : roleLabel}
                 </span>
-                {ma && <span className="relative z-[1] text-xs font-bold text-foreground truncate max-w-full mt-1">{getMartialArtLabel(ma)}</span>}
-                <span className="relative z-[1] text-[11px] text-muted-foreground">
-                  {ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}
-                </span>
-                <span className="relative z-[1] text-[11px] text-muted-foreground">ID：{m.characterId}</span>
-                {m.note && <span className="relative z-[1] text-[10px] text-muted-foreground truncate max-w-full italic">{m.note}</span>}
+                <div className="relative z-[1] mt-3 flex w-full flex-col items-center px-1">
+                  <span className={`w-full truncate text-xs font-bold leading-4 text-foreground ${ma ? '' : 'opacity-0'}`}>
+                    {ma ? getMartialArtLabel(ma) : '心法占位'}
+                  </span>
+                  <span className="w-full truncate text-[11px] leading-4 text-muted-foreground">
+                    {ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}
+                  </span>
+                  <span className="w-full truncate text-[11px] leading-4 text-muted-foreground">ID：{m.characterId}</span>
+                  <span className={`w-full truncate text-[10px] leading-4 text-muted-foreground italic ${m.note ? '' : 'opacity-0'}`}>
+                    {m.note || '备注占位'}
+                  </span>
+                </div>
               </>
             )
           } else {
