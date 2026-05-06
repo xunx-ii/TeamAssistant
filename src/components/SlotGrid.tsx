@@ -101,6 +101,13 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
     </span>
   )
 
+  const legendItem = (swatchClass: string, label: string) => (
+    <span className="flex items-center gap-1">
+      <span className={`pixel-slot-legend ${swatchClass}`}></span>
+      {label}
+    </span>
+  )
+
   return (
     <div>
       {(config.locked || teamLocked) && !isAdmin && (
@@ -215,14 +222,14 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
         })}
       </div>
       <div className="flex flex-wrap gap-3 mt-3 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-available inline-block"></span>可选</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-occupied inline-block"></span>已报名</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-mine inline-block"></span>我的</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-fixed inline-block"></span>固定位</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-boss inline-block"></span>老板报名</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 pixel-slot-reserved inline-block"></span>老板位</span>
+        {legendItem('pixel-slot-legend-available', '可选')}
+        {legendItem('pixel-slot-legend-occupied', '已报名')}
+        {legendItem('pixel-slot-legend-mine', '我的')}
+        {legendItem('pixel-slot-legend-fixed', '固定位')}
+        {legendItem('pixel-slot-legend-boss', '老板报名')}
+        {legendItem('pixel-slot-legend-reserved', '老板位')}
         {lockedCount > 0 && (
-          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-orange-400 inline-block border-2 border-orange-600"></span>编辑中</span>
+          <span className="flex items-center gap-1"><span className="pixel-slot-legend pixel-slot-legend-editing"></span>编辑中</span>
         )}
       </div>
     </div>

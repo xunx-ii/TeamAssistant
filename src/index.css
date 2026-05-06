@@ -349,6 +349,53 @@ body {
   z-index: 2;
 }
 
+.pixel-slot-legend {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: 2px solid transparent;
+  border-radius: 2px;
+  box-shadow:
+    inset -1px -1px 0 rgba(0,0,0,0.08),
+    inset 1px 1px 0 rgba(255,255,255,0.12);
+}
+
+.pixel-slot-legend-available {
+  background: linear-gradient(135deg, #FFE4F0, #FFF0F5);
+  border-color: #FFB6C1;
+}
+
+.pixel-slot-legend-occupied {
+  background: linear-gradient(135deg, #E8F5E9, #F1F8E9);
+  border-color: #81C784;
+}
+
+.pixel-slot-legend-mine {
+  background: linear-gradient(145deg, #E4F3FF, #CFE8FF);
+  border-color: #79B7E8;
+}
+
+.pixel-slot-legend-fixed {
+  background: linear-gradient(135deg, #E0F7FA, #E8F5E9);
+  border-color: #4DB6AC;
+}
+
+.pixel-slot-legend-boss {
+  background: linear-gradient(135deg, #F3E5F5, #FCE4EC);
+  border-color: #CE93D8;
+}
+
+.pixel-slot-legend-reserved {
+  background: linear-gradient(135deg, #F3E5F5, #EDE7F6);
+  border-color: #B39DDB;
+}
+
+.pixel-slot-legend-editing {
+  background: linear-gradient(135deg, #FDBA74, #FB923C);
+  border-color: #EA580C;
+}
+
 /* Decorative pixel border */
 .pixel-border-top {
   border-top: 4px solid;
