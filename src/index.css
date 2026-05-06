@@ -272,12 +272,12 @@ body {
 }
 
 .pixel-slot-mine {
-  background: linear-gradient(135deg, #FFF3E0, #FFF8E1);
-  border-color: #FFB74D;
+  background: linear-gradient(145deg, #FFE3DB, #FFD0BF);
+  border-color: #F19B73;
   box-shadow: 
     inset -2px -2px 0 rgba(0,0,0,0.1),
     inset 2px 2px 0 rgba(255,255,255,0.1),
-    0 0 0 2px rgba(255, 183, 77, 0.3);
+    0 0 0 2px rgba(241, 155, 115, 0.24);
 }
 
 .pixel-slot-boss {
@@ -298,6 +298,7 @@ body {
 .pixel-slot-cw {
   position: relative;
   isolation: isolate;
+  background: linear-gradient(145deg, #FFF2B8, #E5BC4C 60%, #D89A1E);
   border-color: #E5A50A;
   box-shadow:
     inset -2px -2px 0 rgba(0,0,0,0.08),
