@@ -34,26 +34,12 @@
   75% { transform: rotate(-3deg); }
 }
 
-@keyframes pixel-cw-shine {
+@keyframes pixel-cw-border-flow {
   0% {
-    opacity: 0.25;
     transform: rotate(0deg);
   }
-  50% {
-    opacity: 0.9;
-  }
   100% {
-    opacity: 0.25;
     transform: rotate(360deg);
-  }
-}
-
-@keyframes pixel-cw-surface-glow {
-  0%, 100% {
-    opacity: 0.16;
-  }
-  50% {
-    opacity: 0.32;
   }
 }
 
@@ -316,55 +302,51 @@ body {
   box-shadow:
     inset -2px -2px 0 rgba(0,0,0,0.08),
     inset 2px 2px 0 rgba(255,255,255,0.2),
-    0 0 0 2px rgba(245, 186, 44, 0.28),
-    0 0 14px rgba(245, 186, 44, 0.38);
+    0 0 0 2px rgba(245, 186, 44, 0.34),
+    0 0 16px rgba(245, 186, 44, 0.42);
 }
 
 .pixel-slot-cw::before {
   content: '';
   position: absolute;
   inset: 0;
-  padding: 2px;
-  border-radius: 2px;
+  border-radius: 1px;
   background: conic-gradient(
     from 0deg,
-    #7A4B00 0deg,
-    #C98400 46deg,
-    #FFF1A8 76deg,
-    #E7AE1D 108deg,
-    #8B5600 152deg,
-    #D99809 215deg,
-    #FFF6D1 274deg,
-    #B87400 316deg,
-    #7A4B00 360deg
+    rgba(170, 108, 0, 0) 0deg,
+    rgba(170, 108, 0, 0) 42deg,
+    rgba(214, 150, 15, 0.9) 58deg,
+    rgba(255, 245, 191, 1) 72deg,
+    rgba(238, 181, 33, 0.95) 82deg,
+    rgba(170, 108, 0, 0) 100deg,
+    rgba(170, 108, 0, 0) 180deg,
+    rgba(214, 150, 15, 0.82) 202deg,
+    rgba(255, 247, 210, 0.98) 216deg,
+    rgba(238, 181, 33, 0.88) 228deg,
+    rgba(170, 108, 0, 0) 246deg,
+    rgba(170, 108, 0, 0) 360deg
   );
-  animation: pixel-cw-shine 3s linear infinite;
+  animation: pixel-cw-border-flow 2.1s linear infinite;
   pointer-events: none;
   z-index: 0;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
 }
 
 .pixel-slot-cw::after {
   content: '';
   position: absolute;
-  inset: 3px;
-  border-radius: 1px;
-  background: linear-gradient(135deg, rgba(255, 243, 176, 0.18), transparent 55%, rgba(255, 255, 255, 0.12));
-  animation: pixel-cw-surface-glow 2.4s ease-in-out infinite;
+  inset: 2px;
+  border-radius: 0;
+  background: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 232, 148, 0.18),
+    inset 0 0 10px rgba(255, 208, 86, 0.08);
   pointer-events: none;
-  z-index: 0;
+  z-index: 1;
 }
 
 .pixel-slot-cw > * {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 /* Decorative pixel border */
