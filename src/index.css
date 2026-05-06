@@ -34,6 +34,27 @@
   75% { transform: rotate(-3deg); }
 }
 
+@keyframes pixel-cw-shine {
+  0% {
+    opacity: 0;
+    transform: translateX(-180%) rotate(18deg);
+  }
+  20% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.8;
+  }
+  60% {
+    opacity: 0;
+    transform: translateX(260%) rotate(18deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(260%) rotate(18deg);
+  }
+}
+
 .pixel-rabbit-bounce {
   animation: pixel-bounce 1.2s ease-in-out infinite;
 }
@@ -284,6 +305,27 @@ body {
 .pixel-slot-reserved {
   background: linear-gradient(135deg, #F3E5F5, #EDE7F6);
   border-color: #B39DDB;
+}
+
+.pixel-slot-cw {
+  border-color: #E5A50A;
+  box-shadow:
+    inset -2px -2px 0 rgba(0,0,0,0.08),
+    inset 2px 2px 0 rgba(255,255,255,0.2),
+    0 0 0 2px rgba(245, 186, 44, 0.28),
+    0 0 14px rgba(245, 186, 44, 0.38);
+}
+
+.pixel-slot-cw::after {
+  content: '';
+  position: absolute;
+  top: -30%;
+  bottom: -30%;
+  left: -55%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), rgba(255,248,214,0.85), transparent);
+  animation: pixel-cw-shine 2.4s linear infinite;
+  pointer-events: none;
 }
 
 /* Decorative pixel border */

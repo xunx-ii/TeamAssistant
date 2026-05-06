@@ -89,7 +89,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
     if (slot.status === 'empty' || slot.status === 'fixed' || slot.status === 'reserved') {
       onSignup(slot.index)
     }
-  }, [currentQQ, isAdmin, onEdit, onSetRole, onSignup, lockMap, config.locked, teamLocked])
+  }, [currentQQ, isAdmin, onEdit, onSetRole, onSignup, onView, lockMap, config.locked, teamLocked])
 
   const lockedCount = lockMap.size
 
@@ -154,6 +154,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const m = slot.member
             const isMine = m.qq === currentQQ
             const isBoss = config.reservedSlots.includes(slot.index)
+            const hasOrangeWeapon = Boolean(m.hasOrangeWeapon)
             if (isBoss) {
               cellClass += isMine
                 ? ' pixel-slot pixel-slot-boss'
@@ -162,6 +163,9 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
               cellClass += isMine
                 ? ' pixel-slot pixel-slot-mine'
                 : ' pixel-slot pixel-slot-occupied'
+            }
+            if (hasOrangeWeapon) {
+              cellClass += ' pixel-slot-cw'
             }
             const maIdx = parseInt(m.martialArtIndex)
             const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null

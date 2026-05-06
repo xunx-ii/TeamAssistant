@@ -36,6 +36,7 @@ test('applyMutation preserves concurrent changes on different slots', () => {
       gearScore: '1200',
       characterId: 'A',
       note: '',
+      hasOrangeWeapon: true,
     },
   })
 
@@ -54,6 +55,7 @@ test('applyMutation preserves concurrent changes on different slots', () => {
 
   assert.equal(second.teams[0].slots[0].member?.qq, '10001')
   assert.equal(second.teams[0].slots[1].member?.qq, '10002')
+  assert.equal(second.teams[0].slots[0].member?.hasOrangeWeapon, true)
 })
 
 test('validateSlotMutationLock rejects expired slot locks', () => {

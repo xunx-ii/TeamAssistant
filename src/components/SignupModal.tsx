@@ -30,6 +30,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
   const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
   const [note, setNote] = useState(existing?.note ?? '')
+  const [hasOrangeWeapon, setHasOrangeWeapon] = useState(existing?.hasOrangeWeapon ?? false)
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [error, setError] = useState('')
   const [maSearch, setMaSearch] = useState('')
@@ -101,7 +102,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
         return
       }
     }
-    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note }, lockTimestamp)
+    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note, hasOrangeWeapon }, lockTimestamp)
   }
 
   // Filter martial arts by search
@@ -266,8 +267,9 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
               </div>
             )}
           </div>
-          <div className="space-y-1.5">
-            <Label>{isDPS ? '装分' : '层数'}</Label>
+          <div className="flex items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label>{isDPS ? '装分' : '层数'}</Label>
               <Input
                 ref={gearScoreRef}
                 type="number"
@@ -276,6 +278,25 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                 placeholder={isDPS ? '装分' : '层数'}
                 disabled={readOnly}
               />
+            </div>
+            <label
+              className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-md border px-3 text-sm transition-colors ${
+                hasOrangeWeapon
+                  ? 'border-amber-400 bg-amber-50 text-amber-700 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]'
+                  : 'border-input bg-background text-muted-foreground'
+              } ${readOnly ? 'opacity-60' : 'cursor-pointer'}`}
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-amber-500"
+                checked={hasOrangeWeapon}
+                onChange={e => {
+                  if (!readOnly) setHasOrangeWeapon(e.target.checked)
+                }}
+                disabled={readOnly}
+              />
+              <span>橙武</span>
+            </label>
           </div>
           <div className="space-y-1.5">
             <Label>角色ID</Label>

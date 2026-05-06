@@ -4,6 +4,7 @@ export interface Member {
   gearScore: string
   characterId: string
   note: string
+  hasOrangeWeapon?: boolean
 }
 
 export type SlotStatus = 'empty' | 'occupied' | 'reserved' | 'fixed'
