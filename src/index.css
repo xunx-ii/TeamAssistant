@@ -36,22 +36,24 @@
 
 @keyframes pixel-cw-shine {
   0% {
-    opacity: 0;
-    transform: translateX(-180%) rotate(18deg);
+    opacity: 0.25;
+    transform: rotate(0deg);
   }
-  20% {
-    opacity: 0;
-  }
-  45% {
-    opacity: 0.8;
-  }
-  60% {
-    opacity: 0;
-    transform: translateX(260%) rotate(18deg);
+  50% {
+    opacity: 0.9;
   }
   100% {
-    opacity: 0;
-    transform: translateX(260%) rotate(18deg);
+    opacity: 0.25;
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pixel-cw-surface-glow {
+  0%, 100% {
+    opacity: 0.16;
+  }
+  50% {
+    opacity: 0.32;
   }
 }
 
@@ -308,6 +310,8 @@ body {
 }
 
 .pixel-slot-cw {
+  position: relative;
+  isolation: isolate;
   border-color: #E5A50A;
   box-shadow:
     inset -2px -2px 0 rgba(0,0,0,0.08),
@@ -316,16 +320,51 @@ body {
     0 0 14px rgba(245, 186, 44, 0.38);
 }
 
+.pixel-slot-cw::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: 2px;
+  background: conic-gradient(
+    from 0deg,
+    #7A4B00 0deg,
+    #C98400 46deg,
+    #FFF1A8 76deg,
+    #E7AE1D 108deg,
+    #8B5600 152deg,
+    #D99809 215deg,
+    #FFF6D1 274deg,
+    #B87400 316deg,
+    #7A4B00 360deg
+  );
+  animation: pixel-cw-shine 3s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
 .pixel-slot-cw::after {
   content: '';
   position: absolute;
-  top: -30%;
-  bottom: -30%;
-  left: -55%;
-  width: 40%;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), rgba(255,248,214,0.85), transparent);
-  animation: pixel-cw-shine 2.4s linear infinite;
+  inset: 3px;
+  border-radius: 1px;
+  background: linear-gradient(135deg, rgba(255, 243, 176, 0.18), transparent 55%, rgba(255, 255, 255, 0.12));
+  animation: pixel-cw-surface-glow 2.4s ease-in-out infinite;
   pointer-events: none;
+  z-index: 0;
+}
+
+.pixel-slot-cw > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* Decorative pixel border */
