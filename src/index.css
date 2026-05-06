@@ -354,8 +354,8 @@ body {
   inset: 0;
   background-image: url('/slot-member-ornament.gif');
   background-repeat: no-repeat;
-  background-position: center;
-  background-size: 52px 52px;
+  background-position: right 4px bottom 4px;
+  background-size: 30px 30px;
   opacity: 0.16;
   pointer-events: none;
   filter: saturate(0.85) brightness(1.03);
