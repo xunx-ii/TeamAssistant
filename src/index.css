@@ -349,6 +349,18 @@ body {
   z-index: 2;
 }
 
+.pixel-slot-ornament {
+  position: absolute;
+  inset: 0;
+  background-image: url('/slot-member-ornament.gif');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 52px 52px;
+  opacity: 0.16;
+  pointer-events: none;
+  filter: saturate(0.85) brightness(1.03);
+}
+
 .pixel-slot-legend {
   display: inline-block;
   width: 12px;

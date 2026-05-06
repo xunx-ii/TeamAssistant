@@ -182,16 +182,17 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
                               'text-blue-600 bg-blue-100 border-blue-300'
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
-                <span className={`absolute top-1 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleColor}`}>
+                {!hasOrangeWeapon && <span className="pixel-slot-ornament" aria-hidden="true"></span>}
+                <span className="absolute top-1 left-2 z-[1] text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
+                <span className={`absolute top-1 right-2 z-[1] text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleColor}`}>
                   {isBoss ? `👑${roleLabel}` : roleLabel}
                 </span>
-                {ma && <span className="text-xs font-bold text-foreground truncate max-w-full mt-1">{getMartialArtLabel(ma)}</span>}
-                <span className="text-[11px] text-muted-foreground">
+                {ma && <span className="relative z-[1] text-xs font-bold text-foreground truncate max-w-full mt-1">{getMartialArtLabel(ma)}</span>}
+                <span className="relative z-[1] text-[11px] text-muted-foreground">
                   {ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}
                 </span>
-                <span className="text-[11px] text-muted-foreground">ID：{m.characterId}</span>
-                {m.note && <span className="text-[10px] text-muted-foreground truncate max-w-full italic">{m.note}</span>}
+                <span className="relative z-[1] text-[11px] text-muted-foreground">ID：{m.characterId}</span>
+                {m.note && <span className="relative z-[1] text-[10px] text-muted-foreground truncate max-w-full italic">{m.note}</span>}
               </>
             )
           } else {
