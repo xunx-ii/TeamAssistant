@@ -204,7 +204,7 @@ api.post('/lock', async (req, res) => {
 })
 
 api.delete('/lock', async (req, res) => {
-  const { teamId, slotIndex, qq } = req.body
+  const { teamId, slotIndex, qq, lockTimestamp } = req.body
   if (LOCK_LOG) console.log(`[lock] RELEASE: ${teamId}:${slotIndex} by ${qq}`)
   if (!teamId || slotIndex == null) {
     return res.status(400).json({ ok: false })
@@ -213,7 +213,7 @@ api.delete('/lock', async (req, res) => {
   try {
     await withSharedStorage(() => {
       const current = loadLocks()
-      const updated = releaseSlotLock(current, { teamId, slotIndex, qq })
+      const updated = releaseSlotLock(current, { teamId, slotIndex, qq, lockTimestamp })
       if (updated.changed) {
         writeLockData(LOCKS_FILE, LOCKS_TMP_FILE, updated.lockData)
         if (LOCK_LOG) console.log(`[lock] RELEASED: ${teamId}:${slotIndex}`)

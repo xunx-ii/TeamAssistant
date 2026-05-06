@@ -113,20 +113,35 @@ export function acquireSlotLock(lockData, { teamId, slotIndex, qq, lockTimeout, 
   }
 }
 
-export function releaseSlotLock(lockData, { teamId, slotIndex, qq }) {
+export function releaseSlotLock(lockData, { teamId, slotIndex, qq, lockTimestamp }) {
   const normalized = normalizeLockData(lockData)
   const key = `${teamId}:${slotIndex}`
   const existing = normalized.slots.find(lock => `${lock.teamId}:${lock.slotIndex}` === key)
-  if (!existing || existing.qq === qq) {
+  if (!existing) {
     return {
-      changed: Boolean(existing),
-      lockData: {
-        slots: normalized.slots.filter(lock => `${lock.teamId}:${lock.slotIndex}` !== key),
-        teams: normalized.teams,
-      },
+      changed: false,
+      lockData: normalized,
     }
   }
-  return { changed: false, lockData: normalized }
+
+  if (existing.qq !== qq) {
+    return { changed: false, lockData: normalized }
+  }
+
+  if (lockTimestamp && existing.timestamp !== lockTimestamp) {
+    return {
+      changed: false,
+      lockData: normalized,
+    }
+  }
+
+  return {
+    changed: true,
+    lockData: {
+      slots: normalized.slots.filter(lock => `${lock.teamId}:${lock.slotIndex}` !== key),
+      teams: normalized.teams,
+    },
+  }
 }
 
 export function setTeamLock(lockData, { teamId, timestamp = Date.now() }) {

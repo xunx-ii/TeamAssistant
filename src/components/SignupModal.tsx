@@ -35,6 +35,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   const [maSearch, setMaSearch] = useState('')
   const [showMaDropdown, setShowMaDropdown] = useState(false)
   const heartbeatRef = useRef<number>(0)
+  const lockTimestampRef = useRef(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const lockQq = lockOwnerQq ?? qq
@@ -49,11 +50,12 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     const lock = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, lockQq)
       if (result.ok && result.timestamp) {
+        lockTimestampRef.current = result.timestamp
         setLockTimestamp(result.timestamp)
         setError('')
       } else if (result.reason === 'teamLocked') {
         setError('表格已被管理员锁定')
-      } else if (result.lockedBy && result.lockedBy !== qq) {
+      } else if (result.lockedBy && result.lockedBy !== lockQq) {
         setError(`该位置已被 ${result.lockedBy} 先点击`)
       }
     }
@@ -61,12 +63,20 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     heartbeatRef.current = setInterval(lock, 15000)
     return () => {
       clearInterval(heartbeatRef.current)
-      void releaseSlotLock(teamId, slotIndex, lockQq)
+      const currentLockTimestamp = lockTimestampRef.current
+      lockTimestampRef.current = 0
+      if (currentLockTimestamp > 0) {
+        void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
+      }
     }
   }, [open, teamId, slotIndex, lockQq, qq, readOnly])
 
   const handleClose = () => {
-    if (teamId && slotIndex != null) void releaseSlotLock(teamId, slotIndex, lockQq)
+    const currentLockTimestamp = lockTimestampRef.current
+    lockTimestampRef.current = 0
+    if (teamId && slotIndex != null && currentLockTimestamp > 0) {
+      void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
+    }
     onClose()
   }
 

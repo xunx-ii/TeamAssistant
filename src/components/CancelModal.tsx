@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { acquireSlotLock, releaseSlotLock } from '../api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
@@ -19,6 +19,7 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
   const [reason, setReason] = useState('')
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [error, setError] = useState('')
+  const lockTimestampRef = useRef(0)
 
   useEffect(() => {
     if (!open || !qq || !teamId || slotIndex == null) return
@@ -27,6 +28,7 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
       const result = await acquireSlotLock(teamId, slotIndex, qq)
       if (!active) return
       if (result.ok && result.timestamp) {
+        lockTimestampRef.current = result.timestamp
         setLockTimestamp(result.timestamp)
         setError('')
       } else if (result.reason === 'teamLocked') {
@@ -41,7 +43,11 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
     void acquire()
     return () => {
       active = false
-      void releaseSlotLock(teamId, slotIndex, qq)
+      const currentLockTimestamp = lockTimestampRef.current
+      lockTimestampRef.current = 0
+      if (currentLockTimestamp > 0) {
+        void releaseSlotLock(teamId, slotIndex, qq, currentLockTimestamp)
+      }
       setLockTimestamp(0)
       setError('')
       setReason('')

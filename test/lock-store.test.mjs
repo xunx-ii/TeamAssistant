@@ -8,6 +8,7 @@ import {
   acquireSlotLock,
   cleanExpiredLocks,
   readLockData,
+  releaseSlotLock,
   removeTeamLock,
   setTeamLock,
   writeLockData,
@@ -127,5 +128,37 @@ test('cleanExpiredLocks removes stale slot locks but keeps team locks', async ()
   ])
   assert.deepEqual(cleaned.lockData.teams, [
     { teamId: 'team-1', timestamp: 9000 },
+  ])
+})
+
+test('releaseSlotLock ignores stale timestamp for same qq handoff', () => {
+  const initial = { slots: [], teams: [] }
+
+  const first = acquireSlotLock(initial, {
+    teamId: 'team-1',
+    slotIndex: 3,
+    qq: 'admin-qq',
+    lockTimeout: 30_000,
+    now: 1000,
+  })
+
+  const refreshed = acquireSlotLock(first.lockData, {
+    teamId: 'team-1',
+    slotIndex: 3,
+    qq: 'admin-qq',
+    lockTimeout: 30_000,
+    now: 2000,
+  })
+
+  const released = releaseSlotLock(refreshed.lockData, {
+    teamId: 'team-1',
+    slotIndex: 3,
+    qq: 'admin-qq',
+    lockTimestamp: first.result.timestamp,
+  })
+
+  assert.equal(released.changed, false)
+  assert.deepEqual(released.lockData.slots, [
+    { teamId: 'team-1', slotIndex: 3, qq: 'admin-qq', timestamp: 2000 },
   ])
 })

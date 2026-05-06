@@ -459,6 +459,7 @@ function App() {
             key={`edit-${activeTeam.id}-${editSlot}-${existingMember?.qq ?? 'empty'}-${existingMember?.martialArtIndex ?? 'none'}`}
             open={true}
             qq={isViewOnly ? (existingMember?.qq ?? qq) : (isAdminEdit ? (existingMember?.qq ?? qq) : qq)}
+            lockOwnerQq={isAdminEdit ? qq : undefined}
             existing={existingMember}
             slotInfo={activeTeam.slots[editSlot]}
             teamId={activeTeam.id}

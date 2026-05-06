@@ -152,11 +152,11 @@ export async function acquireSlotLock(teamId: string, slotIndex: number, qq: str
   })
 }
 
-export async function releaseSlotLock(teamId: string, slotIndex: number, qq: string): Promise<boolean> {
+export async function releaseSlotLock(teamId: string, slotIndex: number, qq: string, lockTimestamp?: number): Promise<boolean> {
   const result = await requestResult<{ ok: boolean }>(`${API}/lock`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ teamId, slotIndex, qq }),
+    body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
   })
   return result.ok
 }
