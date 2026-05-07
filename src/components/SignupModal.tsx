@@ -253,7 +253,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                             ma.role === 'T'
                               ? 'bg-orange-950/25 text-orange-500'
                               : ma.role === '治疗'
-                                ? 'bg-emerald-950/25 text-emerald-500'
+                                ? 'bg-pink-100 text-pink-600'
                                 : 'bg-blue-950/25 text-blue-500'
                           }`}>
                             {ma.role === 'T' ? 'T' : ma.role === '治疗' ? '奶' : 'DPS'}
