@@ -170,6 +170,19 @@ export function removeTeamLock(lockData, { teamId }) {
   }
 }
 
+export function removeLocksForTeam(lockData, { teamId }) {
+  const normalized = normalizeLockData(lockData)
+  const nextSlots = normalized.slots.filter(lock => lock.teamId !== teamId)
+  const nextTeams = normalized.teams.filter(lock => lock.teamId !== teamId)
+  return {
+    changed: nextSlots.length !== normalized.slots.length || nextTeams.length !== normalized.teams.length,
+    lockData: {
+      slots: nextSlots,
+      teams: nextTeams,
+    },
+  }
+}
+
 export function getTeamLockTimestamp(lockData, teamId) {
   return normalizeLockData(lockData).teams.find(lock => lock.teamId === teamId)?.timestamp
 }

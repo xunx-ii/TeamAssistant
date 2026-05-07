@@ -12,9 +12,11 @@ interface Props {
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
   onToggleLock: () => void
+  onViewLogs: () => void
+  onArchive: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -33,6 +35,9 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
           onClick={onToggleLock}
         >
           {locked ? '已锁定' : '锁定表格'}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onViewLogs}>
+          查看日志
         </Button>
       </div>
       {open && (
@@ -71,6 +76,10 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
             <h3 className="text-sm font-medium text-foreground mb-2">团队备注</h3>
             <Textarea value={note} onChange={e => onUpdateNote(e.target.value)}
               placeholder="填写团队备注，显示在表格下方" rows={3} />
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-foreground mb-2">表格归档</h3>
+            <Button size="sm" variant="outline" onClick={onArchive}>归档当前表格</Button>
           </div>
         </div>
       )}

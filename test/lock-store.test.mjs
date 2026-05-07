@@ -9,6 +9,7 @@ import {
   cleanExpiredLocks,
   readLockData,
   releaseSlotLock,
+  removeLocksForTeam,
   removeTeamLock,
   setTeamLock,
   writeLockData,
@@ -160,5 +161,26 @@ test('releaseSlotLock ignores stale timestamp for same qq handoff', () => {
   assert.equal(released.changed, false)
   assert.deepEqual(released.lockData.slots, [
     { teamId: 'team-1', slotIndex: 3, qq: 'admin-qq', timestamp: 2000 },
+  ])
+})
+
+test('removeLocksForTeam clears slot and team locks for archived team', () => {
+  const cleaned = removeLocksForTeam({
+    slots: [
+      { teamId: 'team-1', slotIndex: 0, qq: '10001', timestamp: 1000 },
+      { teamId: 'team-2', slotIndex: 1, qq: '10002', timestamp: 1001 },
+    ],
+    teams: [
+      { teamId: 'team-1', timestamp: 2000 },
+      { teamId: 'team-2', timestamp: 2001 },
+    ],
+  }, { teamId: 'team-1' })
+
+  assert.equal(cleaned.changed, true)
+  assert.deepEqual(cleaned.lockData.slots, [
+    { teamId: 'team-2', slotIndex: 1, qq: '10002', timestamp: 1001 },
+  ])
+  assert.deepEqual(cleaned.lockData.teams, [
+    { teamId: 'team-2', timestamp: 2001 },
   ])
 })

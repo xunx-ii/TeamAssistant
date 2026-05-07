@@ -5,9 +5,11 @@ import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
   loadTeams, saveTeams, setTeamsLocal,
   loadCancellations, saveCancellations, setCancellationsLocal,
+  loadArchivedTeams, setArchivedTeamsLocal,
+  loadOperationLogs, setOperationLogsLocal,
   initServerMode, loadFromServer,
 } from './storage'
-import type { Member, Cancellation, Team } from './types'
+import type { ArchivedTeam, Member, Cancellation, OperationLog, Team } from './types'
 import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
@@ -20,6 +22,8 @@ import { SignupModal } from './components/SignupModal'
 import { CancelModal } from './components/CancelModal'
 import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
+import { ArchiveDialog } from './components/ArchiveDialog'
+import { OperationLogDialog } from './components/OperationLogDialog'
 import { Button } from './components/ui/button'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 
@@ -49,6 +53,8 @@ function App() {
   })
   const [activeTeamId, setActiveTeamId] = useState<string>(teams[0]?.id ?? '')
   const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
+  const [archivedTeams, setArchivedTeams] = useState<ArchivedTeam[]>(loadArchivedTeams)
+  const [operationLogs, setOperationLogs] = useState<OperationLog[]>(loadOperationLogs)
   const [adminQQs, setAdminQQs] = useState<string[]>([])
 
   const [signupSlot, setSignupSlot] = useState<number | null>(null)
@@ -56,6 +62,8 @@ function App() {
   const [cancelSlot, setCancelSlot] = useState<number | null>(null)
   const [setRoleSlot, setSetRoleSlot] = useState<number | null>(null)
   const [showCreateTeam, setShowCreateTeam] = useState(false)
+  const [showArchives, setShowArchives] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
@@ -68,10 +76,18 @@ function App() {
   const notice = findPendingNotice(qq, cancellations)
 
   const syncSnapshot = useCallback((snapshot: Snapshot) => {
-    setTeams(snapshot.teams)
-    setCancellations(snapshot.cancellations)
-    setTeamsLocal(snapshot.teams)
-    setCancellationsLocal(snapshot.cancellations)
+    const nextTeams = snapshot.teams ?? []
+    const nextCancellations = snapshot.cancellations ?? []
+    const nextArchivedTeams = snapshot.archivedTeams ?? []
+    const nextLogs = snapshot.logs ?? []
+    setTeams(nextTeams)
+    setCancellations(nextCancellations)
+    setArchivedTeams(nextArchivedTeams)
+    setOperationLogs(nextLogs)
+    setTeamsLocal(nextTeams)
+    setCancellationsLocal(nextCancellations)
+    setArchivedTeamsLocal(nextArchivedTeams)
+    setOperationLogsLocal(nextLogs)
   }, [])
 
   useEffect(() => {
@@ -82,7 +98,14 @@ function App() {
         if (ok) {
           const loadedTeams = loadTeams()
           const loadedCancellations = loadCancellations()
-          syncSnapshot({ teams: loadedTeams, cancellations: loadedCancellations })
+          const loadedArchivedTeams = loadArchivedTeams()
+          const loadedLogs = loadOperationLogs()
+          syncSnapshot({
+            teams: loadedTeams,
+            cancellations: loadedCancellations,
+            archivedTeams: loadedArchivedTeams,
+            logs: loadedLogs,
+          })
           if (loadedTeams.length > 0) {
             setActiveTeamId(loadedTeams[0].id)
           }
@@ -116,7 +139,12 @@ function App() {
       const data = await fetchData()
       if (!data) return
       if (data.locks) setLocks(data.locks)
-      const snapshot = { teams: data.teams || [], cancellations: data.cancellations || [] }
+      const snapshot = {
+        teams: data.teams || [],
+        cancellations: data.cancellations || [],
+        archivedTeams: data.archivedTeams || [],
+        logs: data.logs || [],
+      }
       const snapshotJson = JSON.stringify(snapshot)
       if (snapshotJson !== lastSnapshotJson) {
         lastSnapshotJson = snapshotJson
@@ -133,10 +161,10 @@ function App() {
   }
 
   const applyLocalMutation = useCallback((mutation: Mutation) => {
-    const next = applyMutation({ teams, cancellations }, mutation)
+    const next = applyMutation({ teams, cancellations, archivedTeams, logs: operationLogs }, mutation)
     syncSnapshot(next)
     return next
-  }, [teams, cancellations, syncSnapshot])
+  }, [teams, cancellations, archivedTeams, operationLogs, syncSnapshot])
 
   const runMutation = useCallback(async (mutation: Mutation): Promise<MutationResult> => {
     setMutationError('')
@@ -147,7 +175,12 @@ function App() {
 
     const result = await mutateData(mutation)
     if (result.ok && result.data) {
-      syncSnapshot({ teams: result.data.teams, cancellations: result.data.cancellations })
+      syncSnapshot({
+        teams: result.data.teams,
+        cancellations: result.data.cancellations,
+        archivedTeams: result.data.archivedTeams ?? [],
+        logs: result.data.logs ?? [],
+      })
       return result
     }
 
@@ -207,6 +240,34 @@ function App() {
     }
   }
 
+  const handleArchiveTeam = async () => {
+    if (!activeTeam || !qq) return
+    if (!confirm(`确定归档「${activeTeam.name}」？`)) return
+    const remaining = teams.filter(team => team.id !== activeTeam.id)
+    const fallbackTeam = remaining.length > 0 ? undefined : createDefaultTeam()
+    const result = await runMutation({
+      type: 'archiveTeam',
+      teamId: activeTeam.id,
+      archivedBy: qq,
+      fallbackTeam,
+    })
+    if (result.ok) {
+      setActiveTeamId(remaining[0]?.id ?? fallbackTeam?.id ?? '')
+      clearModals()
+    }
+  }
+
+  const handleRestoreArchive = async (archiveId: string) => {
+    if (!qq) return
+    const archive = archivedTeams.find(item => item.id === archiveId)
+    const result = await runMutation({ type: 'restoreArchivedTeam', archiveId, actorQq: qq })
+    if (result.ok && archive) {
+      setActiveTeamId(archive.team.id)
+      setShowArchives(false)
+      clearModals()
+    }
+  }
+
   const handleDeleteTeam = async (id: string) => {
     if (!confirm('确定删除此团队？')) return
     const remaining = teams.filter(team => team.id !== id)
@@ -235,6 +296,7 @@ function App() {
       role,
       martialArtIndex,
       assignQQ,
+      actorQq: qq ?? undefined,
     })
     if (result.ok) {
       setSetRoleSlot(null)
@@ -354,6 +416,11 @@ function App() {
                     GM
                   </span>
                 )}
+                {isAdmin && (
+                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowArchives(true)}>
+                    查看档案
+                  </Button>
+                )}
                 {serverMode && (
                   <span className="pixel-badge bg-blue-100 text-blue-700">
                     SYNC
@@ -397,6 +464,8 @@ function App() {
                     const newLocked = !activeTeam.config.locked
                     await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
                   }}
+                  onViewLogs={() => setShowLogs(true)}
+                  onArchive={handleArchiveTeam}
                 />
               )}
               <div className="mb-3 pixel-card p-3">
@@ -502,6 +571,18 @@ function App() {
         open={showCreateTeam}
         onConfirm={handleCreateTeam}
         onClose={() => setShowCreateTeam(false)}
+      />
+      <OperationLogDialog
+        open={showLogs}
+        teamName={activeTeam?.name ?? ''}
+        logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id) : []}
+        onClose={() => setShowLogs(false)}
+      />
+      <ArchiveDialog
+        open={showArchives}
+        archives={archivedTeams}
+        onRestore={(archiveId) => { void handleRestoreArchive(archiveId) }}
+        onClose={() => setShowArchives(false)}
       />
     </>
   )

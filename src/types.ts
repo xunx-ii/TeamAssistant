@@ -40,6 +40,22 @@ export interface Team {
   slots: Slot[]
 }
 
+export interface ArchivedTeam {
+  id: string
+  team: Team
+  archivedAt: number
+  archivedBy: string
+}
+
+export interface OperationLog {
+  id: string
+  teamId: string
+  teamName: string
+  timestamp: number
+  actorQq: string
+  action: string
+}
+
 export const DEFAULT_TEAM_CONFIG: TeamConfig = {
   reservedSlots: [],
   locked: false,

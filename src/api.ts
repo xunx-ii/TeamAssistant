@@ -1,4 +1,4 @@
-import type { Cancellation, Team } from './types'
+import type { ArchivedTeam, Cancellation, OperationLog, Team } from './types'
 import type { Mutation } from './dataStore'
 
 const API = '/api'
@@ -11,6 +11,8 @@ const INVALID_JSON_ERROR = '接口返回的数据无法解析'
 export interface ServerData {
   teams: Team[]
   cancellations: Cancellation[]
+  archivedTeams: ArchivedTeam[]
+  logs: OperationLog[]
   locks?: SlotLock[]
 }
 

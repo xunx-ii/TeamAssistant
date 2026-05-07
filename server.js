@@ -11,6 +11,7 @@ import {
   getPublicLocks,
   getTeamLockTimestamp,
   readLockData,
+  removeLocksForTeam,
   releaseSlotLock,
   removeTeamLock,
   setTeamLock,
@@ -126,6 +127,13 @@ api.post('/mutate', async (req, res) => {
           : removeTeamLock(lockState, { teamId: mutation.teamId })
         lockState = updatedLockState.lockData
         writeLockData(LOCKS_FILE, LOCKS_TMP_FILE, lockState)
+      }
+      if (mutation.type === 'archiveTeam') {
+        const updatedLockState = removeLocksForTeam(lockState, { teamId: mutation.teamId })
+        if (updatedLockState.changed) {
+          lockState = updatedLockState.lockData
+          writeLockData(LOCKS_FILE, LOCKS_TMP_FILE, lockState)
+        }
       }
       if (
         (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') &&

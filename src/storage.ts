@@ -1,9 +1,11 @@
-import type { Team, Cancellation } from './types'
+import type { ArchivedTeam, Cancellation, OperationLog, Team } from './types'
 import { checkServer, fetchData, pushData } from './api'
 
 const KEYS = {
   teams: 'team_teams_v3',
   cancellations: 'team_cancellations_v3',
+  archivedTeams: 'team_archived_teams_v1',
+  logs: 'team_operation_logs_v1',
   qq: 'team_qq',
 }
 
@@ -29,6 +31,20 @@ function loadCancellationsLocal(): Cancellation[] {
   } catch { /* ignore */ }
   return []
 }
+function loadArchivedTeamsLocal(): ArchivedTeam[] {
+  try {
+    const raw = localStorage.getItem(KEYS.archivedTeams)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return []
+}
+function loadLogsLocal(): OperationLog[] {
+  try {
+    const raw = localStorage.getItem(KEYS.logs)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return []
+}
 
 // Public API
 export function loadTeams(): Team[] {
@@ -42,7 +58,12 @@ export function setTeamsLocal(teams: Team[]) {
 export async function saveTeams(teams: Team[]) {
   setTeamsLocal(teams)
   if (serverMode) {
-    await pushData({ teams, cancellations: loadCancellationsLocal() })
+    await pushData({
+      teams,
+      cancellations: loadCancellationsLocal(),
+      archivedTeams: loadArchivedTeamsLocal(),
+      logs: loadLogsLocal(),
+    })
   }
 }
 
@@ -57,8 +78,29 @@ export function setCancellationsLocal(cancellations: Cancellation[]) {
 export async function saveCancellations(cancellations: Cancellation[]) {
   setCancellationsLocal(cancellations)
   if (serverMode) {
-    await pushData({ teams: loadTeamsLocal(), cancellations })
+    await pushData({
+      teams: loadTeamsLocal(),
+      cancellations,
+      archivedTeams: loadArchivedTeamsLocal(),
+      logs: loadLogsLocal(),
+    })
   }
+}
+
+export function loadArchivedTeams(): ArchivedTeam[] {
+  return loadArchivedTeamsLocal()
+}
+
+export function setArchivedTeamsLocal(archivedTeams: ArchivedTeam[]) {
+  localStorage.setItem(KEYS.archivedTeams, JSON.stringify(archivedTeams))
+}
+
+export function loadOperationLogs(): OperationLog[] {
+  return loadLogsLocal()
+}
+
+export function setOperationLogsLocal(logs: OperationLog[]) {
+  localStorage.setItem(KEYS.logs, JSON.stringify(logs))
 }
 
 // QQ is local-only (per browser), not synced to server
@@ -84,6 +126,8 @@ export async function loadFromServer(): Promise<boolean> {
     }
     setTeamsLocal(data.teams ?? [])
     setCancellationsLocal(data.cancellations ?? [])
+    setArchivedTeamsLocal(data.archivedTeams ?? [])
+    setOperationLogsLocal(data.logs ?? [])
     return true
   } catch {
     return false

@@ -1,13 +1,17 @@
-import type { Cancellation, Member, Team } from './types'
+import type { ArchivedTeam, Cancellation, Member, OperationLog, Team } from './types'
 
 export interface Snapshot {
   teams: Team[]
   cancellations: Cancellation[]
+  archivedTeams: ArchivedTeam[]
+  logs: OperationLog[]
 }
 
 export type Mutation =
   | { type: 'createTeam'; team: Team }
   | { type: 'deleteTeam'; teamId: string; fallbackTeam?: Team }
+  | { type: 'archiveTeam'; teamId: string; archivedBy: string; archivedAt?: number; fallbackTeam?: Team }
+  | { type: 'restoreArchivedTeam'; archiveId: string; actorQq: string; restoredAt?: number }
   | { type: 'renameTeam'; teamId: string; name: string }
   | { type: 'updateTeamNote'; teamId: string; note: string }
   | { type: 'reorderTeams'; ids: string[] }
@@ -20,6 +24,7 @@ export type Mutation =
       role: 'T' | '治疗' | 'DPS' | 'boss' | null
       martialArtIndex: number | null
       assignQQ?: string
+      actorQq?: string
     }
   | { type: 'quickReserve'; teamId: string; reserveType: 'T' | '治疗' | 'boss'; count: number }
   | {
@@ -53,7 +58,13 @@ export type Mutation =
   | { type: 'dismissCancellation'; qq: string; timestamp: number }
 
 function cloneSnapshot(snapshot: Snapshot): Snapshot {
-  return structuredClone(snapshot)
+  const cloned = structuredClone(snapshot) as Partial<Snapshot>
+  return {
+    teams: Array.isArray(cloned.teams) ? cloned.teams : [],
+    cancellations: Array.isArray(cloned.cancellations) ? cloned.cancellations : [],
+    archivedTeams: Array.isArray(cloned.archivedTeams) ? cloned.archivedTeams : [],
+    logs: Array.isArray(cloned.logs) ? cloned.logs : [],
+  }
 }
 
 function getTeamOrThrow(snapshot: Snapshot, teamId: string): Team {
@@ -62,6 +73,25 @@ function getTeamOrThrow(snapshot: Snapshot, teamId: string): Team {
     throw new Error(`Team not found: ${teamId}`)
   }
   return team
+}
+
+function getArchiveOrThrow(snapshot: Snapshot, archiveId: string): ArchivedTeam {
+  const archive = snapshot.archivedTeams.find(item => item.id === archiveId)
+  if (!archive) {
+    throw new Error(`Archive not found: ${archiveId}`)
+  }
+  return archive
+}
+
+function appendLog(snapshot: Snapshot, team: Team, actorQq: string, action: string, timestamp = Date.now()) {
+  snapshot.logs.push({
+    id: `${timestamp}-${team.id}-${snapshot.logs.length + 1}`,
+    teamId: team.id,
+    teamName: team.name,
+    timestamp,
+    actorQq,
+    action,
+  })
 }
 
 function getResetStatus(team: Team, slotIndex: number) {
@@ -96,6 +126,32 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
         next.teams.push(mutation.fallbackTeam)
       }
       return next
+
+    case 'archiveTeam': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      const archivedAt = mutation.archivedAt ?? Date.now()
+      next.archivedTeams.push({
+        id: `${team.id}-${archivedAt}`,
+        team,
+        archivedAt,
+        archivedBy: mutation.archivedBy,
+      })
+      appendLog(next, team, mutation.archivedBy, '归档表格', archivedAt)
+      next.teams = next.teams.filter(item => item.id !== mutation.teamId)
+      if (next.teams.length === 0 && mutation.fallbackTeam) {
+        next.teams.push(mutation.fallbackTeam)
+      }
+      return next
+    }
+
+    case 'restoreArchivedTeam': {
+      const archive = getArchiveOrThrow(next, mutation.archiveId)
+      const restoredAt = mutation.restoredAt ?? Date.now()
+      next.teams.push(archive.team)
+      next.archivedTeams = next.archivedTeams.filter(item => item.id !== mutation.archiveId)
+      appendLog(next, archive.team, mutation.actorQq, '恢复表格', restoredAt)
+      return next
+    }
 
     case 'renameTeam': {
       const team = getTeamOrThrow(next, mutation.teamId)
@@ -168,6 +224,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
         }
         slot.fixedRole = null
         slot.fixedMartialArtIndex = null
+        appendLog(next, team, mutation.actorQq ?? mutation.assignQQ, `指定 #${mutation.slotIndex + 1} 报名：${mutation.assignQQ}`)
         return next
       }
 
@@ -245,8 +302,13 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
       if (!slot) {
         throw new Error(`Slot not found: ${mutation.slotIndex}`)
       }
+      const isUpdate = Boolean(slot.member)
       slot.status = 'occupied'
       slot.member = mutation.member
+      const action = isUpdate
+        ? `修改 #${mutation.slotIndex + 1} 报名：${mutation.member.characterId}`
+        : `报名 #${mutation.slotIndex + 1}：${mutation.member.characterId}`
+      appendLog(next, team, mutation.actorQq ?? mutation.member.qq, action)
       return next
     }
 
@@ -265,6 +327,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
         slotIndex: mutation.slotIndex,
         timestamp: mutation.timestamp ?? Date.now(),
       })
+      appendLog(next, team, mutation.cancelledBy, `取消 #${mutation.slotIndex + 1} 报名：${slot.member.characterId}`)
       slot.status = getResetStatus(team, mutation.slotIndex)
       slot.member = null
       return next
@@ -276,6 +339,8 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
       if (!slot) {
         throw new Error(`Slot not found: ${mutation.slotIndex}`)
       }
+      const characterId = slot.member?.characterId ?? ''
+      appendLog(next, team, mutation.actorQq ?? slot.member?.qq ?? '', `退出 #${mutation.slotIndex + 1} 报名${characterId ? `：${characterId}` : ''}`)
       slot.status = getResetStatus(team, mutation.slotIndex)
       slot.member = null
       return next

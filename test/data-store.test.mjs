@@ -21,6 +21,8 @@ function createSnapshot() {
       },
     ],
     cancellations: [],
+    archivedTeams: [],
+    logs: [],
   }
 }
 
@@ -56,6 +58,9 @@ test('applyMutation preserves concurrent changes on different slots', () => {
   assert.equal(second.teams[0].slots[0].member?.qq, '10001')
   assert.equal(second.teams[0].slots[1].member?.qq, '10002')
   assert.equal(second.teams[0].slots[0].member?.hasOrangeWeapon, true)
+  assert.equal(second.logs.length, 2)
+  assert.equal(second.logs[0].actorQq, '10001')
+  assert.match(second.logs[0].action, /报名 #1/)
 })
 
 test('validateSlotMutationLock rejects expired slot locks', () => {
@@ -126,6 +131,9 @@ test('cancelSlot appends cancellation and restores reserved status', () => {
   assert.equal(next.cancellations[0].qq, '10001')
   assert.equal(next.teams[0].slots[2].status, 'reserved')
   assert.equal(next.teams[0].slots[2].member, null)
+  assert.equal(next.logs.length, 1)
+  assert.equal(next.logs[0].actorQq, 'admin')
+  assert.match(next.logs[0].action, /取消 #3/)
 })
 
 test('setTeamLockState updates team config lock flag', () => {
@@ -144,4 +152,54 @@ test('setTeamLockState updates team config lock flag', () => {
     locked: false,
   })
   assert.equal(unlocked.teams[0].config.locked, false)
+})
+
+test('archiveTeam moves team into archives and creates fallback', () => {
+  const snapshot = createSnapshot()
+  const fallbackTeam = {
+    ...createSnapshot().teams[0],
+    id: 'team-fallback',
+    name: '新团队',
+  }
+
+  const next = applyMutation(snapshot, {
+    type: 'archiveTeam',
+    teamId: 'team-1',
+    archivedBy: 'admin',
+    archivedAt: 222,
+    fallbackTeam,
+  })
+
+  assert.equal(next.teams.length, 1)
+  assert.equal(next.teams[0].id, 'team-fallback')
+  assert.equal(next.archivedTeams.length, 1)
+  assert.equal(next.archivedTeams[0].team.id, 'team-1')
+  assert.equal(next.archivedTeams[0].archivedBy, 'admin')
+  assert.equal(next.logs.length, 1)
+  assert.equal(next.logs[0].action, '归档表格')
+})
+
+test('restoreArchivedTeam restores archived team and appends log', () => {
+  const archived = applyMutation(createSnapshot(), {
+    type: 'archiveTeam',
+    teamId: 'team-1',
+    archivedBy: 'admin',
+    archivedAt: 222,
+    fallbackTeam: {
+      ...createSnapshot().teams[0],
+      id: 'team-fallback',
+      name: '新团队',
+    },
+  })
+
+  const restored = applyMutation(archived, {
+    type: 'restoreArchivedTeam',
+    archiveId: archived.archivedTeams[0].id,
+    actorQq: 'admin',
+    restoredAt: 333,
+  })
+
+  assert.equal(restored.archivedTeams.length, 0)
+  assert.equal(restored.teams.some(team => team.id === 'team-1'), true)
+  assert.equal(restored.logs.at(-1).action, '恢复表格')
 })

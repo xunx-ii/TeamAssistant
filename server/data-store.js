@@ -6,6 +6,8 @@ export function normalizeData(data) {
   return {
     teams: Array.isArray(data?.teams) ? data.teams : [],
     cancellations: Array.isArray(data?.cancellations) ? data.cancellations : [],
+    archivedTeams: Array.isArray(data?.archivedTeams) ? data.archivedTeams : [],
+    logs: Array.isArray(data?.logs) ? data.logs : [],
   }
 }
 
@@ -21,12 +23,31 @@ function getTeamOrThrow(data, teamId) {
   return data.teams[teamIndex]
 }
 
+function getArchiveOrThrow(data, archiveId) {
+  const archive = data.archivedTeams.find(item => item.id === archiveId)
+  if (!archive) {
+    throw new Error(`Archive not found: ${archiveId}`)
+  }
+  return archive
+}
+
 function getSlotOrThrow(team, slotIndex) {
   const slot = team.slots[slotIndex]
   if (!slot) {
     throw new Error(`Slot not found: ${slotIndex}`)
   }
   return slot
+}
+
+function appendLog(data, team, actorQq, action, timestamp = Date.now()) {
+  data.logs.push({
+    id: `${timestamp}-${team.id}-${data.logs.length + 1}`,
+    teamId: team.id,
+    teamName: team.name,
+    timestamp,
+    actorQq,
+    action,
+  })
 }
 
 function uniqueSorted(values) {
@@ -107,6 +128,32 @@ export function applyMutation(currentData, mutation) {
       return data
     }
 
+    case 'archiveTeam': {
+      const team = getTeamOrThrow(data, mutation.teamId)
+      const archivedAt = mutation.archivedAt ?? Date.now()
+      data.archivedTeams.push({
+        id: `${team.id}-${archivedAt}`,
+        team,
+        archivedAt,
+        archivedBy: mutation.archivedBy,
+      })
+      appendLog(data, team, mutation.archivedBy, '归档表格', archivedAt)
+      data.teams = data.teams.filter(item => item.id !== mutation.teamId)
+      if (data.teams.length === 0 && mutation.fallbackTeam) {
+        data.teams.push(mutation.fallbackTeam)
+      }
+      return data
+    }
+
+    case 'restoreArchivedTeam': {
+      const archive = getArchiveOrThrow(data, mutation.archiveId)
+      const restoredAt = mutation.restoredAt ?? Date.now()
+      data.teams.push(archive.team)
+      data.archivedTeams = data.archivedTeams.filter(item => item.id !== mutation.archiveId)
+      appendLog(data, archive.team, mutation.actorQq, '恢复表格', restoredAt)
+      return data
+    }
+
     case 'renameTeam': {
       const team = getTeamOrThrow(data, mutation.teamId)
       team.name = mutation.name
@@ -176,6 +223,7 @@ export function applyMutation(currentData, mutation) {
         }
         slot.fixedRole = null
         slot.fixedMartialArtIndex = null
+        appendLog(data, team, mutation.actorQq ?? mutation.assignQQ, `指定 #${mutation.slotIndex + 1} 报名：${mutation.assignQQ}`)
         return data
       }
 
@@ -250,8 +298,13 @@ export function applyMutation(currentData, mutation) {
     case 'signupSlot': {
       const team = getTeamOrThrow(data, mutation.teamId)
       const slot = getSlotOrThrow(team, mutation.slotIndex)
+      const isUpdate = Boolean(slot.member)
       slot.status = 'occupied'
       slot.member = mutation.member
+      const action = isUpdate
+        ? `修改 #${mutation.slotIndex + 1} 报名：${mutation.member.characterId}`
+        : `报名 #${mutation.slotIndex + 1}：${mutation.member.characterId}`
+      appendLog(data, team, mutation.actorQq ?? mutation.member.qq, action)
       return data
     }
 
@@ -270,6 +323,7 @@ export function applyMutation(currentData, mutation) {
         slotIndex: mutation.slotIndex,
         timestamp: mutation.timestamp ?? Date.now(),
       })
+      appendLog(data, team, mutation.cancelledBy, `取消 #${mutation.slotIndex + 1} 报名：${slot.member.characterId}`)
       slot.status = getResetStatus(team, mutation.slotIndex)
       slot.member = null
       return data
@@ -278,6 +332,8 @@ export function applyMutation(currentData, mutation) {
     case 'leaveSlot': {
       const team = getTeamOrThrow(data, mutation.teamId)
       const slot = getSlotOrThrow(team, mutation.slotIndex)
+      const characterId = slot.member?.characterId ?? ''
+      appendLog(data, team, mutation.actorQq ?? slot.member?.qq ?? '', `退出 #${mutation.slotIndex + 1} 报名${characterId ? `：${characterId}` : ''}`)
       slot.status = getResetStatus(team, mutation.slotIndex)
       slot.member = null
       return data
