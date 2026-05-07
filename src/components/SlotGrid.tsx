@@ -128,9 +128,9 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
           </span>
         )}
       </div>
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-5 gap-1 sm:gap-2">
         {orderedSlots.map(slot => {
-          let cellClass = 'relative flex h-[120px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border p-2 text-center transition-colors select-none'
+          let cellClass = 'relative flex h-[116px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border p-1 text-center transition-colors select-none sm:h-[120px] sm:p-2'
 
           let content: React.ReactNode
 
@@ -139,7 +139,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const label = lockMap.has(slot.index) ? '⏳ 报名中' : '🐰 老板位'
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-purple-500 font-mono">#{slot.index + 1}</span>
+                <span className="absolute top-1 left-1 text-[10px] text-purple-500 font-mono sm:left-2">#{slot.index + 1}</span>
                 <span className="text-xs text-purple-600 font-medium">{label}</span>
               </>
             )
@@ -152,7 +152,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
               (ma ? getMartialArtLabel(ma) : slot.fixedRole === 'T' ? '🛡️ T 位' : slot.fixedRole === '治疗' ? '💚 奶 位' : '⚔️ DPS 位')
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-teal-500 font-mono">#{slot.index + 1}</span>
+                <span className="absolute top-1 left-1 text-[10px] text-teal-500 font-mono sm:left-2">#{slot.index + 1}</span>
                 <span className="text-xs text-teal-600 font-medium">{fixedLabel}</span>
                 {isAdmin && <span className="text-[10px] text-teal-500 mt-0.5">⚙️ 设置</span>}
               </>
@@ -182,21 +182,33 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
                               'text-blue-600 bg-blue-100 border-blue-300'
             content = (
               <>
-                <span className="absolute top-1 left-2 z-[1] text-[10px] text-muted-foreground font-mono">#{slot.index + 1}</span>
-                <span className={`absolute top-1 right-2 z-[1] text-[10px] font-bold px-1.5 py-0.5 rounded border ${roleColor}`}>
+                <span className="absolute top-1 left-1 z-[1] text-[10px] text-muted-foreground font-mono sm:left-2">#{slot.index + 1}</span>
+                <span className={`absolute top-1 right-1 z-[1] rounded border px-1 py-0.5 text-[10px] font-bold sm:right-2 sm:px-1.5 ${roleColor}`}>
                   {isBoss ? `👑${roleLabel}` : roleLabel}
                 </span>
-                <div className="relative z-[1] mt-3 flex w-full flex-col items-center px-1">
-                  <span className={`w-full truncate text-xs font-bold leading-4 text-foreground ${ma ? '' : 'opacity-0'}`}>
-                    {ma ? getMartialArtLabel(ma) : '心法占位'}
+                <div className="relative z-[1] mt-4 flex w-full flex-col items-center px-0.5 sm:mt-3 sm:px-1">
+                  <span className={`flex w-full flex-col items-center leading-none text-foreground ${ma ? '' : 'opacity-0'}`}>
+                    <span className="max-w-full whitespace-nowrap text-[13px] font-bold leading-[1.1] sm:hidden">
+                      {ma ? ma.school : '心法'}
+                    </span>
+                    <span className="max-w-full whitespace-nowrap text-[10px] font-medium leading-[1.15] sm:hidden">
+                      {ma ? ma.name : '占位'}
+                    </span>
+                    <span className="hidden w-full truncate text-xs font-bold leading-4 sm:block">
+                      {ma ? getMartialArtLabel(ma) : '心法占位'}
+                    </span>
                   </span>
-                  <span className="w-full truncate text-[11px] leading-4 text-muted-foreground">
-                    {ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}
-                  </span>
-                  <span className="w-full truncate text-[11px] leading-4 text-muted-foreground">ID：{m.characterId}</span>
-                  <span className={`w-full truncate text-[10px] leading-4 text-muted-foreground italic ${m.note ? '' : 'opacity-0'}`}>
+                  <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
+                    <span className="sm:hidden">{ma?.role === 'DPS' ? m.gearScore : `${m.gearScore}层`}</span>
+                    <span className="hidden sm:inline sm:truncate">{ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}</span>
+                  </div>
+                  <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
+                    <span className="sm:hidden">{m.characterId}</span>
+                    <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>
+                  </div>
+                  <div className={`w-full text-[9px] leading-3 text-muted-foreground italic sm:text-[10px] sm:leading-4 ${m.note ? '' : 'opacity-0'}`}>
                     {m.note || '备注占位'}
-                  </span>
+                  </div>
                 </div>
               </>
             )
@@ -205,7 +217,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const label = lockMap.has(slot.index) ? '⏳ 报名中' : '✨ 可选'
             content = (
               <>
-                <span className="absolute top-1 left-2 text-[10px] text-pink-400 font-mono">#{slot.index + 1}</span>
+                <span className="absolute top-1 left-1 text-[10px] text-pink-400 font-mono sm:left-2">#{slot.index + 1}</span>
                 <span className="text-xs text-pink-500 font-medium">{label}</span>
               </>
             )
