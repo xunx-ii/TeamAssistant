@@ -73,7 +73,7 @@ export function SubsidyModal({ open, subsidyTypes, currentSelections, onConfirm,
                         {selected && <div className="h-2 w-2 rounded-full bg-primary" />}
                       </div>
                       <span className="flex-1 text-xs">
-                        {st.name}{level.name} ({level.gold}金)
+                        {level.name} ({level.gold}金)
                       </span>
                     </div>
                   )

@@ -31,10 +31,12 @@ export function SubsidyStats({ open, subsidyTypes, memberSubsidies, onClose }: P
         totalGold += gold
         parts.push(`${st.name}${sel.levelName}(${gold}金)`)
       }
-      result.push({ qq, details: parts.join(' + '), gold: totalGold })
+      if (parts.length > 0) {
+        result.push({ qq, details: parts.join(' + '), gold: totalGold })
+      }
     }
     result.sort((a, b) => b.gold - a.gold)
-    return result
+    return result.filter(r => r.gold > 0)
   }, [subsidyTypes, memberSubsidies])
 
   return (
