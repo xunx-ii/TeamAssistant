@@ -178,7 +178,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null
             const roleLabel = ma?.role === 'T' ? 'T' : ma?.role === '治疗' ? '奶' : 'DPS'
             const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300' :
-                              ma?.role === '治疗' ? 'text-emerald-600 bg-emerald-100 border-emerald-300' :
+                              ma?.role === '治疗' ? 'text-pink-600 bg-pink-100 border-pink-300' :
                               'text-blue-600 bg-blue-100 border-blue-300'
             content = (
               <>
