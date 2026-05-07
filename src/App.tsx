@@ -499,6 +499,9 @@ function App() {
                   <Button variant="outline" size="sm" onClick={() => setShowSubsidy(true)}>
                     补贴登记
                   </Button>
+                  <Button variant="outline" size="sm" onClick={() => setShowSubsidyStats(true)}>
+                    补贴统计
+                  </Button>
                 </div>
               )}
               <div className="mb-3 pixel-card p-3">
