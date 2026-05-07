@@ -7,6 +7,22 @@ export interface Member {
   hasOrangeWeapon?: boolean
 }
 
+export interface SubsidyLevel {
+  name: string
+  gold: number
+}
+
+export interface SubsidyType {
+  id: string
+  name: string
+  levels: SubsidyLevel[]
+}
+
+export interface MemberSubsidySelection {
+  typeId: string
+  levelName: string
+}
+
 export type SlotStatus = 'empty' | 'occupied' | 'reserved' | 'fixed'
 
 export interface Slot {
@@ -38,6 +54,8 @@ export interface Team {
   note: string
   config: TeamConfig
   slots: Slot[]
+  subsidyTypes?: SubsidyType[]
+  memberSubsidies?: Record<string, MemberSubsidySelection[]>
 }
 
 export interface ArchivedTeam {

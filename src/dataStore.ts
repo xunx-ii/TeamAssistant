@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, Member, OperationLog, Team } from './types'
+import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, SubsidyType, Team } from './types'
 
 export interface Snapshot {
   teams: Team[]
@@ -56,6 +56,8 @@ export type Mutation =
       expectedMemberQq?: string | null
     }
   | { type: 'dismissCancellation'; qq: string; timestamp: number }
+  | { type: 'updateTeamSubsidyTypes'; teamId: string; subsidyTypes: SubsidyType[] }
+  | { type: 'registerMemberSubsidies'; teamId: string; qq: string; selections: MemberSubsidySelection[] }
 
 function cloneSnapshot(snapshot: Snapshot): Snapshot {
   const cloned = structuredClone(snapshot) as Partial<Snapshot>
@@ -351,5 +353,32 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
         item.qq !== mutation.qq || item.timestamp !== mutation.timestamp
       ))
       return next
+
+    case 'updateTeamSubsidyTypes': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      team.subsidyTypes = mutation.subsidyTypes
+      if (team.memberSubsidies) {
+        const validIds = new Set(mutation.subsidyTypes.map(t => t.id))
+        const cleaned: Record<string, MemberSubsidySelection[]> = {}
+        for (const [qq, selections] of Object.entries(team.memberSubsidies)) {
+          const valid = selections.filter(s => validIds.has(s.typeId))
+          if (valid.length > 0) {
+            cleaned[qq] = valid
+          }
+        }
+        team.memberSubsidies = cleaned
+      }
+      return next
+    }
+
+    case 'registerMemberSubsidies': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      if (!team.memberSubsidies) {
+        team.memberSubsidies = {}
+      }
+      team.memberSubsidies[mutation.qq] = mutation.selections
+      appendLog(next, team, mutation.qq, '登记补贴')
+      return next
+    }
   }
 }

@@ -9,13 +9,17 @@ import {
   loadOperationLogs, setOperationLogsLocal,
   initServerMode, loadFromServer,
 } from './storage'
-import type { ArchivedTeam, Member, Cancellation, OperationLog, Team } from './types'
+import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection } from './types'
 import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
+import { SubsidyConfigDialog } from './components/SubsidyConfig'
+import { SubsidyModal } from './components/SubsidyModal'
+import { SubsidyStats } from './components/SubsidyStats'
+import { PresetSubsidyDialog } from './components/PresetSubsidyDialog'
 import { SlotGrid } from './components/SlotGrid'
 import { SlotRolePicker } from './components/SlotRolePicker'
 import { SignupModal } from './components/SignupModal'
@@ -64,6 +68,10 @@ function App() {
   const [showCreateTeam, setShowCreateTeam] = useState(false)
   const [showArchives, setShowArchives] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
+  const [showSubsidy, setShowSubsidy] = useState(false)
+  const [showSubsidyConfig, setShowSubsidyConfig] = useState(false)
+  const [showSubsidyStats, setShowSubsidyStats] = useState(false)
+  const [showSubsidyPreset, setShowSubsidyPreset] = useState(false)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
@@ -308,6 +316,16 @@ function App() {
     void runMutation({ type: 'quickReserve', teamId: activeTeam.id, reserveType: type, count })
   }
 
+  const handleSaveSubsidyTypes = (subsidyTypes: SubsidyType[]) => {
+    if (!activeTeam) return
+    void runMutation({ type: 'updateTeamSubsidyTypes', teamId: activeTeam.id, subsidyTypes })
+  }
+
+  const handleRegisterSubsidies = (selections: MemberSubsidySelection[]) => {
+    if (!activeTeam || !qq) return
+    void runMutation({ type: 'registerMemberSubsidies', teamId: activeTeam.id, qq, selections })
+  }
+
   const handleSignupConfirm = async (data: Omit<Member, 'qq'>, lockTimestamp?: number) => {
     const slotIndex = signupSlot ?? editSlot
     if (slotIndex === null || !qq || !activeTeam) return
@@ -417,6 +435,11 @@ function App() {
                   </span>
                 )}
                 {isAdmin && (
+                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyPreset(true)}>
+                    补贴预设设置
+                  </Button>
+                )}
+                {isAdmin && (
                   <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowArchives(true)}>
                     查看档案
                   </Button>
@@ -466,7 +489,17 @@ function App() {
                   }}
                   onViewLogs={() => setShowLogs(true)}
                   onArchive={handleArchiveTeam}
+                  onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
+                  onOpenSubsidyStats={() => setShowSubsidyStats(true)}
+                  onOpenSubsidy={() => setShowSubsidy(true)}
                 />
+              )}
+              {!isAdmin && (
+                <div className="mb-4 flex items-center gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={() => setShowSubsidy(true)}>
+                    补贴登记
+                  </Button>
+                </div>
               )}
               <div className="mb-3 pixel-card p-3">
                 <div className="flex items-center gap-2">
@@ -583,6 +616,32 @@ function App() {
         archives={archivedTeams}
         onRestore={(archiveId) => { void handleRestoreArchive(archiveId) }}
         onClose={() => setShowArchives(false)}
+      />
+      <SubsidyModal
+        key={`subsidy-modal-${activeTeam?.id ?? 'none'}`}
+        open={showSubsidy}
+        subsidyTypes={activeTeam?.subsidyTypes || []}
+        currentSelections={activeTeam && qq ? (activeTeam.memberSubsidies?.[qq] || []) : []}
+        onConfirm={handleRegisterSubsidies}
+        onClose={() => setShowSubsidy(false)}
+      />
+      <SubsidyConfigDialog
+        key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
+        open={showSubsidyConfig}
+        subsidyTypes={activeTeam?.subsidyTypes || []}
+        onSave={handleSaveSubsidyTypes}
+        onClose={() => setShowSubsidyConfig(false)}
+      />
+      <SubsidyStats
+        key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
+        open={showSubsidyStats}
+        subsidyTypes={activeTeam?.subsidyTypes || []}
+        memberSubsidies={activeTeam?.memberSubsidies || {}}
+        onClose={() => setShowSubsidyStats(false)}
+      />
+      <PresetSubsidyDialog
+        open={showSubsidyPreset}
+        onClose={() => setShowSubsidyPreset(false)}
       />
     </>
   )

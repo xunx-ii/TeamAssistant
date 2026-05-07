@@ -14,9 +14,12 @@ interface Props {
   onToggleLock: () => void
   onViewLogs: () => void
   onArchive: () => void
+  onOpenSubsidyConfig: () => void
+  onOpenSubsidyStats: () => void
+  onOpenSubsidy: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive, onOpenSubsidyConfig, onOpenSubsidyStats, onOpenSubsidy }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -25,7 +28,7 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
 
   return (
     <div className="mb-4">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
           {open ? '收起设置' : '团队设置'}
         </Button>
@@ -38,6 +41,15 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
         </Button>
         <Button variant="outline" size="sm" onClick={onViewLogs}>
           查看日志
+        </Button>
+        <Button variant="outline" size="sm" onClick={onOpenSubsidyConfig}>
+          补贴设置
+        </Button>
+        <Button variant="outline" size="sm" onClick={onOpenSubsidy}>
+          补贴登记
+        </Button>
+        <Button variant="outline" size="sm" onClick={onOpenSubsidyStats}>
+          补贴统计
         </Button>
       </div>
       {open && (

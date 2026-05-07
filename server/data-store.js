@@ -346,6 +346,33 @@ export function applyMutation(currentData, mutation) {
       return data
     }
 
+    case 'updateTeamSubsidyTypes': {
+      const team = getTeamOrThrow(data, mutation.teamId)
+      team.subsidyTypes = mutation.subsidyTypes
+      if (team.memberSubsidies) {
+        const validIds = new Set(mutation.subsidyTypes.map(t => t.id))
+        const cleaned = {}
+        for (const [qq, selections] of Object.entries(team.memberSubsidies)) {
+          const valid = selections.filter(s => validIds.has(s.typeId))
+          if (valid.length > 0) {
+            cleaned[qq] = valid
+          }
+        }
+        team.memberSubsidies = cleaned
+      }
+      return data
+    }
+
+    case 'registerMemberSubsidies': {
+      const team = getTeamOrThrow(data, mutation.teamId)
+      if (!team.memberSubsidies) {
+        team.memberSubsidies = {}
+      }
+      team.memberSubsidies[mutation.qq] = mutation.selections
+      appendLog(data, team, mutation.qq, '登记补贴')
+      return data
+    }
+
     default:
       throw new Error(`Unsupported mutation type: ${mutation.type}`)
   }
