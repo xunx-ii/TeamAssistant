@@ -341,6 +341,15 @@ try {
   const importDialog = adminPage.locator('[role="dialog"]')
   await importDialog.waitFor()
   await assertCellContains(importDialog, /删除/)
+  const deletedBackupName = (await importDialog.locator('p').filter({ hasText: /backup-/ }).first().textContent())?.trim() ?? ''
+  assert.match(deletedBackupName, /^backup-/)
+  await importDialog.getByRole('button', { name: '删除' }).first().click()
+  const deleteConfirmDialog = adminPage.getByRole('dialog').filter({ hasText: '确定删除该备份？' })
+  await deleteConfirmDialog.waitFor()
+  await deleteConfirmDialog.getByRole('button', { name: '删除' }).click()
+  await waitForText(importDialog, /已删除/, adminPage)
+  const backupNamesAfterDelete = await importDialog.locator('p').filter({ hasText: /backup-/ }).allTextContents()
+  assert.equal(backupNamesAfterDelete.map(text => text.trim()).includes(deletedBackupName), false)
   const fileChooserPromise = adminPage.waitForEvent('filechooser')
   await importDialog.getByRole('button', { name: '导入备份文件' }).click()
   const fileChooser = await fileChooserPromise

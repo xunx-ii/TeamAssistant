@@ -132,6 +132,8 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
         setMessage(backupResult.error ?? '回退前备份失败')
         return
       }
+      setBackups(backupResult.backups ?? [])
+      setMessage('已备份')
     }
     const shouldRestore = await requestConfirm({
       title: '确认回退',
