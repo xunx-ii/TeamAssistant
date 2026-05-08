@@ -714,13 +714,15 @@ function App() {
           onClose={() => setShowSubsidy(false)}
         />
       )}
-      <SubsidyConfigDialog
-        key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
-        open={showSubsidyConfig}
-        subsidyTypes={activeTeam?.subsidyTypes || []}
-        onSave={handleSaveSubsidyTypes}
-        onClose={() => setShowSubsidyConfig(false)}
-      />
+      {showSubsidyConfig && (
+        <SubsidyConfigDialog
+          key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
+          open={showSubsidyConfig}
+          subsidyTypes={activeTeam?.subsidyTypes || []}
+          onSave={handleSaveSubsidyTypes}
+          onClose={() => setShowSubsidyConfig(false)}
+        />
+      )}
       <SubsidyStats
         key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
         open={showSubsidyStats}
