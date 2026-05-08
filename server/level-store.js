@@ -146,6 +146,24 @@ function backupFileName(now) {
   return `${BACKUP_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}${BACKUP_SUFFIX}`
 }
 
+async function createBackupTarget(backupDir, now) {
+  for (let offset = 0; offset < 1000; offset += 1) {
+    const createdAt = new Date(now.getTime() + offset)
+    const name = backupFileName(createdAt)
+    const filePath = join(backupDir, name)
+    const exists = await stat(filePath)
+      .then(() => true)
+      .catch(error => {
+        if (error && typeof error === 'object' && error.code === 'ENOENT') return false
+        throw error
+      })
+    if (!exists) {
+      return { createdAt, filePath, name }
+    }
+  }
+  throw new Error('Unable to allocate backup file name')
+}
+
 function backupCreatedAtFromName(name) {
   const suffix = name.endsWith(BACKUP_SUFFIX) ? BACKUP_SUFFIX : LEGACY_BACKUP_SUFFIX
   const value = name.slice(BACKUP_PREFIX.length, -suffix.length)
@@ -278,13 +296,13 @@ export function createLevelStore({
   async function writeImportedBackup(payload, now) {
     if (!backupDir) return null
     await mkdir(backupDir, { recursive: true })
-    const filePath = join(backupDir, backupFileName(now))
-    await writeCompressedJsonFileAtomic(filePath, {
+    const target = await createBackupTarget(backupDir, now)
+    await writeCompressedJsonFileAtomic(target.filePath, {
       ...payload,
-      createdAt: now.toISOString(),
+      createdAt: target.createdAt.toISOString(),
     })
     await pruneBackups()
-    return basename(filePath)
+    return target.name
   }
 
   async function restoreBackupPayload(payload) {
@@ -322,15 +340,15 @@ export function createLevelStore({
     async backupNow(now = new Date()) {
       if (!backupDir) return null
       await mkdir(backupDir, { recursive: true })
-      const filePath = join(backupDir, backupFileName(now))
-      await writeCompressedJsonFileAtomic(filePath, {
+      const target = await createBackupTarget(backupDir, now)
+      await writeCompressedJsonFileAtomic(target.filePath, {
         version: 1,
-        createdAt: now.toISOString(),
+        createdAt: target.createdAt.toISOString(),
         data: await this.readData(),
         locks: await this.readLocks(),
       })
       await pruneBackups()
-      return basename(filePath)
+      return target.name
     },
 
     async listBackups() {

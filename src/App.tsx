@@ -453,7 +453,7 @@ function App() {
                 )}
                 {isAdmin && (
                   <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyPreset(true)}>
-                    补贴预设设置
+                    补贴预设
                   </Button>
                 )}
                 {isAdmin && (

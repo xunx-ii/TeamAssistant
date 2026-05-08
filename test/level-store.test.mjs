@@ -263,6 +263,27 @@ test('level store backup writes compressed files and keeps configured history co
   })
 })
 
+test('level store keeps distinct files for backups created in the same millisecond', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir)
+    await store.init()
+    await store.writeData({
+      teams: [{ id: 'team-same-time', name: '同毫秒备份', slots: [] }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+
+    const now = new Date('2026-01-01T02:30:00.000Z')
+    const first = await store.backupNow(now)
+    const second = await store.backupNow(now)
+
+    assert.notEqual(first, second)
+    assert.deepEqual((await store.listBackups()).map(item => item.name), [second, first])
+    await store.close()
+  })
+})
+
 test('level store lists and restores compressed backups', async () => {
   await withTempDir(async (dir) => {
     const store = createStore(dir)

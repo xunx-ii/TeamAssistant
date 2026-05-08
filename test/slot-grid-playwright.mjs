@@ -274,7 +274,7 @@ try {
   }
 
   const backupButton = adminPage.getByRole('button', { name: '备份设置' })
-  const presetButton = adminPage.getByRole('button', { name: '补贴预设设置' })
+  const presetButton = adminPage.getByRole('button', { name: '补贴预设' })
   const backupButtonBox = await backupButton.boundingBox()
   const presetButtonBox = await presetButton.boundingBox()
   assert.ok(backupButtonBox && presetButtonBox && backupButtonBox.x < presetButtonBox.x)
@@ -290,7 +290,7 @@ try {
   await adminPage.getByRole('button', { name: 'Close' }).click()
   await backupDialog.waitFor({ state: 'detached' })
 
-  await adminPage.getByRole('button', { name: '补贴预设设置' }).click()
+  await adminPage.getByRole('button', { name: '补贴预设' }).click()
   const presetDialog = adminPage.locator('[role="dialog"]')
   await presetDialog.waitFor()
   await assertCellContains(presetDialog, /补贴预设设置/)
