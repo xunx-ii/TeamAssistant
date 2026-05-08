@@ -1,7 +1,8 @@
-  import test from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { applyMutation, validateExpectedSlotMember, validateSlotMutationLock } from '../server/data-store.js'
+import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
 
 function createSnapshot() {
   return {
@@ -24,6 +25,12 @@ function createSnapshot() {
     archivedTeams: [],
     logs: [],
   }
+}
+
+function fixedRoleSlotNumbers(snapshot, role) {
+  return snapshot.teams[0].slots
+    .filter(slot => slot.status === 'fixed' && slot.fixedRole === role)
+    .map(slot => slot.index + 1)
 }
 
 test('applyMutation preserves concurrent changes on different slots', () => {
@@ -152,6 +159,51 @@ test('setTeamLockState updates team config lock flag', () => {
     locked: false,
   })
   assert.equal(unlocked.teams[0].config.locked, false)
+})
+
+test('quickReserve prioritizes T slots from #21 to #25', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const next = apply(createSnapshot(), {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'T',
+      count: 3,
+    })
+
+    assert.deepEqual(fixedRoleSlotNumbers(next, 'T'), [21, 22, 23])
+  }
+})
+
+test('quickReserve prioritizes healer slots from #16 to #20', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const next = apply(createSnapshot(), {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: '治疗',
+      count: 2,
+    })
+
+    assert.deepEqual(fixedRoleSlotNumbers(next, '治疗'), [16, 17])
+  }
+})
+
+test('quickReserve shrink keeps the preferred role slots first', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const expanded = apply(createSnapshot(), {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'T',
+      count: 4,
+    })
+    const shrunk = apply(expanded, {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'T',
+      count: 2,
+    })
+
+    assert.deepEqual(fixedRoleSlotNumbers(shrunk, 'T'), [21, 22])
+  }
 })
 
 test('archiveTeam moves team into archives and creates fallback', () => {

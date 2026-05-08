@@ -54,6 +54,17 @@ function uniqueSorted(values) {
   return [...new Set(values)].sort((left, right) => left - right)
 }
 
+function getQuickReserveOrder(reserveType, slotCount) {
+  const allSlots = Array.from({ length: slotCount }, (_, index) => index)
+  const priorityStart = reserveType === 'T' ? 20 : reserveType === '治疗' ? 15 : null
+  if (priorityStart === null) return allSlots
+
+  const priority = Array.from({ length: 5 }, (_, offset) => priorityStart + offset)
+    .filter(index => index < slotCount)
+  const prioritySet = new Set(priority)
+  return [...priority, ...allSlots.filter(index => !prioritySet.has(index))]
+}
+
 function getResetStatus(team, slotIndex) {
   const slot = getSlotOrThrow(team, slotIndex)
   if (slot.fixedRole || slot.fixedMartialArtIndex !== null) {
@@ -238,6 +249,7 @@ export function applyMutation(currentData, mutation) {
       const team = getTeamOrThrow(data, mutation.teamId)
       const slots = team.slots
       let reserved = [...team.config.reservedSlots]
+      const reserveOrder = getQuickReserveOrder(mutation.reserveType, slots.length)
       const current = mutation.reserveType === 'boss'
         ? reserved.length
         : slots.filter(slot => slot.status === 'fixed' && slot.fixedRole === mutation.reserveType).length
@@ -268,9 +280,15 @@ export function applyMutation(currentData, mutation) {
           }
         }
       } else if (mutation.count < current) {
+        const reserveRank = new Map(reserveOrder.map((slotIndex, rank) => [slotIndex, rank]))
         const toReset = slots
           .filter(slot => slot.status === 'fixed' && slot.fixedRole === mutation.reserveType)
-          .slice(0, current - mutation.count)
+          .sort((left, right) => {
+            const leftRank = reserveRank.get(left.index) ?? left.index
+            const rightRank = reserveRank.get(right.index) ?? right.index
+            return leftRank - rightRank
+          })
+          .slice(mutation.count)
         for (const slot of toReset) {
           slot.status = 'empty'
           slot.member = null
@@ -279,7 +297,8 @@ export function applyMutation(currentData, mutation) {
         }
       } else {
         let need = mutation.count - current
-        for (let index = 0; index < slots.length && need > 0; index += 1) {
+        for (const index of reserveOrder) {
+          if (need <= 0) break
           const slot = slots[index]
           if (slot.status === 'empty' && !reserved.includes(index)) {
             slot.status = 'fixed'

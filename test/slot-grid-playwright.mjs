@@ -52,6 +52,22 @@ function createTeam() {
   }
 }
 
+function createEmptyTeam() {
+  return {
+    id: 'team-admin-e2e',
+    name: '管理测试团',
+    note: '',
+    config: { reservedSlots: [], locked: false },
+    slots: Array.from({ length: 25 }, (_, index) => ({
+      index,
+      status: 'empty',
+      member: null,
+      fixedRole: null,
+      fixedMartialArtIndex: null,
+    })),
+  }
+}
+
 async function waitForDevServer(process) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     if (process.exitCode !== null) {
@@ -107,11 +123,15 @@ try {
   const ownCell = page.locator('[data-slot-index="0"]')
   await ownCell.waitFor()
   assert.match(await ownCell.getAttribute('class') ?? '', /pixel-slot-owned/)
-  const ownColors = await ownCell.evaluate(element => {
+  const ownStyle = await ownCell.evaluate(element => {
     const style = getComputedStyle(element)
-    return `${style.outlineColor} ${style.borderTopColor}`
+    return {
+      borderTopColor: style.borderTopColor,
+      outlineStyle: style.outlineStyle,
+    }
   })
-  assert.match(ownColors, /rgb\(255, 105, 180\)/)
+  assert.equal(ownStyle.borderTopColor, 'rgb(255, 105, 180)')
+  assert.equal(ownStyle.outlineStyle, 'none')
 
   const reservedCell = page.locator('[data-slot-index="1"]')
   await assertCellContains(reservedCell, /老板位/)
@@ -134,6 +154,31 @@ try {
   await reservedDialog.waitFor()
   await assertCellContains(reservedDialog, /报名/)
   await assertCellContains(reservedDialog, /此位置为老板位/)
+  await page.close()
+
+  const adminPage = await browser.newPage({ viewport: { width: 960, height: 900 } })
+  await adminPage.addInitScript(team => {
+    localStorage.setItem('team_qq', '89906502')
+    localStorage.setItem('team_teams_v3', JSON.stringify([team]))
+    localStorage.setItem('team_cancellations_v3', JSON.stringify([]))
+    localStorage.setItem('team_archived_teams_v1', JSON.stringify([]))
+    localStorage.setItem('team_operation_logs_v1', JSON.stringify([]))
+  }, createEmptyTeam())
+
+  await adminPage.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+  await adminPage.getByRole('button', { name: '团队设置' }).click()
+  const reserveInputs = adminPage.locator('input[type="number"]')
+  const reserveButtons = adminPage.getByRole('button', { name: '预留' })
+
+  await reserveInputs.nth(0).fill('2')
+  await reserveButtons.nth(0).click()
+  await assertCellContains(adminPage.locator('[data-slot-index="20"]'), /T 位/)
+  await assertCellContains(adminPage.locator('[data-slot-index="21"]'), /T 位/)
+
+  await reserveInputs.nth(1).fill('2')
+  await reserveButtons.nth(1).click()
+  await assertCellContains(adminPage.locator('[data-slot-index="15"]'), /奶 位/)
+  await assertCellContains(adminPage.locator('[data-slot-index="16"]'), /奶 位/)
 } catch (error) {
   if (serverOutput.trim()) {
     console.error(serverOutput)

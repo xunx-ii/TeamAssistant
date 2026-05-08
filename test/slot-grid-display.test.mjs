@@ -43,7 +43,7 @@ test('fixed slots show a readable availability hint when not locked', () => {
   )
 })
 
-test('occupied own slots receive the theme outline class', () => {
+test('occupied own slots receive the theme border class', () => {
   const display = getOccupiedSlotDisplay(
     {
       index: 2,
