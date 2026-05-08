@@ -275,20 +275,20 @@ try {
 
   const backupButton = adminPage.getByRole('button', { name: '备份设置' })
   const presetButton = adminPage.getByRole('button', { name: '补贴预设' })
-  const qqLabel = adminPage.locator('span.font-mono').filter({ hasText: '89906502' }).first()
+  const archiveButton = adminPage.getByRole('button', { name: '查看档案' })
   const subsidyRegisterButton = adminPage.getByRole('button', { name: '补贴登记' })
   const subsidyStatsButton = adminPage.getByRole('button', { name: '补贴统计' })
   const backupButtonBox = await backupButton.boundingBox()
   const presetButtonBox = await presetButton.boundingBox()
-  const qqLabelBox = await qqLabel.boundingBox()
+  const archiveButtonBox = await archiveButton.boundingBox()
   const subsidyRegisterButtonBox = await subsidyRegisterButton.boundingBox()
   const subsidyStatsButtonBox = await subsidyStatsButton.boundingBox()
   assert.ok(backupButtonBox && presetButtonBox && backupButtonBox.x < presetButtonBox.x)
   assert.ok(
-    qqLabelBox &&
+    archiveButtonBox &&
     subsidyRegisterButtonBox &&
     subsidyStatsButtonBox &&
-    qqLabelBox.x < subsidyRegisterButtonBox.x &&
+    archiveButtonBox.x < subsidyRegisterButtonBox.x &&
     subsidyRegisterButtonBox.x < subsidyStatsButtonBox.x,
   )
 

@@ -535,18 +535,18 @@ function App() {
                     查看档案
                   </Button>
                 )}
-                {serverMode && (
-                  <span className="pixel-badge bg-blue-100 text-blue-700">
-                    SYNC
-                  </span>
-                )}
-                <span className="text-sm text-muted-foreground font-mono">{qq}</span>
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidy(true)}>
                   补贴登记
                 </Button>
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyStats(true)}>
                   补贴统计
                 </Button>
+                {serverMode && (
+                  <span className="pixel-badge bg-blue-100 text-blue-700">
+                    SYNC
+                  </span>
+                )}
+                <span className="text-sm text-muted-foreground font-mono">{qq}</span>
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
               </div>
             </div>
