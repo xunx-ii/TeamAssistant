@@ -1,0 +1,103 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+
+const rootDir = resolve(import.meta.dirname, '..')
+const apiUrl = 'http://127.0.0.1:23219/api/data'
+const viteCli = resolve(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
+const children = new Set()
+
+function spawnProcess(label, command, args) {
+  const child = spawn(command, args, {
+    cwd: rootDir,
+    env: { ...process.env, BROWSER: 'none' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  children.add(child)
+  child.stdout.on('data', chunk => process.stdout.write(`[${label}] ${chunk}`))
+  child.stderr.on('data', chunk => process.stderr.write(`[${label}] ${chunk}`))
+  child.once('exit', () => children.delete(child))
+  return child
+}
+
+async function isApiReady() {
+  try {
+    const response = await fetch(apiUrl, { cache: 'no-store' })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+async function waitForApi(serverProcess) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (await isApiReady()) return
+    if (serverProcess.exitCode !== null) {
+      throw new Error(`后端服务提前退出，退出码：${serverProcess.exitCode}`)
+    }
+    await delay(250)
+  }
+  throw new Error('等待后端服务启动超时')
+}
+
+function hasExited(child) {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+async function stopProcess(child) {
+  if (!child || hasExited(child)) return
+  const exited = once(child, 'exit')
+  child.kill()
+  await Promise.race([exited, delay(2_000)])
+  if (!hasExited(child)) {
+    child.kill('SIGKILL')
+    await Promise.race([exited, delay(1_000)])
+  }
+}
+
+async function stopChildren() {
+  await Promise.all([...children].map(child => stopProcess(child)))
+}
+
+function exitAfterStop(code) {
+  void stopChildren().finally(() => process.exit(code))
+}
+
+process.once('SIGINT', () => {
+  exitAfterStop(130)
+})
+
+process.once('SIGTERM', () => {
+  exitAfterStop(143)
+})
+
+let startedServer = false
+let serverProcess = null
+
+if (await isApiReady()) {
+  process.stdout.write('[server] 使用已运行的 http://127.0.0.1:23219\n')
+} else {
+  serverProcess = spawnProcess('server', process.execPath, ['server.js'])
+  startedServer = true
+  await waitForApi(serverProcess)
+}
+
+const viteProcess = spawnProcess('vite', process.execPath, [viteCli, '--host', '127.0.0.1'])
+
+viteProcess.once('exit', code => {
+  void (async () => {
+    if (startedServer) await stopProcess(serverProcess)
+    process.exit(code ?? 0)
+  })()
+})
+
+serverProcess?.once('exit', code => {
+  if (startedServer && viteProcess.exitCode === null) {
+    void (async () => {
+      await stopProcess(viteProcess)
+      process.exit(code ?? 1)
+    })()
+  }
+})

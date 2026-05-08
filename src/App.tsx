@@ -14,6 +14,7 @@ import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
+import { normalizeTeamName } from './teamName'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SubsidyConfigDialog } from './components/SubsidyConfig'
@@ -34,7 +35,7 @@ import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 function createDefaultTeam(name = '默认团队'): Team {
   return {
     id: generateId(),
-    name,
+    name: normalizeTeamName(name, '默认团队'),
     note: '',
     config: { reservedSlots: [], locked: false },
     slots: createEmptySlots(),
@@ -235,12 +236,13 @@ function App() {
 
   const handleAdminRename = useCallback((name: string) => {
     if (activeTeam) {
-      void runMutation({ type: 'renameTeam', teamId: activeTeam.id, name })
+      const normalizedName = normalizeTeamName(name, activeTeam.name)
+      void runMutation({ type: 'renameTeam', teamId: activeTeam.id, name: normalizedName })
     }
   }, [activeTeam, runMutation])
 
   const handleCreateTeam = async (name: string) => {
-    const team = createDefaultTeam(name.trim())
+    const team = createDefaultTeam(normalizeTeamName(name, '默认团队'))
     const result = await runMutation({ type: 'createTeam', team })
     if (result.ok) {
       setActiveTeamId(team.id)
@@ -288,7 +290,10 @@ function App() {
     }
   }
 
-  const handleRenameTeam = (id: string, name: string) => { void runMutation({ type: 'renameTeam', teamId: id, name }) }
+  const handleRenameTeam = (id: string, name: string) => {
+    const currentName = teams.find(team => team.id === id)?.name ?? '默认团队'
+    void runMutation({ type: 'renameTeam', teamId: id, name: normalizeTeamName(name, currentName) })
+  }
 
   const handleUpdateNote = (note: string) => {
     if (!activeTeam) return

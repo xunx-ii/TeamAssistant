@@ -54,6 +54,22 @@ function uniqueSorted(values) {
   return [...new Set(values)].sort((left, right) => left - right)
 }
 
+function normalizeTeamName(name, fallback = '') {
+  const cleaned = Array.from(String(name ?? ''))
+    .join('')
+    .split('')
+    .map(char => {
+      const code = char.charCodeAt(0)
+      return code <= 31 || code === 127 ? ' ' : char
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const normalized = Array.from(cleaned).slice(0, 40).join('').trim()
+  return normalized || fallback
+}
+
 function getQuickReserveOrder(reserveType, slotCount) {
   const allSlots = Array.from({ length: slotCount }, (_, index) => index)
   const priorityStart = reserveType === 'T' ? 20 : reserveType === '治疗' ? 15 : null
@@ -127,7 +143,10 @@ export function applyMutation(currentData, mutation) {
 
   switch (mutation.type) {
     case 'createTeam': {
-      data.teams.push(mutation.team)
+      data.teams.push({
+        ...mutation.team,
+        name: normalizeTeamName(mutation.team?.name, '默认团队'),
+      })
       return data
     }
 
@@ -167,7 +186,7 @@ export function applyMutation(currentData, mutation) {
 
     case 'renameTeam': {
       const team = getTeamOrThrow(data, mutation.teamId)
-      team.name = mutation.name
+      team.name = normalizeTeamName(mutation.name, team.name)
       return data
     }
 

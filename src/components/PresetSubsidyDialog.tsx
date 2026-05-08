@@ -1,67 +1,29 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import type { SubsidyLevel, SubsidyType } from '../types'
-
-const STORAGE_KEY = 'team_subsidy_presets_v1'
-
-const DEFAULT_PRESETS: SubsidyType[] = [
-  {
-    id: 'preset-damage',
-    name: '伤害补贴',
-    levels: [
-      { name: '第一', gold: 8000 },
-      { name: '第二', gold: 5000 },
-      { name: '第三', gold: 3000 },
-    ],
-  },
-  {
-    id: 'preset-heal',
-    name: '治疗补贴',
-    levels: [
-      { name: '第一', gold: 5000 },
-      { name: '第二', gold: 3000 },
-    ],
-  },
-  {
-    id: 'preset-tank',
-    name: 'T补贴',
-    levels: [
-      { name: '第一', gold: 5000 },
-      { name: '第二', gold: 3000 },
-    ],
-  },
-]
-
-export function loadSubsidyPresets(): SubsidyType[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) return parsed
-    }
-  } catch { /* */ }
-  return [...DEFAULT_PRESETS.map(p => ({ ...p, levels: p.levels.map(l => ({ ...l })) }))]
-}
-
-function saveSubsidyPresets(presets: SubsidyType[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(presets))
-}
+import { loadSubsidyPresets, saveSubsidyPresets } from '../subsidyPresets'
 
 interface Props {
   open: boolean
   onClose: () => void
 }
 
-export function PresetSubsidyDialog({ open, onClose }: Props) {
-  const [presets, setPresets] = useState<SubsidyType[]>([])
+interface EditorProps {
+  onClose: () => void
+}
 
-  useEffect(() => {
-    if (open) {
-      setPresets(loadSubsidyPresets())
-    }
-  }, [open])
+export function PresetSubsidyDialog({ open, onClose }: Props) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      {open && <PresetSubsidyEditor onClose={onClose} />}
+    </Dialog>
+  )
+}
+
+function PresetSubsidyEditor({ onClose }: EditorProps) {
+  const [presets, setPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
 
   const addType = () => {
     setPresets(prev => [...prev, { id: `preset-${Date.now()}`, name: '', levels: [] }])
@@ -103,64 +65,62 @@ export function PresetSubsidyDialog({ open, onClose }: Props) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-sm">补贴预设设置</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          {presets.map(t => (
-            <div key={t.id} className="border border-border rounded p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground min-w-[48px]">类型名</span>
-                <Input
-                  className="h-7 text-sm flex-1"
-                  value={t.name}
-                  onChange={e => updateName(t.id, e.target.value)}
-                  placeholder="如：伤害补贴"
-                />
-                <Button size="xs" variant="outline" onClick={() => removeType(t.id)}>删除</Button>
-              </div>
-              <div className="space-y-1.5 pl-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground min-w-[48px]">等级</span>
-                  <Button size="xs" variant="outline" onClick={() => addLevel(t.id)}>+ 新增等级</Button>
-                </div>
-                {t.levels.map((l, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <Input
-                      className="h-7 text-sm w-20"
-                      value={l.name}
-                      onChange={e => updateLevel(t.id, idx, 'name', e.target.value)}
-                      placeholder="第一"
-                    />
-                    <Input
-                      type="number"
-                      min={0}
-                      className="h-7 text-sm w-24"
-                      value={l.gold || ''}
-                      onChange={e => updateLevel(t.id, idx, 'gold', e.target.value)}
-                      placeholder="8000"
-                    />
-                    <span className="text-xs text-muted-foreground">金</span>
-                    <Button size="xs" variant="outline" onClick={() => removeLevel(t.id, idx)}>移除</Button>
-                  </div>
-                ))}
-                {t.levels.length === 0 && (
-                  <p className="text-xs text-muted-foreground pl-12">暂无等级</p>
-                )}
-              </div>
+    <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle className="text-sm">补贴预设设置</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-3">
+        {presets.map(t => (
+          <div key={t.id} className="border border-border rounded p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground min-w-[48px]">类型名</span>
+              <Input
+                className="h-7 text-sm flex-1"
+                value={t.name}
+                onChange={e => updateName(t.id, e.target.value)}
+                placeholder="如：伤害补贴"
+              />
+              <Button size="xs" variant="outline" onClick={() => removeType(t.id)}>删除</Button>
             </div>
-          ))}
-          {presets.length === 0 && (
-            <p className="text-xs text-muted-foreground text-center py-4">暂无预设，请新增</p>
-          )}
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={addType}>+ 新增预设类型</Button>
-            <Button size="sm" onClick={handleSave}>保存预设</Button>
+            <div className="space-y-1.5 pl-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground min-w-[48px]">等级</span>
+                <Button size="xs" variant="outline" onClick={() => addLevel(t.id)}>+ 新增等级</Button>
+              </div>
+              {t.levels.map((l, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <Input
+                    className="h-7 text-sm w-20"
+                    value={l.name}
+                    onChange={e => updateLevel(t.id, idx, 'name', e.target.value)}
+                    placeholder="第一"
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    className="h-7 text-sm w-24"
+                    value={l.gold || ''}
+                    onChange={e => updateLevel(t.id, idx, 'gold', e.target.value)}
+                    placeholder="8000"
+                  />
+                  <span className="text-xs text-muted-foreground">金</span>
+                  <Button size="xs" variant="outline" onClick={() => removeLevel(t.id, idx)}>移除</Button>
+                </div>
+              ))}
+              {t.levels.length === 0 && (
+                <p className="text-xs text-muted-foreground pl-12">暂无等级</p>
+              )}
+            </div>
           </div>
+        ))}
+        {presets.length === 0 && (
+          <p className="text-xs text-muted-foreground text-center py-4">暂无预设，请新增</p>
+        )}
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={addType}>+ 新增预设类型</Button>
+          <Button size="sm" onClick={handleSave}>保存预设</Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </DialogContent>
   )
 }

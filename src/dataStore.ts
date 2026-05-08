@@ -1,4 +1,5 @@
 import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, SubsidyType, Team } from './types'
+import { normalizeTeamName } from './teamName'
 
 export interface Snapshot {
   teams: Team[]
@@ -130,7 +131,10 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 
   switch (mutation.type) {
     case 'createTeam':
-      next.teams.push(mutation.team)
+      next.teams.push({
+        ...mutation.team,
+        name: normalizeTeamName(mutation.team.name, '默认团队'),
+      })
       return next
 
     case 'deleteTeam':
@@ -168,7 +172,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 
     case 'renameTeam': {
       const team = getTeamOrThrow(next, mutation.teamId)
-      team.name = mutation.name
+      team.name = normalizeTeamName(mutation.name, team.name)
       return next
     }
 

@@ -161,6 +161,25 @@ test('setTeamLockState updates team config lock flag', () => {
   assert.equal(unlocked.teams[0].config.locked, false)
 })
 
+test('renameTeam preserves regular emoji and embedded image markers', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const emoji = apply(createSnapshot(), {
+      type: 'renameTeam',
+      teamId: 'team-1',
+      name: '一团 🌸🧑‍🚀',
+    })
+    assert.equal(emoji.teams[0].name, '一团 🌸🧑‍🚀')
+
+    const imageMarker = apply(emoji, {
+      type: 'renameTeam',
+      teamId: 'team-1',
+      name: '\uFFFC 图片团 \uFFFC',
+    })
+    assert.equal(imageMarker.teams[0].name, '\uFFFC 图片团 \uFFFC')
+    assert.equal(imageMarker.teams[0].slots.length, 25)
+  }
+})
+
 test('quickReserve prioritizes T slots from #21 to #25', () => {
   for (const apply of [applyMutation, applyClientMutation]) {
     const next = apply(createSnapshot(), {
