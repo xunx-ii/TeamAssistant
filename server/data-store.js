@@ -39,6 +39,10 @@ function setRecordValue(record, key, value) {
   })
 }
 
+function getRecordValue(record, key) {
+  return Object.getOwnPropertyDescriptor(record, toText(key))?.value
+}
+
 function normalizeMember(member) {
   if (!isPlainObject(member)) {
     throw new Error('Invalid member')
@@ -82,10 +86,16 @@ function normalizeMemberSubsidySelections(selections) {
   }
   return selections
     .filter(isPlainObject)
-    .map(selection => ({
-      typeId: toText(selection.typeId),
-      levelName: toText(selection.levelName),
-    }))
+    .map(selection => {
+      const normalized = {
+        typeId: toText(selection.typeId),
+        levelName: toText(selection.levelName),
+      }
+      if (typeof selection.weekStart === 'string') {
+        normalized.weekStart = selection.weekStart
+      }
+      return normalized
+    })
 }
 
 function isSlotIndex(value) {
@@ -154,7 +164,8 @@ function isValidMemberSubsidies(memberSubsidies) {
     selections.every(selection => (
       isPlainObject(selection) &&
       typeof selection.typeId === 'string' &&
-      typeof selection.levelName === 'string'
+      typeof selection.levelName === 'string' &&
+      (!Object.prototype.hasOwnProperty.call(selection, 'weekStart') || typeof selection.weekStart === 'string')
     ))
   ))
 }
@@ -405,6 +416,16 @@ function getArchiveOrThrow(data, archiveId) {
     throw new Error(`Archive not found: ${archiveId}`)
   }
   return archive
+}
+
+function getSubsidyTeamOrThrow(data, mutation) {
+  if (mutation.archiveId) {
+    return getArchiveOrThrow(data, mutation.archiveId).team
+  }
+  if (!mutation.teamId) {
+    throw new Error('Missing subsidy team')
+  }
+  return getTeamOrThrow(data, mutation.teamId)
 }
 
 function getSlotOrThrow(team, slotIndex) {
@@ -782,12 +803,22 @@ export function applyMutation(currentData, mutation) {
     }
 
     case 'registerMemberSubsidies': {
-      const team = getTeamOrThrow(data, mutation.teamId)
+      const team = getSubsidyTeamOrThrow(data, mutation)
       if (!team.memberSubsidies) {
         team.memberSubsidies = {}
       }
       const qq = toText(mutation.qq)
-      setRecordValue(team.memberSubsidies, qq, normalizeMemberSubsidySelections(mutation.selections))
+      const existing = normalizeMemberSubsidySelections(getRecordValue(team.memberSubsidies, qq) ?? [])
+      const normalizedSelections = normalizeMemberSubsidySelections(mutation.selections)
+      if (typeof mutation.weekStart === 'string' && mutation.weekStart) {
+        const nextSelections = [
+          ...existing.filter(selection => selection.weekStart && selection.weekStart !== mutation.weekStart),
+          ...normalizedSelections.map(selection => ({ ...selection, weekStart: mutation.weekStart })),
+        ]
+        setRecordValue(team.memberSubsidies, qq, nextSelections)
+      } else {
+        setRecordValue(team.memberSubsidies, qq, normalizedSelections)
+      }
       appendLog(data, team, qq, '登记补贴')
       return data
     }

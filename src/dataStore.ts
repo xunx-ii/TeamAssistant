@@ -58,7 +58,7 @@ export type Mutation =
     }
   | { type: 'dismissCancellation'; qq: string; timestamp: number }
   | { type: 'updateTeamSubsidyTypes'; teamId: string; subsidyTypes: SubsidyType[] }
-  | { type: 'registerMemberSubsidies'; teamId: string; qq: string; selections: MemberSubsidySelection[] }
+  | { type: 'registerMemberSubsidies'; teamId?: string; archiveId?: string; qq: string; selections: MemberSubsidySelection[]; weekStart?: string }
 
 function cloneSnapshot(snapshot: Snapshot): Snapshot {
   const cloned = structuredClone(snapshot) as Partial<Snapshot>
@@ -92,6 +92,10 @@ function setRecordValue<T>(record: Record<string, T>, key: unknown, value: T) {
     configurable: true,
     writable: true,
   })
+}
+
+function getRecordValue<T>(record: Record<string, T>, key: unknown): T | undefined {
+  return Object.getOwnPropertyDescriptor(record, toText(key))?.value as T | undefined
 }
 
 function normalizeMember(member: unknown): Member {
@@ -137,10 +141,16 @@ function normalizeMemberSubsidySelections(selections: unknown): MemberSubsidySel
   }
   return selections
     .filter(isPlainObject)
-    .map(selection => ({
-      typeId: toText(selection.typeId),
-      levelName: toText(selection.levelName),
-    }))
+    .map(selection => {
+      const normalized: MemberSubsidySelection = {
+        typeId: toText(selection.typeId),
+        levelName: toText(selection.levelName),
+      }
+      if (typeof selection.weekStart === 'string') {
+        normalized.weekStart = selection.weekStart
+      }
+      return normalized
+    })
 }
 
 function getTeamOrThrow(snapshot: Snapshot, teamId: string): Team {
@@ -157,6 +167,16 @@ function getArchiveOrThrow(snapshot: Snapshot, archiveId: string): ArchivedTeam 
     throw new Error(`Archive not found: ${archiveId}`)
   }
   return archive
+}
+
+function getSubsidyTeamOrThrow(snapshot: Snapshot, mutation: Extract<Mutation, { type: 'registerMemberSubsidies' }>): Team {
+  if (mutation.archiveId) {
+    return getArchiveOrThrow(snapshot, mutation.archiveId).team
+  }
+  if (!mutation.teamId) {
+    throw new Error('Missing subsidy team')
+  }
+  return getTeamOrThrow(snapshot, mutation.teamId)
 }
 
 function appendLog(snapshot: Snapshot, team: Team, actorQq: string, action: string, timestamp = Date.now()) {
@@ -471,12 +491,22 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
     }
 
     case 'registerMemberSubsidies': {
-      const team = getTeamOrThrow(next, mutation.teamId)
+      const team = getSubsidyTeamOrThrow(next, mutation)
       if (!team.memberSubsidies) {
         team.memberSubsidies = {}
       }
       const memberQq = toText(mutation.qq)
-      setRecordValue(team.memberSubsidies, memberQq, normalizeMemberSubsidySelections(mutation.selections))
+      const existing = normalizeMemberSubsidySelections(getRecordValue(team.memberSubsidies, memberQq) ?? [])
+      const normalizedSelections = normalizeMemberSubsidySelections(mutation.selections)
+      if (mutation.weekStart) {
+        const nextSelections = [
+          ...existing.filter(selection => selection.weekStart && selection.weekStart !== mutation.weekStart),
+          ...normalizedSelections.map(selection => ({ ...selection, weekStart: mutation.weekStart })),
+        ]
+        setRecordValue(team.memberSubsidies, memberQq, nextSelections)
+      } else {
+        setRecordValue(team.memberSubsidies, memberQq, normalizedSelections)
+      }
       appendLog(next, team, memberQq, '登记补贴')
       return next
     }

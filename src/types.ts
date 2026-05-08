@@ -21,6 +21,7 @@ export interface SubsidyType {
 export interface MemberSubsidySelection {
   typeId: string
   levelName: string
+  weekStart?: string
 }
 
 export type SlotStatus = 'empty' | 'occupied' | 'reserved' | 'fixed'
@@ -72,6 +73,18 @@ export interface OperationLog {
   timestamp: number
   actorQq: string
   action: string
+}
+
+export interface SubsidyTarget {
+  id: string
+  name: string
+  weekStart: string
+  currentSelections: MemberSubsidySelection[]
+  teamId?: string
+  archiveId?: string
+  archivedAt?: number
+  subsidyTypes: SubsidyType[]
+  memberSubsidies: Record<string, MemberSubsidySelection[]>
 }
 
 export const DEFAULT_TEAM_CONFIG: TeamConfig = {

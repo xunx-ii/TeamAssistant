@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { loadAdminQQs } from './config'
 import { initTheme } from './storage/theme'
 import {
@@ -9,13 +9,15 @@ import {
   loadOperationLogs, setOperationLogsLocal,
   initServerMode, loadFromServer, normalizeServerData,
 } from './storage'
-import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection } from './types'
+import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget } from './types'
 import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
+import { createSubsidyTargets } from './subsidy'
+import { getCurrentWeekStartKey } from './week'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SubsidyConfigDialog } from './components/SubsidyConfig'
@@ -98,6 +100,9 @@ function App() {
   const resolvedActiveTeamId = activeTeamExists ? activeTeamId : (teams[0]?.id ?? '')
   const activeTeam = teams.find(t => t.id === resolvedActiveTeamId) ?? teams[0]
   const notice = findPendingNotice(qq, cancellations)
+  const currentWeekStart = getCurrentWeekStartKey()
+  const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
+  const subsidyRegistrationTargets = useMemo(() => subsidyTargets.filter(target => target.weekStart === currentWeekStart), [subsidyTargets, currentWeekStart])
 
   const syncSnapshot = useCallback((snapshot: Snapshot) => {
     const nextTeams = snapshot.teams ?? []
@@ -385,9 +390,16 @@ function App() {
     void runMutation({ type: 'updateTeamSubsidyTypes', teamId: activeTeam.id, subsidyTypes: textSubsidyTypes })
   }
 
-  const handleRegisterSubsidies = (selections: MemberSubsidySelection[]) => {
-    if (!activeTeam || !qq) return
-    void runMutation({ type: 'registerMemberSubsidies', teamId: activeTeam.id, qq, selections })
+  const handleRegisterSubsidies = (target: SubsidyTarget, selections: MemberSubsidySelection[]) => {
+    if (!qq) return
+    void runMutation({
+      type: 'registerMemberSubsidies',
+      teamId: target.teamId,
+      archiveId: target.archiveId,
+      qq,
+      selections,
+      weekStart: target.weekStart,
+    })
   }
 
   const handleSignupConfirm = async (data: Omit<Member, 'qq'>, lockTimestamp?: number) => {
@@ -502,7 +514,7 @@ function App() {
           <div className="pixel-card p-3">
             <div className="flex items-center justify-between">
               <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
                 {isAdmin && (
                   <span className="pixel-badge bg-amber-100 text-amber-700">
                     GM
@@ -529,6 +541,12 @@ function App() {
                   </span>
                 )}
                 <span className="text-sm text-muted-foreground font-mono">{qq}</span>
+                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidy(true)}>
+                  补贴登记
+                </Button>
+                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyStats(true)}>
+                  补贴统计
+                </Button>
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
               </div>
             </div>
@@ -569,19 +587,7 @@ function App() {
                   onViewLogs={() => setShowLogs(true)}
                   onArchive={handleArchiveTeam}
                   onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
-                  onOpenSubsidyStats={() => setShowSubsidyStats(true)}
-                  onOpenSubsidy={() => setShowSubsidy(true)}
                 />
-              )}
-              {!isAdmin && (
-                <div className="mb-4 flex items-center gap-2 flex-wrap">
-                  <Button variant="outline" size="sm" onClick={() => setShowSubsidy(true)}>
-                    补贴登记
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setShowSubsidyStats(true)}>
-                    补贴统计
-                  </Button>
-                </div>
               )}
               <div className="mb-3 pixel-card p-3">
                 <div className="flex items-center gap-2">
@@ -699,14 +705,15 @@ function App() {
         onRestore={(archiveId) => { void handleRestoreArchive(archiveId) }}
         onClose={() => setShowArchives(false)}
       />
-      <SubsidyModal
-        key={`subsidy-modal-${activeTeam?.id ?? 'none'}`}
-        open={showSubsidy}
-        subsidyTypes={activeTeam?.subsidyTypes || []}
-        currentSelections={activeTeam && qq ? (activeTeam.memberSubsidies?.[qq] || []) : []}
-        onConfirm={handleRegisterSubsidies}
-        onClose={() => setShowSubsidy(false)}
-      />
+      {showSubsidy && (
+        <SubsidyModal
+          key={`subsidy-modal-${activeTeam?.id ?? 'none'}`}
+          open={showSubsidy}
+          targets={subsidyRegistrationTargets}
+          onConfirm={handleRegisterSubsidies}
+          onClose={() => setShowSubsidy(false)}
+        />
+      )}
       <SubsidyConfigDialog
         key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
         open={showSubsidyConfig}
@@ -717,8 +724,7 @@ function App() {
       <SubsidyStats
         key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
         open={showSubsidyStats}
-        subsidyTypes={activeTeam?.subsidyTypes || []}
-        memberSubsidies={activeTeam?.memberSubsidies || {}}
+        targets={subsidyTargets}
         onClose={() => setShowSubsidyStats(false)}
       />
       <PresetSubsidyDialog

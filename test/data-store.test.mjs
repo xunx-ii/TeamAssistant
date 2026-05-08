@@ -10,6 +10,8 @@ import {
   validateSlotMutationLock,
 } from '../server/data-store.js'
 import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
+import { createSubsidyTargets, getSubsidyWeekOptions } from '../src/subsidy.ts'
+import { formatWeekRange } from '../src/week.ts'
 
 function createSnapshot() {
   return {
@@ -391,6 +393,123 @@ test('applyMutation preserves special text fields and reserved object keys', () 
     const cleanedSelections = Object.getOwnPropertyDescriptor(cleaned.teams[0].memberSubsidies, '__proto__')?.value
     assert.deepEqual(cleanedSelections, [{ typeId, levelName }])
   }
+})
+
+test('registerMemberSubsidies replaces only the selected week', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const snapshot = createSnapshot()
+    snapshot.teams[0].memberSubsidies = {
+      10001: [
+        { typeId: 'damage', levelName: '上周', weekStart: '2026-04-27' },
+        { typeId: 'damage', levelName: '旧本周', weekStart: '2026-05-04' },
+        { typeId: 'damage', levelName: '旧记录' },
+      ],
+    }
+
+    const next = apply(snapshot, {
+      type: 'registerMemberSubsidies',
+      teamId: 'team-1',
+      qq: '10001',
+      selections: [{ typeId: 'damage', levelName: '新本周' }],
+      weekStart: '2026-05-04',
+    })
+
+    assert.deepEqual(next.teams[0].memberSubsidies['10001'], [
+      { typeId: 'damage', levelName: '上周', weekStart: '2026-04-27' },
+      { typeId: 'damage', levelName: '新本周', weekStart: '2026-05-04' },
+    ])
+  }
+})
+
+test('registerMemberSubsidies can write archived team records', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const snapshot = createSnapshot()
+    snapshot.teams[0].subsidyTypes = [{
+      id: 'damage',
+      name: '伤害补贴',
+      levels: [{ name: '高', gold: 500 }],
+    }]
+    const archived = apply(snapshot, {
+      type: 'archiveTeam',
+      teamId: 'team-1',
+      archivedBy: 'admin',
+      archivedAt: new Date(2026, 4, 6).getTime(),
+      fallbackTeam: {
+        ...createSnapshot().teams[0],
+        id: 'team-fallback',
+        name: '新团队',
+      },
+    })
+    const next = apply(archived, {
+      type: 'registerMemberSubsidies',
+      archiveId: archived.archivedTeams[0].id,
+      qq: '10001',
+      selections: [{ typeId: 'damage', levelName: '高' }],
+      weekStart: '2026-05-04',
+    })
+
+    assert.deepEqual(next.archivedTeams[0].team.memberSubsidies['10001'], [
+      { typeId: 'damage', levelName: '高', weekStart: '2026-05-04' },
+    ])
+    assert.equal(next.teams[0].memberSubsidies?.['10001'], undefined)
+  }
+})
+
+test('createSubsidyTargets includes current week archived teams and week options', () => {
+  const subsidyTypes = [{
+    id: 'damage',
+    name: '伤害补贴',
+    levels: [{ name: '高', gold: 500 }],
+  }]
+  const activeTeam = {
+    ...createSnapshot().teams[0],
+    subsidyTypes,
+    memberSubsidies: {
+      10001: [
+        { typeId: 'damage', levelName: '高', weekStart: '2026-05-04' },
+      ],
+      10002: [
+        { typeId: 'damage', levelName: '高', weekStart: '2026-04-27' },
+      ],
+    },
+  }
+  const currentWeekArchive = {
+    id: 'archive-current',
+    team: {
+      ...createSnapshot().teams[0],
+      id: 'archived-current-team',
+      name: '本周归档',
+      subsidyTypes,
+      memberSubsidies: {
+        10001: [{ typeId: 'damage', levelName: '高' }],
+      },
+    },
+    archivedAt: new Date(2026, 4, 6).getTime(),
+    archivedBy: 'admin',
+  }
+  const oldArchive = {
+    id: 'archive-old',
+    team: {
+      ...createSnapshot().teams[0],
+      id: 'archived-old-team',
+      name: '旧归档',
+      subsidyTypes,
+      memberSubsidies: {},
+    },
+    archivedAt: new Date(2026, 3, 29).getTime(),
+    archivedBy: 'admin',
+  }
+
+  const targets = createSubsidyTargets([activeTeam], [currentWeekArchive, oldArchive], '10001', '2026-05-04')
+  assert.deepEqual(targets.filter(target => target.weekStart === '2026-05-04').map(target => target.name), [
+    '一团',
+    '本周归档（归档）',
+  ])
+  assert.deepEqual(targets.find(target => target.id === 'archive:archive-current')?.currentSelections, [
+    { typeId: 'damage', levelName: '高', weekStart: '2026-05-04' },
+  ])
+  assert.deepEqual(getSubsidyWeekOptions(targets, '2026-05-04'), ['2026-05-04', '2026-04-27'])
+  assert.equal(formatWeekRange('2026-05-04'), '2026年5月4日-2026年5月10日周')
 })
 
 test('quickReserve prioritizes T slots from #21 to #25', () => {

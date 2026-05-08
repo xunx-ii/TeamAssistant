@@ -135,10 +135,16 @@ function normalizeMemberSubsidies(memberSubsidies: unknown) {
     if (!Array.isArray(selections)) continue
     setRecordValue(normalized, qq, selections
       .filter(isRecord)
-      .map(selection => ({
-        typeId: toText(selection.typeId),
-        levelName: toText(selection.levelName),
-      })))
+      .map(selection => {
+        const normalizedSelection: NonNullable<Team['memberSubsidies']>[string][number] = {
+          typeId: toText(selection.typeId),
+          levelName: toText(selection.levelName),
+        }
+        if (typeof selection.weekStart === 'string') {
+          normalizedSelection.weekStart = selection.weekStart
+        }
+        return normalizedSelection
+      }))
   }
   return normalized
 }
