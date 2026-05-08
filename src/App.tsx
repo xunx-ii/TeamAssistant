@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { loadAdminQQs } from './config'
 import { initTheme } from './storage/theme'
 import {
@@ -32,6 +32,7 @@ import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { ArchiveDialog } from './components/ArchiveDialog'
 import { OperationLogDialog } from './components/OperationLogDialog'
 import { Button } from './components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 
 function createDefaultTeam(name = '默认团队'): Team {
@@ -48,6 +49,14 @@ function createDefaultTeam(name = '默认团队'): Team {
 function findPendingNotice(qq: string | null, cancellations: Cancellation[]) {
   if (!qq) return null
   return cancellations.find(item => item.qq === qq) ?? null
+}
+
+interface AppConfirmOptions {
+  title: string
+  message: string
+  confirmText: string
+  cancelText: string
+  destructive?: boolean
 }
 
 function App() {
@@ -81,6 +90,8 @@ function App() {
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
   const [mutationError, setMutationError] = useState('')
+  const [confirmOptions, setConfirmOptions] = useState<AppConfirmOptions | null>(null)
+  const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeamExists = teams.some(t => t.id === activeTeamId)
@@ -221,6 +232,20 @@ function App() {
     clearModals()
   }
 
+  const resolveConfirm = useCallback((confirmed: boolean) => {
+    confirmResolveRef.current?.(confirmed)
+    confirmResolveRef.current = null
+    setConfirmOptions(null)
+  }, [])
+
+  const requestConfirm = useCallback((options: AppConfirmOptions) => {
+    confirmResolveRef.current?.(false)
+    return new Promise<boolean>((resolve) => {
+      confirmResolveRef.current = resolve
+      setConfirmOptions(options)
+    })
+  }, [])
+
   const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
   const handleLogout = () => { removeStoredQQ(); setQq(null); setMutationError(''); clearModals() }
 
@@ -261,13 +286,21 @@ function App() {
   }
 
   const handleArchiveTeam = async () => {
-    if (!activeTeam || !qq) return
-    if (!confirm(`确定归档「${activeTeam.name}」？`)) return
-    const remaining = teams.filter(team => team.id !== activeTeam.id)
+    const team = activeTeam
+    if (!team || !qq) return
+    const shouldArchive = await requestConfirm({
+      title: '归档表格',
+      message: `确定归档「${team.name}」？`,
+      confirmText: '归档',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (!shouldArchive) return
+    const remaining = teams.filter(item => item.id !== team.id)
     const fallbackTeam = remaining.length > 0 ? undefined : createDefaultTeam()
     const result = await runMutation({
       type: 'archiveTeam',
-      teamId: activeTeam.id,
+      teamId: team.id,
       archivedBy: qq,
       fallbackTeam,
     })
@@ -289,8 +322,16 @@ function App() {
   }
 
   const handleDeleteTeam = async (id: string) => {
-    if (!confirm('确定删除此团队？')) return
-    const remaining = teams.filter(team => team.id !== id)
+    const team = teams.find(item => item.id === id)
+    const shouldDelete = await requestConfirm({
+      title: '删除团队',
+      message: team ? `确定删除「${team.name}」？` : '确定删除此团队？',
+      confirmText: '删除',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (!shouldDelete) return
+    const remaining = teams.filter(item => item.id !== id)
     const fallbackTeam = remaining.length > 0 ? undefined : createDefaultTeam()
     const result = await runMutation({ type: 'deleteTeam', teamId: id, fallbackTeam })
     if (result.ok && resolvedActiveTeamId === id) {
@@ -694,6 +735,34 @@ function App() {
         onRestored={handleBackupRestored}
         onClose={() => setShowBackupSettings(false)}
       />
+      <Dialog open={!!confirmOptions} onOpenChange={(value) => { if (!value) resolveConfirm(false) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{confirmOptions?.title}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap">
+              {confirmOptions?.message}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => resolveConfirm(false)}
+            >
+              {confirmOptions?.cancelText}
+            </Button>
+            <Button
+              type="button"
+              variant={confirmOptions?.destructive ? 'destructive' : 'default'}
+              size="sm"
+              onClick={() => resolveConfirm(true)}
+            >
+              {confirmOptions?.confirmText}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

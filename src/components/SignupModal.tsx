@@ -49,8 +49,15 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   // Lock management
   useEffect(() => {
     if (!open || !teamId || slotIndex == null || readOnly) return
+    let active = true
     const lock = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, lockQq)
+      if (!active) {
+        if (result.ok && result.timestamp) {
+          void releaseSlotLock(teamId, slotIndex, lockQq, result.timestamp)
+        }
+        return
+      }
       if (result.ok && result.timestamp) {
         lockTimestampRef.current = result.timestamp
         setLockTimestamp(result.timestamp)
@@ -64,12 +71,15 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     void lock()
     heartbeatRef.current = setInterval(lock, 15000)
     return () => {
+      active = false
       clearInterval(heartbeatRef.current)
       const currentLockTimestamp = lockTimestampRef.current
       lockTimestampRef.current = 0
       if (currentLockTimestamp > 0) {
         void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
       }
+      setLockTimestamp(0)
+      setError('')
     }
   }, [open, teamId, slotIndex, lockQq, qq, readOnly])
 
@@ -151,6 +161,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
 
   const title = readOnly ? '查看报名' : isAdminEditing ? '编辑成员' : existing ? '修改报名' : '报名'
   const isFixedSlot = slotInfo?.status === 'fixed' && !existing
+  const fixedMartialArt = slotInfo?.fixedMartialArtIndex != null ? martialArts[slotInfo.fixedMartialArtIndex] : null
   const showActions = !readOnly
 
   return (
@@ -172,8 +183,8 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
         )}
         {isFixedSlot && (
           <p className="text-xs text-emerald-400 bg-emerald-950/30 rounded-md px-3 py-2">
-            {slotInfo?.fixedMartialArtIndex !== null
-              ? `限定心法：${getMartialArtLabel(martialArts[slotInfo!.fixedMartialArtIndex!])}`
+            {fixedMartialArt
+              ? `限定心法：${getMartialArtLabel(fixedMartialArt)}`
               : `限定：${slotInfo?.fixedRole === 'T' ? 'T' : slotInfo?.fixedRole === '治疗' ? '治疗' : 'DPS'}`}
           </p>
         )}

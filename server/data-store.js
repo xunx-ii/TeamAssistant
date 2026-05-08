@@ -11,6 +11,10 @@ export function normalizeData(data) {
   }
 }
 
+const TOTAL_SLOTS = 25
+const VALID_SLOT_STATUSES = new Set(['empty', 'occupied', 'reserved', 'fixed'])
+const VALID_ROLES = new Set(['T', '治疗', 'DPS'])
+
 function isPlainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -84,16 +88,108 @@ function normalizeMemberSubsidySelections(selections) {
     }))
 }
 
+function isSlotIndex(value) {
+  return Number.isInteger(value) && value >= 0 && value < TOTAL_SLOTS
+}
+
+function isValidMember(member) {
+  return Boolean(
+    isPlainObject(member) &&
+    typeof member.qq === 'string' &&
+    typeof member.martialArtIndex === 'string' &&
+    typeof member.gearScore === 'string' &&
+    typeof member.characterId === 'string' &&
+    typeof member.note === 'string' &&
+    (!Object.prototype.hasOwnProperty.call(member, 'hasOrangeWeapon') || typeof member.hasOrangeWeapon === 'boolean'),
+  )
+}
+
+function isValidSlot(slot, index) {
+  if (
+    !isPlainObject(slot) ||
+    slot.index !== index ||
+    !VALID_SLOT_STATUSES.has(slot.status) ||
+    !(slot.member === null || isValidMember(slot.member)) ||
+    !(slot.fixedRole === null || VALID_ROLES.has(slot.fixedRole)) ||
+    !(slot.fixedMartialArtIndex === null || Number.isInteger(slot.fixedMartialArtIndex))
+  ) {
+    return false
+  }
+
+  if (slot.status === 'occupied') {
+    return isValidMember(slot.member)
+  }
+
+  return slot.member === null
+}
+
+function isValidTeamConfig(config) {
+  return Boolean(
+    isPlainObject(config) &&
+    Array.isArray(config.reservedSlots) &&
+    config.reservedSlots.every(isSlotIndex) &&
+    typeof config.locked === 'boolean',
+  )
+}
+
+function isValidSubsidyTypes(subsidyTypes) {
+  if (subsidyTypes === undefined) return true
+  return Array.isArray(subsidyTypes) && subsidyTypes.every(type => (
+    isPlainObject(type) &&
+    typeof type.id === 'string' &&
+    typeof type.name === 'string' &&
+    Array.isArray(type.levels) &&
+    type.levels.every(level => (
+      isPlainObject(level) &&
+      typeof level.name === 'string' &&
+      Number.isFinite(level.gold)
+    ))
+  ))
+}
+
+function isValidMemberSubsidies(memberSubsidies) {
+  if (memberSubsidies === undefined) return true
+  return isPlainObject(memberSubsidies) && Object.values(memberSubsidies).every(selections => (
+    Array.isArray(selections) &&
+    selections.every(selection => (
+      isPlainObject(selection) &&
+      typeof selection.typeId === 'string' &&
+      typeof selection.levelName === 'string'
+    ))
+  ))
+}
+
 function isValidSnapshotTeam(team) {
   return Boolean(
     isPlainObject(team) &&
     typeof team.id === 'string' &&
     typeof team.name === 'string' &&
     typeof team.note === 'string' &&
-    isPlainObject(team.config) &&
-    Array.isArray(team.config.reservedSlots) &&
-    typeof team.config.locked === 'boolean' &&
-    Array.isArray(team.slots),
+    isValidTeamConfig(team.config) &&
+    Array.isArray(team.slots) &&
+    team.slots.length === TOTAL_SLOTS &&
+    team.slots.every((slot, index) => isValidSlot(slot, index)) &&
+    isValidSubsidyTypes(team.subsidyTypes) &&
+    isValidMemberSubsidies(team.memberSubsidies),
+  )
+}
+
+function isValidArchivedTeam(archive) {
+  return Boolean(
+    isPlainObject(archive) &&
+    typeof archive.id === 'string' &&
+    Number.isFinite(archive.archivedAt) &&
+    typeof archive.archivedBy === 'string' &&
+    isValidSnapshotTeam(archive.team),
+  )
+}
+
+export function validateSnapshotData(data) {
+  const snapshot = normalizeData(data)
+  return (
+    snapshot.teams.length > 0 &&
+    snapshot.teams.every(isValidSnapshotTeam) &&
+    snapshot.archivedTeams.every(isValidArchivedTeam)
   )
 }
 
@@ -109,7 +205,7 @@ export function validateDataReplacement(currentData, incomingData, { allowReplac
     }
   }
 
-  if (!incoming.teams.every(isValidSnapshotTeam)) {
+  if (!validateSnapshotData(incoming)) {
     return {
       ok: false,
       status: 400,

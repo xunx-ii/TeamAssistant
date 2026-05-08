@@ -1,4 +1,4 @@
-import { useState, memo } from 'react'
+import { useEffect, useState, memo } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -27,6 +27,10 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
   const [reserveB, setReserveB] = useState(0)
   const [editName, setEditName] = useState(teamName)
   const normalizeReserveCount = (value: string) => Math.min(25, Math.max(0, parseInt(sanitizeIntegerInput(value, 2)) || 0))
+
+  useEffect(() => {
+    setEditName(teamName)
+  }, [teamName])
 
   return (
     <div className="mb-4">

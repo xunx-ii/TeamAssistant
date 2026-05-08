@@ -12,7 +12,7 @@ import {
   decodeFromLevelValue,
   encodeForLevelValue,
 } from '../server/level-store.js'
-import { normalizeData } from '../server/data-store.js'
+import { normalizeData, validateSnapshotData } from '../server/data-store.js'
 import { normalizeLockData } from '../server/lock-store.js'
 
 const gunzipAsync = promisify(gunzip)
@@ -36,7 +36,24 @@ function createStore(dir, maxBackups = 48) {
     maxBackups,
     normalizeData,
     normalizeLocks: normalizeLockData,
+    validateData: validateSnapshotData,
   })
+}
+
+function createBackupTeam(id, name) {
+  return {
+    id,
+    name,
+    note: '',
+    config: { reservedSlots: [], locked: false },
+    slots: Array.from({ length: 25 }, (_, index) => ({
+      index,
+      status: 'empty',
+      member: null,
+      fixedRole: null,
+      fixedMartialArtIndex: null,
+    })),
+  }
 }
 
 test('level store migrates legacy json data and locks', async () => {
@@ -289,7 +306,7 @@ test('level store lists and restores compressed backups', async () => {
     const store = createStore(dir)
     await store.init()
     await store.writeData({
-      teams: [{ id: 'team-before', name: '备份前', slots: [] }],
+      teams: [createBackupTeam('team-before', '备份前')],
       cancellations: [],
       archivedTeams: [],
       logs: [],
@@ -355,7 +372,7 @@ test('level store imports a compressed backup and restores it', async () => {
       version: 1,
       createdAt: '2026-01-01T04:00:00.000Z',
       data: {
-        teams: [{ id: 'team-imported', name: '导入团', slots: [] }],
+        teams: [createBackupTeam('team-imported', '导入团')],
         cancellations: [],
         archivedTeams: [],
         logs: [],
@@ -393,6 +410,28 @@ test('level store rejects backup restore payloads without teams', async () => {
     )
     await assert.rejects(
       () => store.importBackup(Buffer.from(JSON.stringify({ teams: [] }), 'utf8')),
+      /Invalid backup data/,
+    )
+
+    await writeFile(join(dir, 'backup', 'backup-2026-01-01T05-30-00-000Z.json'), JSON.stringify({
+      version: 1,
+      createdAt: '2026-01-01T05:30:00.000Z',
+      data: {
+        teams: [{
+          id: 'team-broken',
+          name: '坏备份',
+          note: '',
+          config: { reservedSlots: [], locked: false },
+          slots: [],
+        }],
+        cancellations: [],
+        archivedTeams: [],
+        logs: [],
+      },
+      locks: { slots: [], teams: [] },
+    }))
+    await assert.rejects(
+      () => store.restoreBackup('backup-2026-01-01T05-30-00-000Z.json'),
       /Invalid backup data/,
     )
     await store.close()

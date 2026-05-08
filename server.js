@@ -6,6 +6,7 @@ import {
   normalizeData,
   validateDataReplacement,
   validateExpectedSlotMember,
+  validateSnapshotData,
   validateSlotMutationLock,
 } from './server/data-store.js'
 import {
@@ -47,6 +48,7 @@ const store = createLevelStore({
   maxBackups: BACKUP_HISTORY_LIMIT,
   normalizeData,
   normalizeLocks: normalizeLockData,
+  validateData: validateSnapshotData,
 })
 
 async function withSharedStorage(callback) {
@@ -135,9 +137,12 @@ api.get('/backups', async (_req, res) => {
 
 api.post('/backups', async (_req, res) => {
   try {
-    const name = await withSharedStorage(() => store.backupNow())
-    const backups = await withSharedStorage(() => store.listBackups())
-    res.json({ ok: true, name, backups })
+    const result = await withSharedStorage(async () => {
+      const name = await store.backupNow()
+      const backups = await store.listBackups()
+      return { name, backups }
+    })
+    res.json({ ok: true, ...result })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Backup failed' })
   }

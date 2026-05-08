@@ -208,6 +208,44 @@ test('validateDataReplacement allows bootstrap only with a valid non-empty snaps
   assert.equal(invalid.status, 400)
 })
 
+test('validateDataReplacement rejects malformed team slots', () => {
+  const current = { teams: [], cancellations: [], archivedTeams: [], logs: [] }
+
+  const missingSlots = createSnapshot()
+  missingSlots.teams[0].slots = []
+  const missingSlotsResult = validateDataReplacement(current, missingSlots)
+  assert.equal(missingSlotsResult.ok, false)
+  assert.equal(missingSlotsResult.status, 400)
+
+  const badIndex = createSnapshot()
+  badIndex.teams[0].slots[0].index = 8
+  const badIndexResult = validateDataReplacement(current, badIndex)
+  assert.equal(badIndexResult.ok, false)
+  assert.equal(badIndexResult.status, 400)
+
+  const missingMember = createSnapshot()
+  missingMember.teams[0].slots[0].status = 'occupied'
+  const missingMemberResult = validateDataReplacement(current, missingMember)
+  assert.equal(missingMemberResult.ok, false)
+  assert.equal(missingMemberResult.status, 400)
+
+  const malformedMember = createSnapshot()
+  malformedMember.teams[0].slots[0] = {
+    ...malformedMember.teams[0].slots[0],
+    status: 'occupied',
+    member: {
+      qq: '10001',
+      martialArtIndex: '1',
+      gearScore: 1200,
+      characterId: 'A',
+      note: '',
+    },
+  }
+  const malformedMemberResult = validateDataReplacement(current, malformedMember)
+  assert.equal(malformedMemberResult.ok, false)
+  assert.equal(malformedMemberResult.status, 400)
+})
+
 test('renameTeam preserves regular emoji and embedded image markers', () => {
   for (const apply of [applyMutation, applyClientMutation]) {
     const emoji = apply(createSnapshot(), {
