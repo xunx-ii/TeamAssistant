@@ -1,7 +1,9 @@
 import { Level } from 'level'
 import { existsSync, readFileSync } from 'fs'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { mkdir, readdir, rename, rm, writeFile } from 'fs/promises'
 import { basename, join } from 'path'
+import { promisify } from 'util'
+import { gzip } from 'zlib'
 
 const DATA_KEY = 'app:data'
 const LOCKS_KEY = 'app:locks'
@@ -9,7 +11,9 @@ const ENCODING_MARKER = '__teamAssistantEncoding'
 const BASE64_UTF8 = 'base64:utf8'
 const BASE64_BINARY = 'base64:binary'
 const BACKUP_PREFIX = 'backup-'
-const BACKUP_SUFFIX = '.json'
+const BACKUP_SUFFIX = '.json.gz'
+const LEGACY_BACKUP_SUFFIX = '.json'
+const gzipAsync = promisify(gzip)
 
 function isNotFoundError(error) {
   return Boolean(
@@ -118,23 +122,34 @@ export function decodeFromLevelValue(value) {
   return value
 }
 
-function readLegacyJson(filePath, normalize, fallback) {
+function readLegacyJson(filePath, normalize) {
   try {
     if (filePath && existsSync(filePath)) {
-      return normalize(JSON.parse(readFileSync(filePath, 'utf-8')))
+      return {
+        found: true,
+        value: normalize(JSON.parse(readFileSync(filePath, 'utf-8'))),
+      }
     }
   } catch { /* ignore invalid legacy data */ }
-  return fallback
+  return { found: false, value: null }
 }
 
 function backupFileName(now) {
   return `${BACKUP_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}${BACKUP_SUFFIX}`
 }
 
-async function writeJsonFileAtomic(filePath, value) {
+async function writeCompressedJsonFileAtomic(filePath, value) {
   const tmpFile = `${filePath}.tmp`
-  await writeFile(tmpFile, JSON.stringify(value, null, 2), 'utf8')
+  const content = Buffer.from(JSON.stringify(value), 'utf8')
+  await writeFile(tmpFile, await gzipAsync(content))
   await rename(tmpFile, filePath)
+}
+
+function isBackupFileName(name) {
+  return name.startsWith(BACKUP_PREFIX) && (
+    name.endsWith(BACKUP_SUFFIX) ||
+    name.endsWith(LEGACY_BACKUP_SUFFIX)
+  )
 }
 
 export function createLevelStore({
@@ -162,16 +177,32 @@ export function createLevelStore({
     await db.put(key, encodeForLevelValue(value))
   }
 
+  function isFallbackValue(value, fallback) {
+    return JSON.stringify(value) === JSON.stringify(fallback)
+  }
+
   async function migrateLegacy(key, filePath, normalize, fallback) {
+    let current
+    let hasCurrent = false
     try {
-      const current = await db.get(key)
-      if (current !== undefined) return
+      current = await db.get(key)
+      hasCurrent = current !== undefined
     } catch (error) {
       if (!isNotFoundError(error)) throw error
     }
 
-    const legacy = readLegacyJson(filePath, normalize, fallback)
-    await putEncoded(key, legacy)
+    const legacy = readLegacyJson(filePath, normalize)
+    if (legacy.found) {
+      const currentValue = hasCurrent ? normalize(decodeFromLevelValue(current)) : fallback
+      if (!hasCurrent || isFallbackValue(currentValue, fallback)) {
+        await putEncoded(key, legacy.value)
+      }
+      return
+    }
+
+    if (!hasCurrent) {
+      await putEncoded(key, fallback)
+    }
   }
 
   async function pruneBackups() {
@@ -181,7 +212,7 @@ export function createLevelStore({
       throw error
     })
     const backups = entries
-      .filter(name => name.startsWith(BACKUP_PREFIX) && name.endsWith(BACKUP_SUFFIX))
+      .filter(isBackupFileName)
       .sort()
       .reverse()
     const stale = backups.slice(maxBackups)
@@ -215,7 +246,7 @@ export function createLevelStore({
       if (!backupDir) return null
       await mkdir(backupDir, { recursive: true })
       const filePath = join(backupDir, backupFileName(now))
-      await writeJsonFileAtomic(filePath, {
+      await writeCompressedJsonFileAtomic(filePath, {
         version: 1,
         createdAt: now.toISOString(),
         data: await this.readData(),
