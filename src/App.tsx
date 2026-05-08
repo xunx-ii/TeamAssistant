@@ -7,7 +7,7 @@ import {
   loadCancellations, saveCancellations, setCancellationsLocal,
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
-  initServerMode, loadFromServer,
+  initServerMode, loadFromServer, hasHydratableTeams,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection } from './types'
 import { createEmptySlots, generateId } from './types'
@@ -100,7 +100,6 @@ function App() {
 
   useEffect(() => {
     initServerMode().then(async (sm) => {
-      setServerMode(sm)
       if (sm) {
         const ok = await loadFromServer()
         if (ok) {
@@ -122,6 +121,7 @@ function App() {
           await saveCancellations(loadCancellations())
         }
       }
+      setServerMode(sm)
     })
   }, [syncSnapshot])
 
@@ -146,6 +146,7 @@ function App() {
     const poll = async () => {
       const data = await fetchData()
       if (!data) return
+      if (!hasHydratableTeams(data)) return
       if (data.locks) setLocks(data.locks)
       const snapshot = {
         teams: data.teams || [],

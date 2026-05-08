@@ -1,5 +1,5 @@
 import type { ArchivedTeam, Cancellation, OperationLog, Team } from './types'
-import { checkServer, fetchData, pushData } from './api'
+import { checkServer, fetchData, pushData, type ServerData } from './api'
 
 const KEYS = {
   teams: 'team_teams_v3',
@@ -14,6 +14,10 @@ let serverMode = false
 export async function initServerMode(): Promise<boolean> {
   serverMode = await checkServer()
   return serverMode
+}
+
+export function hasHydratableTeams(data: Pick<ServerData, 'teams'> | null | undefined): data is ServerData {
+  return Array.isArray(data?.teams) && data.teams.length > 0
 }
 
 // localStorage read helpers
@@ -120,10 +124,7 @@ export async function loadFromServer(): Promise<boolean> {
   if (!serverMode) return false
   try {
     const data = await fetchData()
-    if (!data) return false
-    if (!Array.isArray(data.teams) || data.teams.length === 0) {
-      return false
-    }
+    if (!hasHydratableTeams(data)) return false
     setTeamsLocal(data.teams ?? [])
     setCancellationsLocal(data.cancellations ?? [])
     setArchivedTeamsLocal(data.archivedTeams ?? [])
