@@ -237,6 +237,14 @@ export async function restoreBackup(name: string): Promise<BackupActionResult> {
   })
 }
 
+export async function deleteBackup(name: string): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
 export async function importBackupFile(file: File): Promise<BackupActionResult> {
   return requestResult<BackupActionResult>(`${API}/backups/import`, {
     method: 'POST',

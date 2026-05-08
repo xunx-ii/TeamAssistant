@@ -376,8 +376,13 @@ export function createLevelStore({
 
     async restoreBackup(name) {
       const backup = await readBackupPayload(name)
-      await this.backupNow()
       return restoreBackupPayload(backup)
+    },
+
+    async deleteBackup(name) {
+      if (!backupDir) throw new Error('Backup directory is not configured')
+      assertSafeBackupName(name)
+      await rm(join(backupDir, name))
     },
 
     async importBackup(buffer, now = new Date()) {

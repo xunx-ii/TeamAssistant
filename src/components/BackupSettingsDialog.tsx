@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createBackup,
+  deleteBackup,
   fetchBackups,
   importBackupFile,
   restoreBackup,
@@ -84,6 +85,17 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   }
 
   const handleRestore = async (name: string) => {
+    const shouldBackupCurrent = window.confirm('回退前是否先备份当前数据？\n确定：先备份再回退\n取消：不备份，继续下一步')
+    if (shouldBackupCurrent) {
+      setBusy(true)
+      setMessage('')
+      const backupResult = await createBackup()
+      setBusy(false)
+      if (!backupResult.ok) {
+        setMessage(backupResult.error ?? '回退前备份失败')
+        return
+      }
+    }
     if (!window.confirm('确定回退到该备份版本？')) return
     setBusy(true)
     setMessage('')
@@ -91,9 +103,23 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (result.ok && result.data) {
       onRestored(result.data)
       await loadBackups()
-      setMessage('已回退')
+      setMessage(shouldBackupCurrent ? '已备份并回退' : '已回退')
     } else {
       setMessage(result.error ?? '回退失败')
+    }
+    setBusy(false)
+  }
+
+  const handleDelete = async (name: string) => {
+    if (!window.confirm('确定删除该备份？')) return
+    setBusy(true)
+    setMessage('')
+    const result = await deleteBackup(name)
+    if (result.ok) {
+      setBackups(result.backups ?? [])
+      setMessage('已删除')
+    } else {
+      setMessage(result.error ?? '删除失败')
     }
     setBusy(false)
   }
@@ -166,6 +192,15 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
                   onClick={() => { void handleRestore(backup.name) }}
                 >
                   回退
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy}
+                  className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                  onClick={() => { void handleDelete(backup.name) }}
+                >
+                  删除
                 </Button>
               </div>
             ))}

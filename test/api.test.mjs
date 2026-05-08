@@ -117,6 +117,9 @@ test('backup API helpers use the backup endpoints', async () => {
     const restored = await mod.restoreBackup('backup-2026-01-01T00-00-00-000Z.json.gz')
     assert.equal(restored.ok, true)
 
+    const deleted = await mod.deleteBackup('backup-2026-01-01T00-00-00-000Z.json.gz')
+    assert.equal(deleted.ok, true)
+
     const file = {
       arrayBuffer: async () => Buffer.from('backup').buffer,
     }
@@ -128,6 +131,8 @@ test('backup API helpers use the backup endpoints', async () => {
   assert.equal(calls[0].input, '/api/backups')
   assert.equal(calls[1].init.method, 'POST')
   assert.equal(calls[2].input, '/api/backups/restore')
-  assert.equal(calls[3].input, '/api/backups/import')
-  assert.equal(calls[3].init.headers['Content-Type'], 'application/octet-stream')
+  assert.equal(calls[3].input, '/api/backups')
+  assert.equal(calls[3].init.method, 'DELETE')
+  assert.equal(calls[4].input, '/api/backups/import')
+  assert.equal(calls[4].init.headers['Content-Type'], 'application/octet-stream')
 })

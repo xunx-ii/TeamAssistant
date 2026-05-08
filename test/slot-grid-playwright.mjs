@@ -322,9 +322,16 @@ try {
   await adminPage.getByRole('button', { name: '备份设置' }).click()
   const restoreDialog = adminPage.locator('[role="dialog"]')
   await restoreDialog.waitFor()
-  adminPage.once('dialog', dialog => { void dialog.accept() })
+  adminPage.once('dialog', dialog => {
+    assert.match(dialog.message(), /回退前是否先备份当前数据/)
+    adminPage.once('dialog', secondDialog => {
+      assert.match(secondDialog.message(), /确定回退到该备份版本/)
+      void secondDialog.accept()
+    })
+    void dialog.accept()
+  })
   await restoreDialog.getByRole('button', { name: '回退' }).first().click()
-  await waitForText(restoreDialog, /已回退/, adminPage)
+  await waitForText(restoreDialog, /已备份并回退|已回退/, adminPage)
   await adminPage.getByRole('button', { name: 'Close' }).click()
   await restoreDialog.waitFor({ state: 'detached' })
   await waitForText(adminPage.locator('h2'), /管理测试团/, adminPage)
@@ -332,6 +339,7 @@ try {
   await adminPage.getByRole('button', { name: '备份设置' }).click()
   const importDialog = adminPage.locator('[role="dialog"]')
   await importDialog.waitFor()
+  await assertCellContains(importDialog, /删除/)
   const fileChooserPromise = adminPage.waitForEvent('filechooser')
   await importDialog.getByRole('button', { name: '导入备份文件' }).click()
   const fileChooser = await fileChooserPromise

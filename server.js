@@ -156,6 +156,22 @@ api.post('/backups/restore', async (req, res) => {
   }
 })
 
+api.delete('/backups', async (req, res) => {
+  try {
+    const { name } = req.body ?? {}
+    if (typeof name !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Missing backup name' })
+    }
+    const backups = await withSharedStorage(async () => {
+      await store.deleteBackup(name)
+      return store.listBackups()
+    })
+    res.json({ ok: true, backups })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Delete backup failed' })
+  }
+})
+
 api.post(
   '/backups/import',
   express.raw({ type: 'application/octet-stream', limit: '50mb' }),

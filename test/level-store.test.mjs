@@ -311,6 +311,31 @@ test('level store lists and restores compressed backups', async () => {
     const restored = await store.restoreBackup(backupName)
     assert.equal(restored.data.teams[0].id, 'team-before')
     assert.equal((await store.readData()).teams[0].id, 'team-before')
+    assert.deepEqual((await store.listBackups()).map(item => item.name), [backupName])
+    await store.close()
+  })
+})
+
+test('level store deletes backup files explicitly', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir)
+    await store.init()
+    await store.writeData({
+      teams: [{ id: 'team-delete-backup', name: '删除备份', slots: [] }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+
+    const backupName = await store.backupNow(new Date('2026-01-01T03:30:00.000Z'))
+    assert.equal((await store.listBackups()).length, 1)
+
+    await store.deleteBackup(backupName)
+    assert.deepEqual(await store.listBackups(), [])
+    await assert.rejects(
+      () => store.deleteBackup('../backup-2026-01-01T03-30-00-000Z.json.gz'),
+      /Invalid backup name/,
+    )
     await store.close()
   })
 })
