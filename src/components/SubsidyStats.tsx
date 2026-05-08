@@ -2,8 +2,11 @@ import { useMemo, useState } from 'react'
 import type { SubsidyTarget } from '../types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
+import { Button } from './ui/button'
 import { formatWeekRange } from '../week'
 import { getSubsidyWeekOptions, resolveSubsidySelectionWeekStart } from '../subsidy'
+
+const PAGE_SIZE = 8
 
 interface Props {
   open: boolean
@@ -13,12 +16,13 @@ interface Props {
 
 interface StatRow {
   qq: string
-  details: string
+  details: string[]
   gold: number
 }
 
 export function SubsidyStats({ open, targets, onClose }: Props) {
   const [selectedWeekStart, setSelectedWeekStart] = useState('')
+  const [page, setPage] = useState(0)
   const availableWeeks = useMemo(() => getSubsidyWeekOptions(targets), [targets])
   const resolvedWeekStart = availableWeeks.includes(selectedWeekStart)
     ? selectedWeekStart
@@ -38,10 +42,10 @@ export function SubsidyStats({ open, targets, onClose }: Props) {
           const level = subsidyType.levels.find(item => item.name === selection.levelName)
           if (!level) continue
           const gold = Number(level.gold) || 0
-          const current = result.get(qq) ?? { qq, details: '', gold: 0 }
+          const current = result.get(qq) ?? { qq, details: [], gold: 0 }
           current.gold += gold
           const detail = `${target.name}：${subsidyType.name}${selection.levelName}(${gold}金)`
-          current.details = current.details ? `${current.details} + ${detail}` : detail
+          current.details.push(detail)
           result.set(qq, current)
         }
       }
@@ -50,6 +54,13 @@ export function SubsidyStats({ open, targets, onClose }: Props) {
       .filter(row => row.gold > 0)
       .sort((a, b) => b.gold - a.gold || a.qq.localeCompare(b.qq))
   }, [resolvedWeekStart, targets])
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const resolvedPage = Math.min(page, pageCount - 1)
+  const pagedRows = rows.slice(resolvedPage * PAGE_SIZE, (resolvedPage + 1) * PAGE_SIZE)
+  const handleWeekChange = (weekStart: string) => {
+    setSelectedWeekStart(weekStart)
+    setPage(0)
+  }
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
@@ -58,7 +69,7 @@ export function SubsidyStats({ open, targets, onClose }: Props) {
           <DialogTitle className="text-sm">补贴统计</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <Select value={resolvedWeekStart} onValueChange={setSelectedWeekStart}>
+          <Select value={resolvedWeekStart} onValueChange={handleWeekChange}>
             <SelectTrigger className="h-9 text-sm">
               <SelectValue placeholder="选择周" />
             </SelectTrigger>
@@ -82,15 +93,46 @@ export function SubsidyStats({ open, targets, onClose }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map(row => (
+                {pagedRows.map(row => (
                   <tr key={row.qq} className="border-b border-border last:border-0">
                     <td className="py-2 font-mono text-foreground">{row.qq}</td>
-                    <td className="py-2 text-foreground break-words">{row.details}</td>
+                    <td className="py-2 text-foreground">
+                      <div className="space-y-1">
+                        {row.details.map((detail, index) => (
+                          <div key={`${row.qq}-${index}`} className="break-words leading-5">
+                            {detail}
+                          </div>
+                        ))}
+                      </div>
+                    </td>
                     <td className="py-2 text-right font-bold text-amber-600">{row.gold}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+          {rows.length > PAGE_SIZE && (
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => setPage(Math.max(0, resolvedPage - 1))}
+                disabled={resolvedPage === 0}
+              >
+                上一页
+              </Button>
+              <span className="text-xs text-muted-foreground tabular-nums">{resolvedPage + 1}/{pageCount}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => setPage(Math.min(pageCount - 1, resolvedPage + 1))}
+                disabled={resolvedPage >= pageCount - 1}
+              >
+                下一页
+              </Button>
+            </div>
           )}
         </div>
       </DialogContent>
