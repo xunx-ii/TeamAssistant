@@ -350,13 +350,13 @@ body {
 }
 
 .pixel-slot-owned {
-  border-color: #FF4040;
-  outline: 2px solid #FF4040;
+  border-color: var(--primary);
+  outline: 2px solid var(--primary);
   outline-offset: 1px;
 }
 
 .pixel-slot-owned:hover {
-  outline-color: #E11D48;
+  outline-color: var(--primary);
 }
 
 .pixel-slot-legend {

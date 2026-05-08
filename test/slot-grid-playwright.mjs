@@ -111,7 +111,7 @@ try {
     const style = getComputedStyle(element)
     return `${style.outlineColor} ${style.borderTopColor}`
   })
-  assert.match(ownColors, /rgb\(255, 64, 64\)/)
+  assert.match(ownColors, /rgb\(255, 105, 180\)/)
 
   const reservedCell = page.locator('[data-slot-index="1"]')
   await assertCellContains(reservedCell, /老板位/)
