@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Label } from './ui/label'
 import { Textarea } from './ui/textarea'
+import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
@@ -56,8 +57,10 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!reason.trim() || error) return
-    onConfirm(reason.trim(), lockTimestamp)
+    const textReason = normalizeTextInput(reason, { maxLength: TEXT_INPUT_LIMITS.cancelReason, multiline: true })
+    if (!textReason || error) return
+    setReason(textReason)
+    onConfirm(textReason, lockTimestamp)
   }
 
   return (
@@ -75,7 +78,13 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
             <Label>取消原因</Label>
-            <Textarea value={reason} onChange={e => setReason(e.target.value)} placeholder="填写取消原因" rows={3} />
+            <Textarea
+              value={reason}
+              maxLength={TEXT_INPUT_LIMITS.cancelReason}
+              onChange={e => setReason(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.cancelReason, multiline: true }))}
+              placeholder="填写取消原因"
+              rows={3}
+            />
           </div>
           <Button type="submit" variant="destructive" className="w-full">确认取消</Button>
         </form>

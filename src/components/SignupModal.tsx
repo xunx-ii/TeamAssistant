@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
+import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
@@ -26,10 +27,10 @@ interface Props {
 }
 
 export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
-  const [martialArt, setMartialArt] = useState(existing?.martialArtIndex ?? '')
-  const [gearScore, setGearScore] = useState(existing?.gearScore ?? '')
-  const [characterId, setCharacterId] = useState(existing?.characterId ?? '')
-  const [note, setNote] = useState(existing?.note ?? '')
+  const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
+  const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
+  const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
+  const [note, setNote] = useState(sanitizeTextInput(existing?.note ?? '', { maxLength: TEXT_INPUT_LIMITS.note }))
   const [hasOrangeWeapon, setHasOrangeWeapon] = useState(existing?.hasOrangeWeapon ?? false)
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [error, setError] = useState('')
@@ -83,8 +84,16 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!martialArt || !characterId) return
-    if (isDPS && !gearScore) return
+    const textMartialArt = sanitizeIntegerInput(martialArt, 3)
+    const textGearScore = sanitizeIntegerInput(gearScore, TEXT_INPUT_LIMITS.gearScore)
+    const textCharacterId = normalizeTextInput(characterId, { maxLength: TEXT_INPUT_LIMITS.characterId })
+    const textNote = normalizeTextInput(note, { maxLength: TEXT_INPUT_LIMITS.note })
+    setMartialArt(textMartialArt)
+    setGearScore(textGearScore)
+    setCharacterId(textCharacterId)
+    setNote(textNote)
+    if (!textMartialArt || !textCharacterId) return
+    if (isDPS && !textGearScore) return
     setError('')
     if (teamId && slotInfo != null && lockTimestamp > 0) {
       const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)
@@ -94,7 +103,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
         return
       }
     }
-    const maIdx = parseInt(martialArt)
+    const maIdx = parseInt(textMartialArt)
     const ma = martialArts[maIdx]
     if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing && !isBossSlot) {
       if (takenMartialArts.includes(maIdx)) {
@@ -102,7 +111,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
         return
       }
     }
-    onConfirm({ martialArtIndex: martialArt, gearScore, characterId, note, hasOrangeWeapon }, lockTimestamp)
+    onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockTimestamp)
   }
 
   // Filter martial arts by search
@@ -191,8 +200,15 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                   onChange={e => {
                     if (readOnly) return
                     setMartialArt('')
-                    setMaSearch(e.target.value)
+                    setMaSearch(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.search }))
                     setShowMaDropdown(true)
+                  }}
+                  maxLength={TEXT_INPUT_LIMITS.search}
+                  onDrop={event => {
+                    if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()
+                  }}
+                  onPaste={event => {
+                    if (hasNonTextTransfer(event.clipboardData)) event.preventDefault()
                   }}
                   onFocus={() => {
                     if (readOnly) return
@@ -274,7 +290,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                 ref={gearScoreRef}
                 type="number"
                 value={gearScore}
-                onChange={e => { if (!readOnly) setGearScore(e.target.value) }}
+                onChange={e => { if (!readOnly) setGearScore(sanitizeIntegerInput(e.target.value, TEXT_INPUT_LIMITS.gearScore)) }}
                 placeholder={isDPS ? '装分' : '层数'}
                 disabled={readOnly}
               />
@@ -300,11 +316,23 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
           </div>
           <div className="space-y-1.5">
             <Label>角色ID</Label>
-            <Input value={characterId} onChange={e => { if (!readOnly) setCharacterId(e.target.value) }} placeholder="角色ID" disabled={readOnly} />
+            <Input
+              value={characterId}
+              maxLength={TEXT_INPUT_LIMITS.characterId}
+              onChange={e => { if (!readOnly) setCharacterId(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.characterId })) }}
+              placeholder="角色ID"
+              disabled={readOnly}
+            />
           </div>
           <div className="space-y-1.5">
             <Label>备注</Label>
-            <Input value={note} onChange={e => { if (!readOnly) setNote(e.target.value) }} placeholder="备注" disabled={readOnly} />
+            <Input
+              value={note}
+              maxLength={TEXT_INPUT_LIMITS.note}
+              onChange={e => { if (!readOnly) setNote(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.note })) }}
+              placeholder="备注"
+              disabled={readOnly}
+            />
           </div>
           {showActions && (
             <div className="flex gap-2 pt-1">

@@ -4,6 +4,7 @@ import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import type { SubsidyType } from '../types'
 import { loadSubsidyPresets } from '../subsidyPresets'
+import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
@@ -50,7 +51,7 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
   }
 
   const updateTypeName = (typeId: string, name: string) => {
-    setTypes(prev => prev.map(t => t.id === typeId ? { ...t, name } : t))
+    setTypes(prev => prev.map(t => t.id === typeId ? { ...t, name: sanitizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }) } : t))
     markDirty()
   }
 
@@ -78,7 +79,9 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
       const levels = [...t.levels]
       levels[levelIndex] = {
         ...levels[levelIndex],
-        [field]: field === 'gold' ? (parseInt(value) || 0) : value,
+        [field]: field === 'gold'
+          ? (parseInt(sanitizeIntegerInput(value, 8)) || 0)
+          : sanitizeTextInput(value, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
       }
       return { ...t, levels }
     }))
@@ -109,7 +112,18 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
   }
 
   const handleSave = () => {
-    const valid = types.filter(t => t.name.trim() && t.levels.length > 0)
+    const valid = types
+      .map(t => ({
+        ...t,
+        name: normalizeTextInput(t.name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }),
+        levels: t.levels
+          .map(level => ({
+            ...level,
+            name: normalizeTextInput(level.name, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
+          }))
+          .filter(level => level.name),
+      }))
+      .filter(t => t.name && t.levels.length > 0)
     onSave(valid)
     setDirty(false)
     onClose()
@@ -129,6 +143,7 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
                 <Input
                   className="h-7 text-sm flex-1"
                   value={t.name}
+                  maxLength={TEXT_INPUT_LIMITS.subsidyName}
                   onChange={e => updateTypeName(t.id, e.target.value)}
                   placeholder="如：伤害补贴"
                 />
@@ -144,6 +159,7 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
                     <Input
                       className="h-7 text-sm w-20"
                       value={level.name}
+                      maxLength={TEXT_INPUT_LIMITS.subsidyLevelName}
                       onChange={e => updateLevel(t.id, idx, 'name', e.target.value)}
                       placeholder="第一"
                     />

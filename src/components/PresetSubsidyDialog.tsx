@@ -4,6 +4,7 @@ import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import type { SubsidyLevel, SubsidyType } from '../types'
 import { loadSubsidyPresets, saveSubsidyPresets } from '../subsidyPresets'
+import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
@@ -34,7 +35,7 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
   }
 
   const updateName = (id: string, name: string) => {
-    setPresets(prev => prev.map(t => t.id === id ? { ...t, name } : t))
+    setPresets(prev => prev.map(t => t.id === id ? { ...t, name: sanitizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }) } : t))
   }
 
   const addLevel = (typeId: string) => {
@@ -53,13 +54,29 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
     setPresets(prev => prev.map(t => {
       if (t.id !== typeId) return t
       const levels = [...t.levels]
-      levels[idx] = { ...levels[idx], [field]: field === 'gold' ? (parseInt(value) || 0) : value }
+      levels[idx] = {
+        ...levels[idx],
+        [field]: field === 'gold'
+          ? (parseInt(sanitizeIntegerInput(value, 8)) || 0)
+          : sanitizeTextInput(value, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
+      }
       return { ...t, levels }
     }))
   }
 
   const handleSave = () => {
-    const valid = presets.filter(t => t.name.trim() && t.levels.length > 0 && t.levels.every(l => l.name.trim()))
+    const valid = presets
+      .map(t => ({
+        ...t,
+        name: normalizeTextInput(t.name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }),
+        levels: t.levels
+          .map(l => ({
+            ...l,
+            name: normalizeTextInput(l.name, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
+          }))
+          .filter(l => l.name),
+      }))
+      .filter(t => t.name && t.levels.length > 0)
     saveSubsidyPresets(valid)
     onClose()
   }
@@ -77,6 +94,7 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
               <Input
                 className="h-7 text-sm flex-1"
                 value={t.name}
+                maxLength={TEXT_INPUT_LIMITS.subsidyName}
                 onChange={e => updateName(t.id, e.target.value)}
                 placeholder="如：伤害补贴"
               />
@@ -92,6 +110,7 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
                   <Input
                     className="h-7 text-sm w-20"
                     value={l.name}
+                    maxLength={TEXT_INPUT_LIMITS.subsidyLevelName}
                     onChange={e => updateLevel(t.id, idx, 'name', e.target.value)}
                     placeholder="第一"
                   />

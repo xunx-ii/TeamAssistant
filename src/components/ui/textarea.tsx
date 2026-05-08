@@ -1,8 +1,9 @@
 import * as React from 'react'
 import { cn } from '../../lib/utils'
+import { hasNonTextTransfer } from '../../textInput'
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  ({ className, ...props }, ref) => {
+  ({ className, onDrop, onPaste, ...props }, ref) => {
     return (
       <textarea
         className={cn(
@@ -10,6 +11,20 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttribu
           className,
         )}
         ref={ref}
+        onDrop={(event) => {
+          if (hasNonTextTransfer(event.dataTransfer)) {
+            event.preventDefault()
+            return
+          }
+          onDrop?.(event)
+        }}
+        onPaste={(event) => {
+          if (hasNonTextTransfer(event.clipboardData)) {
+            event.preventDefault()
+            return
+          }
+          onPaste?.(event)
+        }}
         {...props}
       />
     )

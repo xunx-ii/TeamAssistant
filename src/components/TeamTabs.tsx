@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, memo } from 'react'
 import { GripVertical, Plus } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   teams: { id: string; name: string }[]
@@ -38,8 +39,9 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
   }
 
   const commitEdit = () => {
-    if (editingId && editValue.trim()) {
-      onRename(editingId, editValue.trim())
+    const teamName = normalizeTextInput(editValue, { maxLength: TEXT_INPUT_LIMITS.teamName })
+    if (editingId && teamName) {
+      onRename(editingId, teamName)
     }
     setEditingId(null)
   }
@@ -115,7 +117,8 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
                 ref={inputRef}
                 className="h-6 w-[100px] text-sm px-1 py-0 pixel-input"
                 value={editValue}
-                onChange={e => setEditValue(e.target.value)}
+                maxLength={TEXT_INPUT_LIMITS.teamName}
+                onChange={e => setEditValue(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.teamName }))}
                 onBlur={commitEdit}
                 onKeyDown={handleKeyDown}
                 onClick={e => e.stopPropagation()}

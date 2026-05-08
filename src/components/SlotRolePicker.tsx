@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
@@ -22,7 +23,7 @@ export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt
   const [assignQQ, setAssignQQ] = useState('')
 
   const handlePick = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, maIdx: number | null = null) => {
-    const qq = assignQQ.trim() || undefined
+    const qq = normalizeTextInput(assignQQ, { maxLength: TEXT_INPUT_LIMITS.qq }) || undefined
     onSet(role, maIdx, qq)
   }
 
@@ -73,7 +74,8 @@ export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt
                 className="h-8 text-sm"
                 placeholder="输入QQ号直接占位"
                 value={assignQQ}
-                onChange={e => setAssignQQ(e.target.value)}
+                maxLength={TEXT_INPUT_LIMITS.qq}
+                onChange={e => setAssignQQ(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq }))}
               />
             </div>
             <div className="grid grid-cols-2 gap-1 max-h-72 overflow-y-auto">

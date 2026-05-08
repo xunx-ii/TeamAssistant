@@ -1,8 +1,11 @@
 import * as React from 'react'
 import { cn } from '../../lib/utils'
+import { hasNonTextTransfer } from '../../textInput'
 
 const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
-  ({ className, type, ...props }, ref) => {
+  ({ className, type, onDrop, onPaste, ...props }, ref) => {
+    const blockNonTextTransfer = type !== 'file'
+
     return (
       <input
         type={type}
@@ -11,6 +14,20 @@ const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLI
           className,
         )}
         ref={ref}
+        onDrop={(event) => {
+          if (blockNonTextTransfer && hasNonTextTransfer(event.dataTransfer)) {
+            event.preventDefault()
+            return
+          }
+          onDrop?.(event)
+        }}
+        onPaste={(event) => {
+          if (blockNonTextTransfer && hasNonTextTransfer(event.clipboardData)) {
+            event.preventDefault()
+            return
+          }
+          onPaste?.(event)
+        }}
         {...props}
       />
     )

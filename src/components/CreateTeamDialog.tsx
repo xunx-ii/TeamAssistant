@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
@@ -14,7 +15,7 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const trimmed = name.trim()
+    const trimmed = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
     if (!trimmed) return
     onConfirm(trimmed)
     setName('')
@@ -31,7 +32,8 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
             autoFocus
             placeholder="输入团队名称"
             value={name}
-            onChange={e => setName(e.target.value)}
+            maxLength={TEXT_INPUT_LIMITS.teamName}
+            onChange={e => setName(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.teamName }))}
           />
           <Button type="submit">创建</Button>
         </form>

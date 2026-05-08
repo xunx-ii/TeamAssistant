@@ -15,6 +15,7 @@ import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
+import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SubsidyConfigDialog } from './components/SubsidyConfig'
@@ -34,9 +35,10 @@ import { Button } from './components/ui/button'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 
 function createDefaultTeam(name = '默认团队'): Team {
+  const textName = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
   return {
     id: generateId(),
-    name: normalizeTeamName(name, '默认团队'),
+    name: normalizeTeamName(textName, '默认团队'),
     note: '',
     config: { reservedSlots: [], locked: false },
     slots: createEmptySlots(),
@@ -242,13 +244,14 @@ function App() {
 
   const handleAdminRename = useCallback((name: string) => {
     if (activeTeam) {
-      const normalizedName = normalizeTeamName(name, activeTeam.name)
+      const normalizedName = normalizeTeamName(normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName }), activeTeam.name)
       void runMutation({ type: 'renameTeam', teamId: activeTeam.id, name: normalizedName })
     }
   }, [activeTeam, runMutation])
 
   const handleCreateTeam = async (name: string) => {
-    const team = createDefaultTeam(normalizeTeamName(name, '默认团队'))
+    const teamName = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
+    const team = createDefaultTeam(normalizeTeamName(teamName, '默认团队'))
     const result = await runMutation({ type: 'createTeam', team })
     if (result.ok) {
       setActiveTeamId(team.id)
@@ -298,24 +301,27 @@ function App() {
 
   const handleRenameTeam = (id: string, name: string) => {
     const currentName = teams.find(team => team.id === id)?.name ?? '默认团队'
-    void runMutation({ type: 'renameTeam', teamId: id, name: normalizeTeamName(name, currentName) })
+    const teamName = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
+    void runMutation({ type: 'renameTeam', teamId: id, name: normalizeTeamName(teamName, currentName) })
   }
 
   const handleUpdateNote = (note: string) => {
     if (!activeTeam) return
-    void runMutation({ type: 'updateTeamNote', teamId: activeTeam.id, note })
+    const textNote = sanitizeTextInput(note, { maxLength: TEXT_INPUT_LIMITS.note, multiline: true })
+    void runMutation({ type: 'updateTeamNote', teamId: activeTeam.id, note: textNote })
   }
 
   const handleSetSlotRole = async (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => {
     const slotIndex = setRoleSlot
     if (slotIndex === null || !activeTeam) return
+    const assignedQq = normalizeTextInput(assignQQ ?? '', { maxLength: TEXT_INPUT_LIMITS.qq }) || undefined
     const result = await runMutation({
       type: 'setSlotRole',
       teamId: activeTeam.id,
       slotIndex,
       role,
       martialArtIndex,
-      assignQQ,
+      assignQQ: assignedQq,
       actorQq: qq ?? undefined,
     })
     if (result.ok) {
@@ -330,7 +336,17 @@ function App() {
 
   const handleSaveSubsidyTypes = (subsidyTypes: SubsidyType[]) => {
     if (!activeTeam) return
-    void runMutation({ type: 'updateTeamSubsidyTypes', teamId: activeTeam.id, subsidyTypes })
+    const textSubsidyTypes = subsidyTypes.map(type => ({
+      ...type,
+      name: normalizeTextInput(type.name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }),
+      levels: type.levels
+        .map(level => ({
+          ...level,
+          name: normalizeTextInput(level.name, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
+        }))
+        .filter(level => level.name),
+    })).filter(type => type.name && type.levels.length > 0)
+    void runMutation({ type: 'updateTeamSubsidyTypes', teamId: activeTeam.id, subsidyTypes: textSubsidyTypes })
   }
 
   const handleRegisterSubsidies = (selections: MemberSubsidySelection[]) => {
@@ -343,7 +359,15 @@ function App() {
     if (slotIndex === null || !qq || !activeTeam) return
     const originalQq = editSlot !== null ? activeTeam.slots[editSlot]?.member?.qq : null
     if (originalQq && originalQq !== qq && !isAdmin) return
-    const member: Member = { qq: originalQq || qq, ...data }
+    const memberData: Omit<Member, 'qq'> = {
+      martialArtIndex: sanitizeIntegerInput(data.martialArtIndex, 3),
+      gearScore: sanitizeIntegerInput(data.gearScore, TEXT_INPUT_LIMITS.gearScore),
+      characterId: normalizeTextInput(data.characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }),
+      note: normalizeTextInput(data.note, { maxLength: TEXT_INPUT_LIMITS.note }),
+      hasOrangeWeapon: data.hasOrangeWeapon,
+    }
+    if (!memberData.martialArtIndex || !memberData.characterId) return
+    const member: Member = { qq: originalQq || qq, ...memberData }
     const result = await runMutation({
       type: 'signupSlot',
       teamId: activeTeam.id,
@@ -360,13 +384,15 @@ function App() {
 
   const handleCancelConfirm = async (reason: string, lockTimestamp?: number) => {
     if (cancelSlot === null || !qq || !activeTeam) return
+    const textReason = normalizeTextInput(reason, { maxLength: TEXT_INPUT_LIMITS.cancelReason, multiline: true })
+    if (!textReason) return
     const slot = activeTeam.slots[cancelSlot]
     if (slot?.member) {
       const result = await runMutation({
         type: 'cancelSlot',
         teamId: activeTeam.id,
         slotIndex: cancelSlot,
-        reason,
+        reason: textReason,
         cancelledBy: qq,
         actorQq: qq,
         lockTimestamp,
@@ -676,7 +702,7 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
   const [inputQq, setInputQq] = useState('')
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const t = inputQq.trim()
+    const t = normalizeTextInput(inputQq, { maxLength: TEXT_INPUT_LIMITS.qq })
     if (t) onLogin(t)
   }
   return (
@@ -727,7 +753,14 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
               className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
               placeholder="输入QQ号开始冒险..."
               value={inputQq}
-              onChange={e => setInputQq(e.target.value)}
+              maxLength={TEXT_INPUT_LIMITS.qq}
+              onChange={e => setInputQq(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq }))}
+              onDrop={event => {
+                if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()
+              }}
+              onPaste={event => {
+                if (hasNonTextTransfer(event.clipboardData)) event.preventDefault()
+              }}
               autoFocus
             />
           </div>
