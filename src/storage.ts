@@ -11,6 +11,8 @@ const KEYS = {
 
 let serverMode = false
 
+export type LoadFromServerResult = 'loaded' | 'empty' | 'unavailable'
+
 export async function initServerMode(): Promise<boolean> {
   serverMode = await checkServer()
   return serverMode
@@ -120,17 +122,18 @@ export function removeStoredQQ() {
   localStorage.removeItem(KEYS.qq)
 }
 
-export async function loadFromServer(): Promise<boolean> {
-  if (!serverMode) return false
+export async function loadFromServer(): Promise<LoadFromServerResult> {
+  if (!serverMode) return 'unavailable'
   try {
     const data = await fetchData()
-    if (!hasHydratableTeams(data)) return false
+    if (!data) return 'unavailable'
+    if (!hasHydratableTeams(data)) return 'empty'
     setTeamsLocal(data.teams ?? [])
     setCancellationsLocal(data.cancellations ?? [])
     setArchivedTeamsLocal(data.archivedTeams ?? [])
     setOperationLogsLocal(data.logs ?? [])
-    return true
+    return 'loaded'
   } catch {
-    return false
+    return 'unavailable'
   }
 }

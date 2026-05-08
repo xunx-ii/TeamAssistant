@@ -1,7 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { applyMutation, validateExpectedSlotMember, validateSlotMutationLock } from '../server/data-store.js'
+import {
+  applyMutation,
+  validateDataReplacement,
+  validateExpectedSlotMember,
+  validateSlotMutationLock,
+} from '../server/data-store.js'
 import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
 
 function createSnapshot() {
@@ -161,6 +166,48 @@ test('setTeamLockState updates team config lock flag', () => {
   assert.equal(unlocked.teams[0].config.locked, false)
 })
 
+test('validateDataReplacement rejects empty snapshots and accidental overwrites', () => {
+  const current = createSnapshot()
+
+  const empty = validateDataReplacement(current, { teams: [], cancellations: [], archivedTeams: [], logs: [] })
+  assert.equal(empty.ok, false)
+  assert.equal(empty.status, 400)
+
+  const accidentalOverwrite = validateDataReplacement(current, {
+    teams: [{ ...createSnapshot().teams[0], id: 'team-other' }],
+    cancellations: [],
+    archivedTeams: [],
+    logs: [],
+  })
+  assert.equal(accidentalOverwrite.ok, false)
+  assert.equal(accidentalOverwrite.status, 409)
+
+  const explicitOverwrite = validateDataReplacement(current, {
+    teams: [{ ...createSnapshot().teams[0], id: 'team-other' }],
+    cancellations: [],
+    archivedTeams: [],
+    logs: [],
+  }, { allowReplace: true })
+  assert.equal(explicitOverwrite.ok, true)
+  assert.equal(explicitOverwrite.shouldBackup, true)
+})
+
+test('validateDataReplacement allows bootstrap only with a valid non-empty snapshot', () => {
+  const result = validateDataReplacement(
+    { teams: [], cancellations: [], archivedTeams: [], logs: [] },
+    createSnapshot(),
+  )
+  assert.equal(result.ok, true)
+  assert.equal(result.shouldBackup, false)
+
+  const invalid = validateDataReplacement(
+    { teams: [], cancellations: [], archivedTeams: [], logs: [] },
+    { teams: [{ id: 'broken' }], cancellations: [], archivedTeams: [], logs: [] },
+  )
+  assert.equal(invalid.ok, false)
+  assert.equal(invalid.status, 400)
+})
+
 test('renameTeam preserves regular emoji and embedded image markers', () => {
   for (const apply of [applyMutation, applyClientMutation]) {
     const emoji = apply(createSnapshot(), {
@@ -177,6 +224,64 @@ test('renameTeam preserves regular emoji and embedded image markers', () => {
     })
     assert.equal(imageMarker.teams[0].name, '\uFFFC 图片团 \uFFFC')
     assert.equal(imageMarker.teams[0].slots.length, 25)
+  }
+})
+
+test('applyMutation preserves special text fields and reserved object keys', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const specialText = '角色\uFFFC 🌸\uD800\n第二行'
+    const imageData = `data:image/png;base64,${Buffer.from('fake image data').toString('base64')}`
+    const typeId = 'type-\uFFFC'
+    const levelName = '第一\uD800'
+
+    const signed = apply(createSnapshot(), {
+      type: 'signupSlot',
+      teamId: 'team-1',
+      slotIndex: 0,
+      member: {
+        qq: '__proto__',
+        martialArtIndex: '1',
+        gearScore: '1200',
+        characterId: specialText,
+        note: imageData,
+        hasOrangeWeapon: true,
+      },
+    })
+    assert.equal(signed.teams[0].slots[0].member?.characterId, specialText)
+    assert.equal(signed.teams[0].slots[0].member?.note, imageData)
+
+    const noted = apply(signed, {
+      type: 'updateTeamNote',
+      teamId: 'team-1',
+      note: `${specialText}\n${imageData}`,
+    })
+    assert.equal(noted.teams[0].note, `${specialText}\n${imageData}`)
+
+    const configured = apply(noted, {
+      type: 'updateTeamSubsidyTypes',
+      teamId: 'team-1',
+      subsidyTypes: [{
+        id: typeId,
+        name: '图片补贴\uFFFC',
+        levels: [{ name: levelName, gold: '5000' }],
+      }],
+    })
+    const registered = apply(configured, {
+      type: 'registerMemberSubsidies',
+      teamId: 'team-1',
+      qq: '__proto__',
+      selections: [{ typeId, levelName }],
+    })
+    const storedSelections = Object.getOwnPropertyDescriptor(registered.teams[0].memberSubsidies, '__proto__')?.value
+    assert.deepEqual(storedSelections, [{ typeId, levelName }])
+
+    const cleaned = apply(registered, {
+      type: 'updateTeamSubsidyTypes',
+      teamId: 'team-1',
+      subsidyTypes: configured.teams[0].subsidyTypes,
+    })
+    const cleanedSelections = Object.getOwnPropertyDescriptor(cleaned.teams[0].memberSubsidies, '__proto__')?.value
+    assert.deepEqual(cleanedSelections, [{ typeId, levelName }])
   }
 })
 

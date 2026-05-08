@@ -1,7 +1,13 @@
 import express from 'express'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { applyMutation, normalizeData, validateExpectedSlotMember, validateSlotMutationLock } from './server/data-store.js'
+import {
+  applyMutation,
+  normalizeData,
+  validateDataReplacement,
+  validateExpectedSlotMember,
+  validateSlotMutationLock,
+} from './server/data-store.js'
 import {
   acquireSlotLock,
   buildSlotLockMap,
@@ -97,10 +103,24 @@ api.get('/data', async (_req, res) => {
 
 api.post('/data', async (req, res) => {
   try {
-    await withSharedStorage(() => saveData(req.body))
+    await withSharedStorage(async () => {
+      const validation = validateDataReplacement(await loadData(), req.body, {
+        allowReplace: req.get('x-teamassistant-replace') === '1',
+      })
+      if (!validation.ok) {
+        const error = new Error(validation.error)
+        error.status = validation.status
+        throw error
+      }
+      if (validation.shouldBackup) {
+        await store.backupNow()
+      }
+      await saveData(validation.data)
+    })
     res.json({ ok: true })
   } catch (error) {
-    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Save failed' })
+    const status = error && typeof error === 'object' && 'status' in error ? error.status : 500
+    res.status(status).json({ ok: false, error: error instanceof Error ? error.message : 'Save failed' })
   }
 })
 

@@ -1,4 +1,4 @@
-import { open, stat, unlink } from 'fs/promises'
+import { open, stat, unlink, utimes } from 'fs/promises'
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -16,6 +16,25 @@ async function isStale(lockFile, staleMs) {
   }
 }
 
+function createLockPayload() {
+  return JSON.stringify({
+    pid: process.pid,
+    timestamp: Date.now(),
+  })
+}
+
+function startHeartbeat(lockFile, staleMs) {
+  const intervalMs = Math.max(10, Math.floor(staleMs / 3))
+  const interval = setInterval(() => {
+    const now = new Date()
+    void utimes(lockFile, now, now).catch(() => {
+      // The lock may have been removed while the holder is exiting.
+    })
+  }, intervalMs)
+  interval.unref?.()
+  return () => clearInterval(interval)
+}
+
 export async function withFileLock(lockFile, callback, options = {}) {
   const {
     retryMs = 25,
@@ -30,13 +49,12 @@ export async function withFileLock(lockFile, callback, options = {}) {
 
     try {
       handle = await open(lockFile, 'wx')
-      await handle.writeFile(JSON.stringify({
-        pid: process.pid,
-        timestamp: Date.now(),
-      }))
+      await handle.writeFile(createLockPayload())
+      const stopHeartbeat = startHeartbeat(lockFile, staleMs)
       try {
         return await callback()
       } finally {
+        stopHeartbeat()
         await handle.close()
         try {
           await unlink(lockFile)

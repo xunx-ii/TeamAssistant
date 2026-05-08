@@ -70,6 +70,79 @@ function cloneSnapshot(snapshot: Snapshot): Snapshot {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function toText(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value
+  if (value == null) return fallback
+  return String(value)
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
+function setRecordValue<T>(record: Record<string, T>, key: unknown, value: T) {
+  Object.defineProperty(record, toText(key), {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
+}
+
+function normalizeMember(member: unknown): Member {
+  if (!isPlainObject(member)) {
+    throw new Error('Invalid member')
+  }
+  const normalized: Member = {
+    qq: toText(member.qq),
+    martialArtIndex: toText(member.martialArtIndex),
+    gearScore: toText(member.gearScore),
+    characterId: toText(member.characterId),
+    note: toText(member.note),
+  }
+  if ('hasOrangeWeapon' in member) {
+    normalized.hasOrangeWeapon = Boolean(member.hasOrangeWeapon)
+  }
+  return normalized
+}
+
+function normalizeSubsidyTypes(subsidyTypes: unknown): SubsidyType[] {
+  if (!Array.isArray(subsidyTypes)) {
+    throw new Error('Invalid subsidy types')
+  }
+  return subsidyTypes
+    .filter(isPlainObject)
+    .map(type => ({
+      id: toText(type.id),
+      name: toText(type.name),
+      levels: Array.isArray(type.levels)
+        ? type.levels
+            .filter(isPlainObject)
+            .map(level => ({
+              name: toText(level.name),
+              gold: Math.max(0, toFiniteNumber(level.gold)),
+            }))
+        : [],
+    }))
+}
+
+function normalizeMemberSubsidySelections(selections: unknown): MemberSubsidySelection[] {
+  if (!Array.isArray(selections)) {
+    throw new Error('Invalid member subsidy selections')
+  }
+  return selections
+    .filter(isPlainObject)
+    .map(selection => ({
+      typeId: toText(selection.typeId),
+      levelName: toText(selection.levelName),
+    }))
+}
+
 function getTeamOrThrow(snapshot: Snapshot, teamId: string): Team {
   const team = snapshot.teams.find(item => item.id === teamId)
   if (!team) {
@@ -92,8 +165,8 @@ function appendLog(snapshot: Snapshot, team: Team, actorQq: string, action: stri
     teamId: team.id,
     teamName: team.name,
     timestamp,
-    actorQq,
-    action,
+    actorQq: toText(actorQq),
+    action: toText(action),
   })
 }
 
@@ -178,7 +251,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 
     case 'updateTeamNote': {
       const team = getTeamOrThrow(next, mutation.teamId)
-      team.note = mutation.note
+      team.note = toText(mutation.note)
       return next
     }
 
@@ -328,12 +401,13 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
         throw new Error(`Slot not found: ${mutation.slotIndex}`)
       }
       const isUpdate = Boolean(slot.member)
+      const member = normalizeMember(mutation.member)
       slot.status = 'occupied'
-      slot.member = mutation.member
+      slot.member = member
       const action = isUpdate
-        ? `修改 #${mutation.slotIndex + 1} 报名：${mutation.member.characterId}`
-        : `报名 #${mutation.slotIndex + 1}：${mutation.member.characterId}`
-      appendLog(next, team, mutation.actorQq ?? mutation.member.qq, action)
+        ? `修改 #${mutation.slotIndex + 1} 报名：${member.characterId}`
+        : `报名 #${mutation.slotIndex + 1}：${member.characterId}`
+      appendLog(next, team, mutation.actorQq ?? member.qq, action)
       return next
     }
 
@@ -345,8 +419,8 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
       }
       next.cancellations.push({
         qq: slot.member.qq,
-        reason: mutation.reason,
-        cancelledBy: mutation.cancelledBy,
+        reason: toText(mutation.reason),
+        cancelledBy: toText(mutation.cancelledBy),
         teamId: team.id,
         teamName: team.name,
         slotIndex: mutation.slotIndex,
@@ -379,14 +453,16 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 
     case 'updateTeamSubsidyTypes': {
       const team = getTeamOrThrow(next, mutation.teamId)
-      team.subsidyTypes = mutation.subsidyTypes
+      const subsidyTypes = normalizeSubsidyTypes(mutation.subsidyTypes)
+      team.subsidyTypes = subsidyTypes
       if (team.memberSubsidies) {
-        const validIds = new Set(mutation.subsidyTypes.map(t => t.id))
+        const validIds = new Set(subsidyTypes.map(t => t.id))
         const cleaned: Record<string, MemberSubsidySelection[]> = {}
         for (const [qq, selections] of Object.entries(team.memberSubsidies)) {
-          const valid = selections.filter(s => validIds.has(s.typeId))
+          if (!Array.isArray(selections)) continue
+          const valid = selections.filter(s => isPlainObject(s) && validIds.has(toText(s.typeId)))
           if (valid.length > 0) {
-            cleaned[qq] = valid
+            setRecordValue(cleaned, qq, normalizeMemberSubsidySelections(valid))
           }
         }
         team.memberSubsidies = cleaned
@@ -399,8 +475,9 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
       if (!team.memberSubsidies) {
         team.memberSubsidies = {}
       }
-      team.memberSubsidies[mutation.qq] = mutation.selections
-      appendLog(next, team, mutation.qq, '登记补贴')
+      const memberQq = toText(mutation.qq)
+      setRecordValue(team.memberSubsidies, memberQq, normalizeMemberSubsidySelections(mutation.selections))
+      appendLog(next, team, memberQq, '登记补贴')
       return next
     }
   }

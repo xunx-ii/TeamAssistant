@@ -9,6 +9,7 @@ const DATA_KEY = 'app:data'
 const LOCKS_KEY = 'app:locks'
 const ENCODING_MARKER = '__teamAssistantEncoding'
 const BASE64_UTF8 = 'base64:utf8'
+const BASE64_UTF16LE = 'base64:utf16le'
 const BASE64_BINARY = 'base64:binary'
 const BACKUP_PREFIX = 'backup-'
 const BACKUP_SUFFIX = '.json.gz'
@@ -69,7 +70,7 @@ function isEncodedValue(value) {
 export function encodeForLevelValue(value) {
   if (typeof value === 'string') {
     return shouldBase64EncodeString(value)
-      ? createEncodedValue(BASE64_UTF8, Buffer.from(value, 'utf8').toString('base64'))
+      ? createEncodedValue(BASE64_UTF16LE, Buffer.from(value, 'utf16le').toString('base64'))
       : value
   }
 
@@ -104,6 +105,9 @@ export function decodeFromLevelValue(value) {
     if (value[ENCODING_MARKER] === BASE64_UTF8) {
       return Buffer.from(value.value, 'base64').toString('utf8')
     }
+    if (value[ENCODING_MARKER] === BASE64_UTF16LE) {
+      return Buffer.from(value.value, 'base64').toString('utf16le')
+    }
     if (value[ENCODING_MARKER] === BASE64_BINARY) {
       return Buffer.from(value.value, 'base64')
     }
@@ -123,14 +127,17 @@ export function decodeFromLevelValue(value) {
 }
 
 function readLegacyJson(filePath, normalize) {
-  try {
-    if (filePath && existsSync(filePath)) {
+  if (filePath && existsSync(filePath)) {
+    try {
       return {
         found: true,
         value: normalize(JSON.parse(readFileSync(filePath, 'utf-8'))),
       }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`Failed to import legacy JSON ${basename(filePath)}: ${reason}`)
     }
-  } catch { /* ignore invalid legacy data */ }
+  }
   return { found: false, value: null }
 }
 
@@ -191,12 +198,14 @@ export function createLevelStore({
       if (!isNotFoundError(error)) throw error
     }
 
+    const currentValue = hasCurrent ? normalize(decodeFromLevelValue(current)) : fallback
+    if (hasCurrent && !isFallbackValue(currentValue, fallback)) {
+      return
+    }
+
     const legacy = readLegacyJson(filePath, normalize)
     if (legacy.found) {
-      const currentValue = hasCurrent ? normalize(decodeFromLevelValue(current)) : fallback
-      if (!hasCurrent || isFallbackValue(currentValue, fallback)) {
-        await putEncoded(key, legacy.value)
-      }
+      await putEncoded(key, legacy.value)
       return
     }
 

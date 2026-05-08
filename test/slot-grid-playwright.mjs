@@ -108,7 +108,10 @@ async function readServerData() {
 async function writeServerData(data) {
   const response = await fetch(`${apiBaseUrl}/api/data`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-teamassistant-replace': '1',
+    },
     body: JSON.stringify(toPersistentData(data)),
   })
   if (!response.ok) {

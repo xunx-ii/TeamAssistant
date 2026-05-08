@@ -50,6 +50,33 @@ test('withFileLock serializes concurrent access on shared lock file', async () =
   })
 })
 
+test('withFileLock heartbeat prevents long holders from being treated as stale', async () => {
+  await withTempDir(async (dir) => {
+    const lockFile = join(dir, '.storage.lock')
+    let activeCount = 0
+    let maxActiveCount = 0
+
+    const first = withFileLock(lockFile, async () => {
+      activeCount += 1
+      maxActiveCount = Math.max(maxActiveCount, activeCount)
+      await new Promise(resolve => setTimeout(resolve, 90))
+      activeCount -= 1
+    }, { retryMs: 5, staleMs: 30, timeoutMs: 500 })
+
+    await new Promise(resolve => setTimeout(resolve, 45))
+
+    const second = withFileLock(lockFile, async () => {
+      activeCount += 1
+      maxActiveCount = Math.max(maxActiveCount, activeCount)
+      activeCount -= 1
+    }, { retryMs: 5, staleMs: 30, timeoutMs: 500 })
+
+    await Promise.all([first, second])
+    assert.equal(maxActiveCount, 1)
+    assert.equal(activeCount, 0)
+  })
+})
+
 test('lock data written by one instance is visible to another instance', async () => {
   await withTempDir(async (dir) => {
     const lockFile = join(dir, 'locks.json')

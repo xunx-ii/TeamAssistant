@@ -4,7 +4,7 @@ import { initTheme } from './storage/theme'
 import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
   loadTeams, saveTeams, setTeamsLocal,
-  loadCancellations, saveCancellations, setCancellationsLocal,
+  loadCancellations, setCancellationsLocal,
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
   initServerMode, loadFromServer, hasHydratableTeams,
@@ -102,8 +102,8 @@ function App() {
   useEffect(() => {
     initServerMode().then(async (sm) => {
       if (sm) {
-        const ok = await loadFromServer()
-        if (ok) {
+        const loadResult = await loadFromServer()
+        if (loadResult === 'loaded') {
           const loadedTeams = loadTeams()
           const loadedCancellations = loadCancellations()
           const loadedArchivedTeams = loadArchivedTeams()
@@ -117,9 +117,8 @@ function App() {
           if (loadedTeams.length > 0) {
             setActiveTeamId(loadedTeams[0].id)
           }
-        } else {
+        } else if (loadResult === 'empty') {
           await saveTeams(loadTeams())
-          await saveCancellations(loadCancellations())
         }
       }
       setServerMode(sm)

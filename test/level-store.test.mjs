@@ -111,6 +111,41 @@ test('level store does not overwrite existing level data with legacy json', asyn
   })
 })
 
+test('level store fails startup instead of bootstrapping empty data from invalid legacy json', async () => {
+  await withTempDir(async (dir) => {
+    await writeFile(join(dir, 'data.json'), '{ broken json')
+    const store = createStore(dir)
+
+    await assert.rejects(
+      () => store.init(),
+      /Failed to import legacy JSON data\.json/,
+    )
+    await store.close().catch(() => {})
+  })
+})
+
+test('level store ignores invalid legacy json when level data already exists', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir)
+    await store.init()
+    await store.writeData({
+      teams: [{ id: 'team-level', name: '当前团', slots: [] }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+    await store.close()
+
+    await writeFile(join(dir, 'data.json'), '{ broken json')
+
+    const restartedStore = createStore(dir)
+    await restartedStore.init()
+
+    assert.equal((await restartedStore.readData()).teams[0].id, 'team-level')
+    await restartedStore.close()
+  })
+})
+
 test('level store base64 encodes non-text input before writing raw values', async () => {
   await withTempDir(async (dir) => {
     const store = createStore(dir)
@@ -133,9 +168,73 @@ test('level store base64 encodes non-text input before writing raw values', asyn
     const raw = await db.get('app:data')
     await db.close()
 
-    assert.equal(raw.teams[0].name.__teamAssistantEncoding, 'base64:utf8')
-    assert.equal(raw.teams[0].note.__teamAssistantEncoding, 'base64:utf8')
+    assert.equal(raw.teams[0].name.__teamAssistantEncoding, 'base64:utf16le')
+    assert.equal(raw.teams[0].note.__teamAssistantEncoding, 'base64:utf16le')
     assert.equal(decodeFromLevelValue(raw).teams[0].name, '图片\uFFFC团')
+  })
+})
+
+test('level store encoded strings preserve unpaired surrogate code units', () => {
+  const source = { text: '异常输入\uD800结尾' }
+  const encoded = encodeForLevelValue(source)
+  assert.equal(encoded.text.__teamAssistantEncoding, 'base64:utf16le')
+  assert.equal(decodeFromLevelValue(encoded).text, source.text)
+})
+
+test('level store still decodes legacy utf8 base64 strings', () => {
+  const legacy = {
+    text: {
+      __teamAssistantEncoding: 'base64:utf8',
+      value: Buffer.from('旧图片\uFFFC团', 'utf8').toString('base64'),
+    },
+  }
+  assert.equal(decodeFromLevelValue(legacy).text, '旧图片\uFFFC团')
+})
+
+test('level store preserves special text, embedded images, and long notes through read and backup', async () => {
+  await withTempDir(async (dir) => {
+    const specialText = '角色\uFFFC 🌸🧑‍🚀\n第二行\t制表符'
+    const imageData = `data:image/png;base64,${Buffer.from('fake image data').toString('base64')}`
+    const longNote = `${specialText}\n${imageData}\n${'长文本'.repeat(500)}`
+    const store = createStore(dir)
+    await store.init()
+    await store.writeData({
+      teams: [{
+        id: 'team-special',
+        name: `图片团 ${specialText}`,
+        note: longNote,
+        config: { reservedSlots: [], locked: false },
+        slots: [{
+          index: 0,
+          status: 'occupied',
+          member: {
+            qq: '10001',
+            martialArtIndex: '0',
+            gearScore: '1200',
+            characterId: specialText,
+            note: longNote,
+          },
+          fixedRole: null,
+          fixedMartialArtIndex: null,
+        }],
+      }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+
+    const readBack = await store.readData()
+    assert.equal(readBack.teams[0].name, `图片团 ${specialText}`)
+    assert.equal(readBack.teams[0].note, longNote)
+    assert.equal(readBack.teams[0].slots[0].member.characterId, specialText)
+    assert.equal(readBack.teams[0].slots[0].member.note, longNote)
+
+    const backupName = await store.backupNow(new Date('2026-01-01T02:00:00.000Z'))
+    const backupBuffer = await gunzipAsync(await readFile(join(dir, 'backup', backupName)))
+    const backup = JSON.parse(backupBuffer.toString('utf8'))
+    assert.equal(backup.data.teams[0].slots[0].member.note, longNote)
+
+    await store.close()
   })
 })
 
