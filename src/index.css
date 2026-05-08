@@ -349,6 +349,16 @@ body {
   z-index: 2;
 }
 
+.pixel-slot-owned {
+  border-color: #FF4040;
+  outline: 2px solid #FF4040;
+  outline-offset: 1px;
+}
+
+.pixel-slot-owned:hover {
+  outline-color: #E11D48;
+}
+
 .pixel-slot-legend {
   display: inline-block;
   width: 12px;

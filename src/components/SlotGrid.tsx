@@ -1,7 +1,15 @@
-import { useMemo, useCallback, memo } from 'react'
+import { useMemo, useCallback, memo, type ReactNode } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Slot, TeamConfig } from '../types'
 import type { SlotLock } from '../api'
+import { PixelStar } from './PixelRabbit'
+import {
+  getAvailableSlotLabel,
+  getFixedSlotLabel,
+  getOccupiedSlotDisplay,
+  getReservedSlotLabel,
+  shouldShowAvailableMarker,
+} from './slotGridDisplay'
 
 interface Props {
   slots: Slot[]
@@ -108,6 +116,13 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
     </span>
   )
 
+  const availableMarker = (className = '') => (
+    <span className={`inline-flex items-center justify-center gap-0.5 text-[11px] font-bold leading-none text-pink-500 ${className}`}>
+      <PixelStar size={12} className="shrink-0" />
+      <span>可选</span>
+    </span>
+  )
+
   return (
     <div>
       {(config.locked || teamLocked) && !isAdmin && (
@@ -130,50 +145,36 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
       </div>
       <div className="grid grid-cols-5 gap-1 sm:gap-2">
         {orderedSlots.map(slot => {
+          const isSlotLocked = lockMap.has(slot.index)
           let cellClass = 'relative flex h-[116px] cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border p-1 text-center transition-colors select-none sm:h-[120px] sm:p-2'
 
-          let content: React.ReactNode
+          let content: ReactNode
 
           if (slot.status === 'reserved') {
             cellClass += ' pixel-slot pixel-slot-reserved'
-            const label = lockMap.has(slot.index) ? '⏳ 报名中' : '🐰 老板位'
+            const label = getReservedSlotLabel(isSlotLocked)
             content = (
               <>
                 <span className="absolute top-1 left-1 text-[10px] text-purple-500 font-mono sm:left-2">#{slot.index + 1}</span>
-                <span className="text-xs text-purple-600 font-medium">{label}</span>
+                <span className="max-w-full truncate text-xs text-purple-600 font-medium">{label}</span>
+                {shouldShowAvailableMarker(slot, isSlotLocked) && availableMarker('mt-0.5')}
               </>
             )
           } else if (slot.status === 'fixed') {
             cellClass += ' pixel-slot pixel-slot-fixed'
-            const ma = slot.fixedMartialArtIndex !== null && slot.fixedMartialArtIndex < martialArts.length
-              ? martialArts[slot.fixedMartialArtIndex]
-              : null
-            const fixedLabel = lockMap.has(slot.index) ? '⏳ 报名中' :
-              (ma ? getMartialArtLabel(ma) : slot.fixedRole === 'T' ? '🛡️ T 位' : slot.fixedRole === '治疗' ? '💚 奶 位' : '⚔️ DPS 位')
+            const fixedLabel = getFixedSlotLabel(slot, isSlotLocked)
             content = (
               <>
                 <span className="absolute top-1 left-1 text-[10px] text-teal-500 font-mono sm:left-2">#{slot.index + 1}</span>
-                <span className="text-xs text-teal-600 font-medium">{fixedLabel}</span>
+                <span className="max-w-full truncate text-xs text-teal-600 font-medium">{fixedLabel}</span>
+                {shouldShowAvailableMarker(slot, isSlotLocked) && availableMarker('mt-0.5')}
                 {isAdmin && <span className="text-[10px] text-teal-500 mt-0.5">⚙️ 设置</span>}
               </>
             )
           } else if (slot.status === 'occupied' && slot.member) {
             const m = slot.member
-            const isMine = m.qq === currentQQ
-            const isBoss = config.reservedSlots.includes(slot.index)
-            const hasOrangeWeapon = Boolean(m.hasOrangeWeapon)
-            if (isBoss) {
-              cellClass += isMine
-                ? ' pixel-slot pixel-slot-boss'
-                : ' pixel-slot pixel-slot-boss opacity-90'
-            } else {
-              cellClass += isMine
-                ? ' pixel-slot pixel-slot-mine'
-                : ' pixel-slot pixel-slot-occupied'
-            }
-            if (hasOrangeWeapon) {
-              cellClass += ' pixel-slot-cw'
-            }
+            const occupiedDisplay = getOccupiedSlotDisplay(slot, config, currentQQ)
+            cellClass += ` ${occupiedDisplay.className}`
             const maIdx = parseInt(m.martialArtIndex)
             const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null
             const roleLabel = ma?.role === 'T' ? 'T' : ma?.role === '治疗' ? '奶' : 'DPS'
@@ -184,7 +185,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
               <>
                 <span className="absolute top-1 left-1 z-[1] text-[10px] text-muted-foreground font-mono sm:left-2">#{slot.index + 1}</span>
                 <span className={`absolute top-1 right-1 z-[1] rounded border px-1 py-0.5 text-[10px] font-bold sm:right-2 sm:px-1.5 ${roleColor}`}>
-                  {isBoss ? `👑${roleLabel}` : roleLabel}
+                  {occupiedDisplay.isBoss ? `👑${roleLabel}` : roleLabel}
                 </span>
                 <div className="relative z-[1] mt-4 flex w-full flex-col items-center px-0.5 sm:mt-3 sm:px-1">
                   <span className={`flex w-full flex-col items-center leading-none text-foreground ${ma ? '' : 'opacity-0'}`}>
@@ -214,11 +215,13 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             )
           } else {
             cellClass += ' pixel-slot pixel-slot-available'
-            const label = lockMap.has(slot.index) ? '⏳ 报名中' : '✨ 可选'
+            const label = getAvailableSlotLabel(isSlotLocked)
             content = (
               <>
                 <span className="absolute top-1 left-1 text-[10px] text-pink-400 font-mono sm:left-2">#{slot.index + 1}</span>
-                <span className="text-xs text-pink-500 font-medium">{label}</span>
+                {shouldShowAvailableMarker(slot, isSlotLocked)
+                  ? availableMarker()
+                  : <span className="text-xs text-pink-500 font-medium">{label}</span>}
               </>
             )
           }
@@ -226,11 +229,13 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
           return (
             <div
               key={slot.index}
-              className={`${cellClass} overflow-hidden ${lockMap.has(slot.index) ? 'ring-2 ring-orange-500 border-orange-500' : ''}`}
+              data-slot-index={slot.index}
+              data-slot-status={slot.status}
+              className={`${cellClass} overflow-hidden ${isSlotLocked ? 'ring-2 ring-orange-500 border-orange-500' : ''}`}
               onClick={() => handleSlotClick(slot)}
             >
               {content}
-              {lockMap.has(slot.index) && (
+              {isSlotLocked && (
                 <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-orange-600 text-white py-0.5 font-medium z-10">
                   {lockMap.get(slot.index)} 编辑中
                 </div>
