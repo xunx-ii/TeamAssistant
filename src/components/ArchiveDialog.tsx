@@ -1,23 +1,13 @@
 import type { ArchivedTeam } from '../types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
+import { formatShanghaiDateTimeMinute } from '../time'
 
 interface Props {
   open: boolean
   archives: ArchivedTeam[]
   onRestore: (archiveId: string) => void
   onClose: () => void
-}
-
-function formatTime(timestamp: number) {
-  return new Date(timestamp).toLocaleString('zh-CN', {
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 export function ArchiveDialog({ open, archives, onRestore, onClose }: Props) {
@@ -39,7 +29,7 @@ export function ArchiveDialog({ open, archives, onRestore, onClose }: Props) {
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-foreground">{archive.team.name}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {formatTime(archive.archivedAt)} · {archive.archivedBy}
+                      {formatShanghaiDateTimeMinute(archive.archivedAt)} · {archive.archivedBy}
                     </p>
                   </div>
                   <Button size="sm" variant="outline" onClick={() => onRestore(archive.id)}>

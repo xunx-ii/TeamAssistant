@@ -1,35 +1,39 @@
-const DAY_MS = 24 * 60 * 60 * 1000
+import { addShanghaiDays, getShanghaiDateParts, SHANGHAI_OFFSET_MS } from './time'
 
-function pad(value: number) {
-  return String(value).padStart(2, '0')
+function formatWeekKey(year: number, month: number, day: number) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function getWeekStartParts(value: Date | number = new Date()) {
+  const parts = getShanghaiDateParts(value)
+  if (!parts) {
+    return getShanghaiDateParts(new Date()) ?? { year: 1970, month: 1, day: 1, weekday: 1 }
+  }
+  const offset = parts.weekday === 0 ? -6 : 1 - parts.weekday
+  return addShanghaiDays(parts.year, parts.month, parts.day, offset)
 }
 
 export function getWeekStartDate(value: Date | number = new Date()) {
-  const date = value instanceof Date ? new Date(value) : new Date(value)
-  date.setHours(0, 0, 0, 0)
-  const day = date.getDay()
-  const offset = day === 0 ? -6 : 1 - day
-  date.setDate(date.getDate() + offset)
-  return date
+  const parts = getShanghaiDateParts(value)
+  if (!parts) return new Date(NaN)
+  const offset = parts.weekday === 0 ? -6 : 1 - parts.weekday
+  const monday = addShanghaiDays(parts.year, parts.month, parts.day, offset)
+  return new Date(Date.UTC(monday.year, monday.month - 1, monday.day) - SHANGHAI_OFFSET_MS)
 }
 
 export function getWeekStartKey(value: Date | number = new Date()) {
-  const start = getWeekStartDate(value)
-  return `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`
-}
-
-export function parseWeekStartKey(value: string) {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!match) return getWeekStartDate()
-  const [, year, month, day] = match
-  const date = new Date(Number(year), Number(month) - 1, Number(day))
-  return Number.isNaN(date.getTime()) ? getWeekStartDate() : getWeekStartDate(date)
+  const parts = getWeekStartParts(value)
+  return formatWeekKey(parts.year, parts.month, parts.day)
 }
 
 export function formatWeekRange(value: string) {
-  const start = parseWeekStartKey(value)
-  const end = new Date(start.getTime() + 6 * DAY_MS)
-  return `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日-${end.getFullYear()}年${end.getMonth() + 1}月${end.getDate()}日周`
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return value
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const end = addShanghaiDays(year, month, day, 6)
+  return `${year}年${month}月${day}日-${end.year}年${end.month}月${end.day}日周`
 }
 
 export function getCurrentWeekStartKey() {

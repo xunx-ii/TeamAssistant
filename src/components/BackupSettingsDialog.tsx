@@ -10,6 +10,7 @@ import {
 } from '../api'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
+import { formatShanghaiMonthDayTimeMinute } from '../time'
 
 interface Props {
   open: boolean
@@ -23,18 +24,6 @@ interface ConfirmOptions {
   confirmText: string
   cancelText: string
   destructive?: boolean
-}
-
-function formatBackupTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
 }
 
 function formatSize(size: number) {
@@ -260,7 +249,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-foreground">{backup.name}</p>
                   <p className="text-[11px] text-muted-foreground">
-                    {formatBackupTime(backup.createdAt)} · {formatSize(backup.size)}
+                    {formatShanghaiMonthDayTimeMinute(backup.createdAt)} · {formatSize(backup.size)}
                   </p>
                 </div>
                 <Button

@@ -1,22 +1,12 @@
 import type { OperationLog } from '../types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
+import { formatShanghaiMonthDayTimeSecond } from '../time'
 
 interface Props {
   open: boolean
   teamName: string
   logs: OperationLog[]
   onClose: () => void
-}
-
-function formatTime(timestamp: number) {
-  return new Date(timestamp).toLocaleString('zh-CN', {
-    hour12: false,
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
 }
 
 export function OperationLogDialog({ open, teamName, logs, onClose }: Props) {
@@ -40,7 +30,7 @@ export function OperationLogDialog({ open, teamName, logs, onClose }: Props) {
               </div>
               {sortedLogs.map(log => (
                 <div key={log.id} className="grid grid-cols-[92px_78px_1fr] gap-2 px-3 py-2">
-                  <span className="font-mono text-[11px] text-muted-foreground">{formatTime(log.timestamp)}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">{formatShanghaiMonthDayTimeSecond(log.timestamp)}</span>
                   <span className="truncate font-mono text-xs text-foreground">{log.actorQq || '-'}</span>
                   <span className="break-words text-foreground">{log.action}</span>
                 </div>

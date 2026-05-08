@@ -14,8 +14,37 @@ const BASE64_BINARY = 'base64:binary'
 const BACKUP_PREFIX = 'backup-'
 const BACKUP_SUFFIX = '.json.gz'
 const LEGACY_BACKUP_SUFFIX = '.json'
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000
 const gzipAsync = promisify(gzip)
 const gunzipAsync = promisify(gunzip)
+
+function pad2(value) {
+  return String(value).padStart(2, '0')
+}
+
+function pad3(value) {
+  return String(value).padStart(3, '0')
+}
+
+function toShanghaiDate(value) {
+  return new Date(value.getTime() + SHANGHAI_OFFSET_MS)
+}
+
+function formatShanghaiBackupStamp(value) {
+  const date = toShanghaiDate(value)
+  return [
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`,
+    `T${pad2(date.getUTCHours())}-${pad2(date.getUTCMinutes())}-${pad2(date.getUTCSeconds())}-${pad3(date.getUTCMilliseconds())}+08-00`,
+  ].join('')
+}
+
+function formatShanghaiISOString(value) {
+  const date = toShanghaiDate(value)
+  return [
+    `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`,
+    `T${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}:${pad2(date.getUTCSeconds())}.${pad3(date.getUTCMilliseconds())}+08:00`,
+  ].join('')
+}
 
 function isNotFoundError(error) {
   return Boolean(
@@ -143,7 +172,7 @@ function readLegacyJson(filePath, normalize) {
 }
 
 function backupFileName(now) {
-  return `${BACKUP_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}${BACKUP_SUFFIX}`
+  return `${BACKUP_PREFIX}${formatShanghaiBackupStamp(now)}${BACKUP_SUFFIX}`
 }
 
 async function createBackupTarget(backupDir, now) {
@@ -167,10 +196,15 @@ async function createBackupTarget(backupDir, now) {
 function backupCreatedAtFromName(name) {
   const suffix = name.endsWith(BACKUP_SUFFIX) ? BACKUP_SUFFIX : LEGACY_BACKUP_SUFFIX
   const value = name.slice(BACKUP_PREFIX.length, -suffix.length)
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/)
-  if (!match) return null
-  const [, year, month, day, hour, minute, second, ms] = match
-  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${ms}Z`
+  const offsetMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})([+-]\d{2})-(\d{2})$/)
+  if (offsetMatch) {
+    const [, year, month, day, hour, minute, second, ms, offsetHour, offsetMinute] = offsetMatch
+    return `${year}-${month}-${day}T${hour}:${minute}:${second}.${ms}${offsetHour}:${offsetMinute}`
+  }
+  const utcMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/)
+  if (!utcMatch) return null
+  const [, year, month, day, hour, minute, second, ms] = utcMatch
+  return formatShanghaiISOString(new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}.${ms}Z`))
 }
 
 async function writeCompressedJsonFileAtomic(filePath, value) {
@@ -264,12 +298,20 @@ export function createLevelStore({
       if (error && typeof error === 'object' && error.code === 'ENOENT') return []
       throw error
     })
-    const backups = entries
+    const backups = await Promise.all(entries
       .filter(isBackupFileName)
-      .sort()
-      .reverse()
+      .map(async name => {
+        const details = await stat(join(backupDir, name))
+        const createdAt = backupCreatedAtFromName(name) ?? formatShanghaiISOString(details.mtime)
+        const timestamp = new Date(createdAt).getTime()
+        return {
+          name,
+          timestamp: Number.isNaN(timestamp) ? details.mtimeMs : timestamp,
+        }
+      }))
+    backups.sort((left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name))
     const stale = backups.slice(maxBackups)
-    await Promise.all(stale.map(name => rm(join(backupDir, name), { force: true })))
+    await Promise.all(stale.map(backup => rm(join(backupDir, backup.name), { force: true })))
   }
 
   function normalizeBackupPayload(payload) {
@@ -282,7 +324,7 @@ export function createLevelStore({
     }
     return {
       version: Number.isInteger(source.version) ? source.version : 1,
-      createdAt: typeof source.createdAt === 'string' ? source.createdAt : new Date().toISOString(),
+      createdAt: typeof source.createdAt === 'string' ? source.createdAt : formatShanghaiISOString(new Date()),
       data,
       locks: normalizeLocks(source.locks),
     }
@@ -300,7 +342,7 @@ export function createLevelStore({
     const target = await createBackupTarget(backupDir, now)
     await writeCompressedJsonFileAtomic(target.filePath, {
       ...payload,
-      createdAt: target.createdAt.toISOString(),
+      createdAt: formatShanghaiISOString(target.createdAt),
     })
     await pruneBackups()
     return target.name
@@ -344,7 +386,7 @@ export function createLevelStore({
       const target = await createBackupTarget(backupDir, now)
       await writeCompressedJsonFileAtomic(target.filePath, {
         version: 1,
-        createdAt: target.createdAt.toISOString(),
+        createdAt: formatShanghaiISOString(target.createdAt),
         data: await this.readData(),
         locks: await this.readLocks(),
       })
@@ -362,13 +404,18 @@ export function createLevelStore({
         .filter(isBackupFileName)
         .map(async name => {
           const details = await stat(join(backupDir, name))
+          const createdAt = backupCreatedAtFromName(name) ?? formatShanghaiISOString(details.mtime)
+          const timestamp = new Date(createdAt).getTime()
           return {
             name,
-            createdAt: backupCreatedAtFromName(name) ?? details.mtime.toISOString(),
+            createdAt,
+            timestamp: Number.isNaN(timestamp) ? details.mtimeMs : timestamp,
             size: details.size,
           }
         }))
-      return backups.sort((left, right) => right.name.localeCompare(left.name))
+      return backups
+        .sort((left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name))
+        .map(({ timestamp, ...backup }) => backup)
     },
 
     async readBackup(name) {

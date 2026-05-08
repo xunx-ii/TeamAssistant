@@ -268,8 +268,8 @@ test('level store backup writes compressed files and keeps configured history co
 
     const backups = (await readdir(join(dir, 'backup'))).filter(name => name.endsWith('.json.gz')).sort()
     assert.deepEqual(backups, [
-      'backup-2026-01-01T00-30-00-000Z.json.gz',
-      'backup-2026-01-01T01-00-00-000Z.json.gz',
+      'backup-2026-01-01T08-30-00-000+08-00.json.gz',
+      'backup-2026-01-01T09-00-00-000+08-00.json.gz',
     ])
 
     const latestBuffer = await gunzipAsync(await readFile(join(dir, 'backup', backups[1])))
@@ -322,7 +322,7 @@ test('level store lists and restores compressed backups', async () => {
 
     const backups = await store.listBackups()
     assert.equal(backups[0].name, backupName)
-    assert.equal(backups[0].createdAt, '2026-01-01T03:00:00.000Z')
+    assert.equal(backups[0].createdAt, '2026-01-01T11:00:00.000+08:00')
     assert.equal(backups[0].size > 0, true)
 
     const restored = await store.restoreBackup(backupName)
@@ -384,7 +384,7 @@ test('level store imports a compressed backup and restores it', async () => {
       new Date('2026-01-01T04:30:00.000Z'),
     )
 
-    assert.equal(result.name, 'backup-2026-01-01T04-30-00-000Z.json.gz')
+    assert.equal(result.name, 'backup-2026-01-01T12-30-00-000+08-00.json.gz')
     assert.equal(result.data.teams[0].id, 'team-imported')
     assert.equal((await store.readData()).teams[0].id, 'team-imported')
     assert.deepEqual((await store.listBackups()).map(item => item.name), [result.name])
@@ -450,8 +450,8 @@ test('level store backup pruning includes legacy uncompressed backups', async ()
 
     const backups = (await readdir(join(dir, 'backup'))).sort()
     assert.deepEqual(backups, [
-      'backup-2026-01-01T00-30-00-000Z.json.gz',
-      'backup-2026-01-01T01-00-00-000Z.json.gz',
+      'backup-2026-01-01T08-30-00-000+08-00.json.gz',
+      'backup-2026-01-01T09-00-00-000+08-00.json.gz',
     ])
     await store.close()
   })
