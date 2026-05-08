@@ -225,8 +225,8 @@ function normalizeHydratableSlot(slot, index, reservedSlots) {
       index,
       status: 'occupied',
       member,
-      fixedRole: null,
-      fixedMartialArtIndex: null,
+      fixedRole,
+      fixedMartialArtIndex,
     }
   }
 

@@ -82,8 +82,8 @@ function normalizeSlot(slot: unknown, index: number, reservedSlots: number[]): S
       index,
       status: 'occupied',
       member,
-      fixedRole: null,
-      fixedMartialArtIndex: null,
+      fixedRole,
+      fixedMartialArtIndex,
     }
   }
 

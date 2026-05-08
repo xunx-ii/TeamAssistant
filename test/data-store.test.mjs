@@ -10,6 +10,7 @@ import {
   validateSlotMutationLock,
 } from '../server/data-store.js'
 import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
+import { normalizeHydratableData as normalizeClientHydratableData } from '../src/dataHydration.ts'
 import { createSubsidyTargets, getSubsidyWeekOptions } from '../src/subsidy.ts'
 import { formatWeekRange } from '../src/week.ts'
 
@@ -185,6 +186,47 @@ test('cancelSlot appends cancellation and restores reserved status', () => {
   assert.equal(next.logs.length, 1)
   assert.equal(next.logs[0].actorQq, 'admin')
   assert.match(next.logs[0].action, /取消 #3/)
+})
+
+test('cancelSlot restores fixed slot after signup and hydration', () => {
+  for (const [apply, hydrate] of [
+    [applyMutation, normalizeHydratableData],
+    [applyClientMutation, normalizeClientHydratableData],
+  ]) {
+    const fixed = apply(createSnapshot(), {
+      type: 'setSlotRole',
+      teamId: 'team-1',
+      slotIndex: 4,
+      role: 'T',
+      martialArtIndex: null,
+    })
+    const signed = apply(fixed, {
+      type: 'signupSlot',
+      teamId: 'team-1',
+      slotIndex: 4,
+      member: {
+        qq: '10001',
+        martialArtIndex: '1',
+        gearScore: '1200',
+        characterId: 'Tank',
+        note: '',
+      },
+    })
+    const hydrated = hydrate(signed)
+    const cancelled = apply(hydrated, {
+      type: 'cancelSlot',
+      teamId: 'team-1',
+      slotIndex: 4,
+      reason: '时间冲突',
+      cancelledBy: 'admin',
+      timestamp: 123456,
+    })
+
+    assert.equal(cancelled.teams[0].slots[4].status, 'fixed')
+    assert.equal(cancelled.teams[0].slots[4].member, null)
+    assert.equal(cancelled.teams[0].slots[4].fixedRole, 'T')
+    assert.equal(cancelled.teams[0].slots[4].fixedMartialArtIndex, null)
+  }
 })
 
 test('setTeamLockState updates team config lock flag', () => {
