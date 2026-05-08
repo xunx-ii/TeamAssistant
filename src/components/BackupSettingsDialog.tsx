@@ -8,13 +8,21 @@ import {
   type BackupEntry,
   type ServerData,
 } from '../api'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 
 interface Props {
   open: boolean
   onRestored: (data: ServerData) => void
   onClose: () => void
+}
+
+interface ConfirmOptions {
+  title: string
+  message: string
+  confirmText: string
+  cancelText: string
+  destructive?: boolean
 }
 
 function formatBackupTime(value: string) {
@@ -39,7 +47,23 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   const [backups, setBackups] = useState<BackupEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [confirmOptions, setConfirmOptions] = useState<ConfirmOptions | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
+
+  const resolveConfirm = useCallback((confirmed: boolean) => {
+    confirmResolveRef.current?.(confirmed)
+    confirmResolveRef.current = null
+    setConfirmOptions(null)
+  }, [])
+
+  const requestConfirm = useCallback((options: ConfirmOptions) => {
+    confirmResolveRef.current?.(false)
+    return new Promise<boolean>((resolve) => {
+      confirmResolveRef.current = resolve
+      setConfirmOptions(options)
+    })
+  }, [])
 
   const loadBackups = useCallback(async () => {
     const result = await fetchBackups()
@@ -67,6 +91,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   }, [open])
 
   const handleClose = () => {
+    resolveConfirm(false)
     setMessage('')
     onClose()
   }
@@ -85,7 +110,12 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   }
 
   const handleRestore = async (name: string) => {
-    const shouldBackupCurrent = window.confirm('回退前是否先备份当前数据？\n确定：先备份再回退\n取消：不备份，继续下一步')
+    const shouldBackupCurrent = await requestConfirm({
+      title: '回退备份',
+      message: '回退前是否先备份当前数据？',
+      confirmText: '先备份',
+      cancelText: '不备份',
+    })
     if (shouldBackupCurrent) {
       setBusy(true)
       setMessage('')
@@ -96,7 +126,14 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
         return
       }
     }
-    if (!window.confirm('确定回退到该备份版本？')) return
+    const shouldRestore = await requestConfirm({
+      title: '确认回退',
+      message: '确定回退到该备份版本？',
+      confirmText: '回退',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (!shouldRestore) return
     setBusy(true)
     setMessage('')
     const result = await restoreBackup(name)
@@ -111,7 +148,14 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   }
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm('确定删除该备份？')) return
+    const shouldDelete = await requestConfirm({
+      title: '删除备份',
+      message: '确定删除该备份？',
+      confirmText: '删除',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (!shouldDelete) return
     setBusy(true)
     setMessage('')
     const result = await deleteBackup(name)
@@ -126,7 +170,13 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
 
   const handleImport = async (file: File | undefined) => {
     if (!file) return
-    if (!window.confirm('确定导入并恢复该备份？')) {
+    const shouldImport = await requestConfirm({
+      title: '导入备份',
+      message: '确定导入并恢复该备份？',
+      confirmText: '导入并恢复',
+      cancelText: '取消',
+    })
+    if (!shouldImport) {
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
@@ -210,6 +260,35 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
           </div>
         </div>
       </DialogContent>
+
+      <Dialog open={!!confirmOptions} onOpenChange={(value) => { if (!value) resolveConfirm(false) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{confirmOptions?.title}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap">
+              {confirmOptions?.message}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => resolveConfirm(false)}
+            >
+              {confirmOptions?.cancelText}
+            </Button>
+            <Button
+              type="button"
+              variant={confirmOptions?.destructive ? 'destructive' : 'default'}
+              size="sm"
+              onClick={() => resolveConfirm(true)}
+            >
+              {confirmOptions?.confirmText}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }
