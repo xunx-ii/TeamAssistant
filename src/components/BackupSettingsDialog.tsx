@@ -97,6 +97,13 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   }
 
   const handleBackupNow = async () => {
+    const shouldBackup = await requestConfirm({
+      title: '立即备份',
+      message: '确定备份当前数据？',
+      confirmText: '备份',
+      cancelText: '取消',
+    })
+    if (!shouldBackup) return
     setBusy(true)
     setMessage('')
     const result = await createBackup()
