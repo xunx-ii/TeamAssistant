@@ -63,6 +63,24 @@ test('hasHydratableTeams accepts snapshots with active teams', () => {
   )
 })
 
+test('loadTeams hydrates malformed local storage snapshots', async () => {
+  const storage = installLocalStorage()
+  try {
+    storage.values.set('team_teams_v3', JSON.stringify([{
+      id: 'team-legacy',
+      name: '旧团',
+      slots: [],
+    }]))
+    const mod = await import(`../src/storage.ts?case=${Date.now()}-local-hydrate`)
+    const teams = mod.loadTeams()
+    assert.equal(teams.length, 1)
+    assert.equal(teams[0].slots.length, 25)
+    assert.equal(teams[0].config.locked, false)
+  } finally {
+    storage.restore()
+  }
+})
+
 test('loadFromServer reports empty server snapshots without hydrating local data', async () => {
   const storage = installLocalStorage()
   try {
@@ -120,7 +138,9 @@ test('loadFromServer hydrates local data only for active team snapshots', async 
       const mod = await import(`../src/storage.ts?case=${Date.now()}-loaded`)
       assert.equal(await mod.initServerMode(), true)
       assert.equal(await mod.loadFromServer(), 'loaded')
-      assert.match(storage.values.get('team_teams_v3'), /一团 🌸/)
+      const storedTeams = JSON.parse(storage.values.get('team_teams_v3'))
+      assert.equal(storedTeams[0].slots.length, 25)
+      assert.equal(storedTeams[0].config.locked, false)
     })
   } finally {
     storage.restore()

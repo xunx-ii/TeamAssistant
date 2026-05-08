@@ -179,8 +179,27 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
 
   const handleImport = async (file: File | undefined) => {
     if (!file) return
-    const shouldImport = await requestConfirm({
+    const shouldBackupCurrent = await requestConfirm({
       title: '导入备份',
+      message: '导入前是否先备份当前数据？',
+      confirmText: '先备份',
+      cancelText: '不备份',
+    })
+    if (shouldBackupCurrent) {
+      setBusy(true)
+      setMessage('')
+      const backupResult = await createBackup()
+      setBusy(false)
+      if (!backupResult.ok) {
+        setMessage(backupResult.error ?? '导入前备份失败')
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        return
+      }
+      setBackups(backupResult.backups ?? [])
+      setMessage('已备份')
+    }
+    const shouldImport = await requestConfirm({
+      title: '确认导入',
       message: '确定导入并恢复该备份？',
       confirmText: '导入并恢复',
       cancelText: '取消',
@@ -195,7 +214,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (result.ok && result.data) {
       onRestored(result.data)
       await loadBackups()
-      setMessage('已导入')
+      setMessage(shouldBackupCurrent ? '已备份并导入' : '已导入')
     } else {
       setMessage(result.error ?? '导入失败')
     }

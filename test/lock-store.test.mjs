@@ -141,6 +141,28 @@ test('team lock stored in shared file blocks slot acquisition until removed', as
   })
 })
 
+test('team lock can be ignored for administrator slot acquisition', () => {
+  const lockData = {
+    slots: [],
+    teams: [{ teamId: 'team-1', timestamp: 5000 }],
+  }
+
+  const acquired = acquireSlotLock(lockData, {
+    teamId: 'team-1',
+    slotIndex: 0,
+    qq: 'admin',
+    lockTimeout: 30_000,
+    ignoreTeamLock: true,
+    now: 5001,
+  })
+
+  assert.equal(acquired.result.ok, true)
+  assert.deepEqual(acquired.lockData.slots, [
+    { teamId: 'team-1', slotIndex: 0, qq: 'admin', timestamp: 5001 },
+  ])
+  assert.deepEqual(acquired.lockData.teams, lockData.teams)
+})
+
 test('cleanExpiredLocks removes stale slot locks but keeps team locks', async () => {
   const cleaned = cleanExpiredLocks({
     slots: [

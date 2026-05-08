@@ -387,7 +387,7 @@ test('level store imports a compressed backup and restores it', async () => {
     assert.equal(result.name, 'backup-2026-01-01T04-30-00-000Z.json.gz')
     assert.equal(result.data.teams[0].id, 'team-imported')
     assert.equal((await store.readData()).teams[0].id, 'team-imported')
-    assert.equal((await store.listBackups()).some(item => item.name === result.name), true)
+    assert.deepEqual((await store.listBackups()).map(item => item.name), [result.name])
     await store.close()
   })
 })

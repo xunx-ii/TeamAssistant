@@ -80,10 +80,10 @@ export function getPublicLocks(lockData) {
   }
 }
 
-export function acquireSlotLock(lockData, { teamId, slotIndex, qq, lockTimeout, now = Date.now() }) {
+export function acquireSlotLock(lockData, { teamId, slotIndex, qq, lockTimeout, ignoreTeamLock = false, now = Date.now() }) {
   const normalized = normalizeLockData(lockData)
   const teamLock = normalized.teams.find(lock => lock.teamId === teamId)
-  if (teamLock) {
+  if (!ignoreTeamLock && teamLock) {
     return {
       changed: false,
       lockData: normalized,

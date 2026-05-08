@@ -354,6 +354,9 @@ try {
   await importDialog.getByRole('button', { name: '导入备份文件' }).click()
   const fileChooser = await fileChooserPromise
   await fileChooser.setFiles(importBackupPath)
+  const importBackupConfirmDialog = adminPage.getByRole('dialog').filter({ hasText: '导入前是否先备份当前数据？' })
+  await importBackupConfirmDialog.waitFor()
+  await importBackupConfirmDialog.getByRole('button', { name: '不备份' }).click()
   const importConfirmDialog = adminPage.getByRole('dialog').filter({ hasText: '确定导入并恢复该备份？' })
   await importConfirmDialog.waitFor()
   await importConfirmDialog.getByRole('button', { name: '导入并恢复' }).click()

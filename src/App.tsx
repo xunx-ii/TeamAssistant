@@ -7,7 +7,7 @@ import {
   loadCancellations, setCancellationsLocal,
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
-  initServerMode, loadFromServer, hasHydratableTeams,
+  initServerMode, loadFromServer, normalizeServerData,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection } from './types'
 import { createEmptySlots, generateId } from './types'
@@ -161,14 +161,9 @@ function App() {
     const poll = async () => {
       const data = await fetchData()
       if (!data) return
-      if (!hasHydratableTeams(data)) return
+      const snapshot = normalizeServerData(data)
+      if (snapshot.teams.length === 0) return
       if (data.locks) setLocks(data.locks)
-      const snapshot = {
-        teams: data.teams || [],
-        cancellations: data.cancellations || [],
-        archivedTeams: data.archivedTeams || [],
-        logs: data.logs || [],
-      }
       const snapshotJson = JSON.stringify(snapshot)
       if (snapshotJson !== lastSnapshotJson) {
         lastSnapshotJson = snapshotJson

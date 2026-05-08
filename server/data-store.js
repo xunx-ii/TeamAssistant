@@ -159,6 +159,155 @@ function isValidMemberSubsidies(memberSubsidies) {
   ))
 }
 
+function createEmptySlot(index) {
+  return {
+    index,
+    status: 'empty',
+    member: null,
+    fixedRole: null,
+    fixedMartialArtIndex: null,
+  }
+}
+
+function normalizeHydratableMember(member) {
+  if (!isPlainObject(member)) return null
+  return normalizeMember(member)
+}
+
+function normalizeHydratableConfig(config) {
+  const reservedSlots = Array.isArray(config?.reservedSlots)
+    ? uniqueSorted(config.reservedSlots.filter(isSlotIndex))
+    : []
+  return {
+    reservedSlots,
+    locked: typeof config?.locked === 'boolean' ? config.locked : false,
+  }
+}
+
+function normalizeHydratableSubsidyTypes(subsidyTypes) {
+  return Array.isArray(subsidyTypes) ? normalizeSubsidyTypes(subsidyTypes) : undefined
+}
+
+function normalizeHydratableMemberSubsidies(memberSubsidies) {
+  if (!isPlainObject(memberSubsidies)) return undefined
+  const normalized = {}
+  for (const [qq, selections] of Object.entries(memberSubsidies)) {
+    if (Array.isArray(selections)) {
+      setRecordValue(normalized, qq, normalizeMemberSubsidySelections(selections))
+    }
+  }
+  return normalized
+}
+
+function normalizeHydratableSlot(slot, index, reservedSlots) {
+  const empty = createEmptySlot(index)
+  if (!isPlainObject(slot)) {
+    return reservedSlots.includes(index) ? { ...empty, status: 'reserved' } : empty
+  }
+
+  const fixedRole = VALID_ROLES.has(slot.fixedRole) ? slot.fixedRole : null
+  const fixedMartialArtIndex = Number.isInteger(slot.fixedMartialArtIndex) ? slot.fixedMartialArtIndex : null
+  const member = normalizeHydratableMember(slot.member)
+
+  if (slot.status === 'occupied' && member) {
+    return {
+      index,
+      status: 'occupied',
+      member,
+      fixedRole: null,
+      fixedMartialArtIndex: null,
+    }
+  }
+
+  if (slot.status === 'fixed' && (fixedRole || fixedMartialArtIndex !== null)) {
+    return {
+      index,
+      status: 'fixed',
+      member: null,
+      fixedRole,
+      fixedMartialArtIndex,
+    }
+  }
+
+  if (reservedSlots.includes(index) || slot.status === 'reserved') {
+    return {
+      index,
+      status: 'reserved',
+      member: null,
+      fixedRole: null,
+      fixedMartialArtIndex: null,
+    }
+  }
+
+  return empty
+}
+
+function normalizeHydratableTeam(team) {
+  if (!isPlainObject(team) || typeof team.id !== 'string') return null
+
+  const config = normalizeHydratableConfig(team.config)
+  const sourceSlots = Array.isArray(team.slots) ? team.slots : []
+  config.reservedSlots = uniqueSorted([
+    ...config.reservedSlots,
+    ...sourceSlots.flatMap((slot, index) => (
+      isSlotIndex(index) && isPlainObject(slot) && slot.status === 'reserved' ? [index] : []
+    )),
+  ])
+  const normalized = {
+    ...team,
+    id: team.id,
+    name: toText(team.name, '默认团队') || '默认团队',
+    note: toText(team.note),
+    config,
+    slots: Array.from(
+      { length: TOTAL_SLOTS },
+      (_, index) => normalizeHydratableSlot(sourceSlots[index], index, config.reservedSlots),
+    ),
+  }
+  const subsidyTypes = normalizeHydratableSubsidyTypes(team.subsidyTypes)
+  const memberSubsidies = normalizeHydratableMemberSubsidies(team.memberSubsidies)
+  if (subsidyTypes) normalized.subsidyTypes = subsidyTypes
+  if (memberSubsidies) normalized.memberSubsidies = memberSubsidies
+  return normalized
+}
+
+function normalizeHydratableArchivedTeam(archive) {
+  if (!isPlainObject(archive) || typeof archive.id !== 'string') return null
+  const team = normalizeHydratableTeam(archive.team)
+  if (!team) return null
+  return {
+    id: archive.id,
+    team,
+    archivedAt: Number.isFinite(archive.archivedAt) ? archive.archivedAt : 0,
+    archivedBy: toText(archive.archivedBy),
+  }
+}
+
+function normalizeHydratableCancellation(cancellation) {
+  if (!isPlainObject(cancellation)) return null
+  return {
+    qq: toText(cancellation.qq),
+    reason: toText(cancellation.reason),
+    cancelledBy: toText(cancellation.cancelledBy),
+    teamId: toText(cancellation.teamId),
+    teamName: toText(cancellation.teamName),
+    slotIndex: Number.isInteger(cancellation.slotIndex) ? cancellation.slotIndex : 0,
+    timestamp: Number.isFinite(cancellation.timestamp) ? cancellation.timestamp : 0,
+  }
+}
+
+function normalizeHydratableLog(log) {
+  if (!isPlainObject(log)) return null
+  return {
+    id: toText(log.id),
+    teamId: toText(log.teamId),
+    teamName: toText(log.teamName),
+    timestamp: Number.isFinite(log.timestamp) ? log.timestamp : 0,
+    actorQq: toText(log.actorQq),
+    action: toText(log.action),
+  }
+}
+
 function isValidSnapshotTeam(team) {
   return Boolean(
     isPlainObject(team) &&
@@ -191,6 +340,16 @@ export function validateSnapshotData(data) {
     snapshot.teams.every(isValidSnapshotTeam) &&
     snapshot.archivedTeams.every(isValidArchivedTeam)
   )
+}
+
+export function normalizeHydratableData(data) {
+  const snapshot = normalizeData(data)
+  return {
+    teams: snapshot.teams.map(normalizeHydratableTeam).filter(Boolean),
+    cancellations: snapshot.cancellations.map(normalizeHydratableCancellation).filter(Boolean),
+    archivedTeams: snapshot.archivedTeams.map(normalizeHydratableArchivedTeam).filter(Boolean),
+    logs: snapshot.logs.map(normalizeHydratableLog).filter(Boolean),
+  }
 }
 
 export function validateDataReplacement(currentData, incomingData, { allowReplace = false } = {}) {
@@ -331,6 +490,7 @@ export function validateSlotMutationLock({
   qq,
   lockTimestamp,
   lockTimeout,
+  ignoreTeamLock = false,
   now = Date.now(),
 }) {
   if (!teamId || slotIndex == null || !qq || !lockTimestamp) {
@@ -338,7 +498,7 @@ export function validateSlotMutationLock({
   }
 
   const teamLockTime = teamLocks.get(teamId)
-  if (teamLockTime && teamLockTime > lockTimestamp) {
+  if (!ignoreTeamLock && teamLockTime && teamLockTime > lockTimestamp) {
     return { ok: false, reason: 'teamLocked', lockedAt: teamLockTime }
   }
 

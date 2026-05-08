@@ -1,8 +1,10 @@
 import express from 'express'
+import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import {
   applyMutation,
+  normalizeHydratableData,
   normalizeData,
   validateDataReplacement,
   validateExpectedSlotMember,
@@ -30,6 +32,7 @@ const app = express()
 const PORT = process.env.PORT || 23219
 const DATA_FILE = join(__dirname, 'data.json')
 const LOCKS_FILE = join(__dirname, 'locks.json')
+const ADMIN_FILE = join(__dirname, 'admin.json')
 const LEVEL_DB_DIR = join(__dirname, 'leveldb')
 const BACKUP_DIR = join(__dirname, 'backup')
 const STORAGE_LOCK_FILE = join(__dirname, '.storage.lock')
@@ -39,6 +42,28 @@ const BACKUP_HISTORY_LIMIT = 48
 const STORAGE_LOCK_STALE_MS = 15_000
 const STORAGE_LOCK_TIMEOUT_MS = 10_000
 const LOCK_LOG = process.env.DEBUG === '1'
+
+function loadAdminQQs() {
+  try {
+    const config = JSON.parse(readFileSync(ADMIN_FILE, 'utf8'))
+    return new Set(Array.isArray(config?.adminQQs) ? config.adminQQs.filter(item => typeof item === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+const ADMIN_QQS = loadAdminQQs()
+
+function isAdminQq(qq) {
+  return typeof qq === 'string' && ADMIN_QQS.has(qq)
+}
+
+function createHttpError(message, status = 400, details) {
+  const error = new Error(message)
+  error.status = status
+  if (details) error.details = details
+  return error
+}
 
 const store = createLevelStore({
   dbPath: LEVEL_DB_DIR,
@@ -67,7 +92,7 @@ async function loadLocks() {
 }
 
 async function loadData() {
-  return normalizeData(await store.readData())
+  return normalizeHydratableData(await store.readData())
 }
 
 async function saveData(data) {
@@ -202,20 +227,20 @@ api.post('/mutate', async (req, res) => {
   try {
     const data = await withSharedStorage(async () => {
       let lockState = await loadLocks()
+      const actorQq = mutation.actorQq ?? mutation.member?.qq ?? mutation.cancelledBy
       if (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') {
         const lockResult = validateSlotMutationLock({
           slotLocks: buildSlotLockMap(lockState),
           teamLocks: buildTeamLockMap(lockState),
           teamId: mutation.teamId,
           slotIndex: mutation.slotIndex,
-          qq: mutation.actorQq ?? mutation.member?.qq ?? mutation.cancelledBy,
+          qq: actorQq,
           lockTimestamp: mutation.lockTimestamp,
           lockTimeout: LOCK_TIMEOUT,
+          ignoreTeamLock: isAdminQq(actorQq),
         })
         if (!lockResult.ok) {
-          const error = new Error(lockResult.reason)
-          error.details = lockResult
-          throw error
+          throw createHttpError(lockResult.reason, 409, lockResult)
         }
       }
 
@@ -243,13 +268,15 @@ api.post('/mutate', async (req, res) => {
       ) {
         const expected = validateExpectedSlotMember(current, mutation.teamId, mutation.slotIndex, mutation.expectedMemberQq)
         if (!expected.ok) {
-          const error = new Error(expected.reason)
-          error.details = expected
-          throw error
+          throw createHttpError(expected.reason, 409, expected)
         }
       }
 
-      const next = normalizeData(applyMutation(current, mutation))
+      const mutated = normalizeData(applyMutation(current, mutation))
+      if (!validateSnapshotData(mutated)) {
+        throw createHttpError('Invalid mutation snapshot', 400)
+      }
+      const next = normalizeHydratableData(mutated)
       await store.writeData(next)
       return next
     })
@@ -289,6 +316,7 @@ api.post('/lock', async (req, res) => {
         slotIndex,
         qq,
         lockTimeout: LOCK_TIMEOUT,
+        ignoreTeamLock: isAdminQq(qq),
       })
       if (updated.changed) {
         await store.writeLocks(updated.lockData)
@@ -381,6 +409,7 @@ api.post('/validate-lock', async (req, res) => {
         qq,
         lockTimestamp,
         lockTimeout: LOCK_TIMEOUT,
+        ignoreTeamLock: isAdminQq(qq),
       })
     })
     if (result.ok) {

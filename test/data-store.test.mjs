@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 
 import {
   applyMutation,
+  normalizeHydratableData,
   validateDataReplacement,
   validateExpectedSlotMember,
+  validateSnapshotData,
   validateSlotMutationLock,
 } from '../server/data-store.js'
 import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
@@ -94,6 +96,41 @@ test('validateSlotMutationLock rejects expired slot locks', () => {
 
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+test('validateSlotMutationLock lets administrators override team locks', () => {
+  const slotLocks = new Map([
+    ['team-1:0', { qq: 'admin', timestamp: 1000 }],
+  ])
+  const teamLocks = new Map([
+    ['team-1', 2000],
+  ])
+
+  const blocked = validateSlotMutationLock({
+    slotLocks,
+    teamLocks,
+    teamId: 'team-1',
+    slotIndex: 0,
+    qq: 'admin',
+    lockTimestamp: 1000,
+    lockTimeout: 30_000,
+    now: 1001,
+  })
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.reason, 'teamLocked')
+
+  const allowed = validateSlotMutationLock({
+    slotLocks,
+    teamLocks,
+    teamId: 'team-1',
+    slotIndex: 0,
+    qq: 'admin',
+    lockTimestamp: 1000,
+    lockTimeout: 30_000,
+    ignoreTeamLock: true,
+    now: 1001,
+  })
+  assert.equal(allowed.ok, true)
 })
 
 test('validateExpectedSlotMember rejects stale overwrite', () => {
@@ -244,6 +281,39 @@ test('validateDataReplacement rejects malformed team slots', () => {
   const malformedMemberResult = validateDataReplacement(current, malformedMember)
   assert.equal(malformedMemberResult.ok, false)
   assert.equal(malformedMemberResult.status, 400)
+})
+
+test('normalizeHydratableData repairs legacy team shapes for rendering', () => {
+  const hydrated = normalizeHydratableData({
+    teams: [{
+      id: 'legacy-team',
+      name: '旧团',
+      slots: [],
+    }],
+    cancellations: [{ qq: 10001, reason: null }],
+    archivedTeams: [],
+    logs: [],
+  })
+
+  assert.equal(hydrated.teams.length, 1)
+  assert.equal(hydrated.teams[0].note, '')
+  assert.equal(hydrated.teams[0].config.locked, false)
+  assert.equal(hydrated.teams[0].slots.length, 25)
+  assert.equal(hydrated.teams[0].slots[0].index, 0)
+  assert.equal(validateSnapshotData(hydrated), true)
+})
+
+test('validateSnapshotData catches malformed teams created by mutations', () => {
+  const mutated = applyMutation(createSnapshot(), {
+    type: 'createTeam',
+    team: {
+      id: 'broken-team',
+      name: '坏团',
+      slots: [],
+    },
+  })
+
+  assert.equal(validateSnapshotData(mutated), false)
 })
 
 test('renameTeam preserves regular emoji and embedded image markers', () => {

@@ -1,5 +1,6 @@
 import type { ArchivedTeam, Cancellation, OperationLog, Team } from './types'
 import { checkServer, fetchData, pushData, type ServerData } from './api'
+import { normalizeHydratableData, normalizeHydratableTeams } from './dataHydration'
 
 const KEYS = {
   teams: 'team_teams_v3',
@@ -19,35 +20,35 @@ export async function initServerMode(): Promise<boolean> {
 }
 
 export function hasHydratableTeams(data: Pick<ServerData, 'teams'> | null | undefined): data is ServerData {
-  return Array.isArray(data?.teams) && data.teams.length > 0
+  return normalizeHydratableData(data).teams.length > 0
 }
 
 // localStorage read helpers
 function loadTeamsLocal(): Team[] {
   try {
     const raw = localStorage.getItem(KEYS.teams)
-    if (raw) return JSON.parse(raw)
+    if (raw) return normalizeHydratableTeams(JSON.parse(raw))
   } catch { /* ignore */ }
   return []
 }
 function loadCancellationsLocal(): Cancellation[] {
   try {
     const raw = localStorage.getItem(KEYS.cancellations)
-    if (raw) return JSON.parse(raw)
+    if (raw) return normalizeHydratableData({ cancellations: JSON.parse(raw) }).cancellations
   } catch { /* ignore */ }
   return []
 }
 function loadArchivedTeamsLocal(): ArchivedTeam[] {
   try {
     const raw = localStorage.getItem(KEYS.archivedTeams)
-    if (raw) return JSON.parse(raw)
+    if (raw) return normalizeHydratableData({ archivedTeams: JSON.parse(raw) }).archivedTeams
   } catch { /* ignore */ }
   return []
 }
 function loadLogsLocal(): OperationLog[] {
   try {
     const raw = localStorage.getItem(KEYS.logs)
-    if (raw) return JSON.parse(raw)
+    if (raw) return normalizeHydratableData({ logs: JSON.parse(raw) }).logs
   } catch { /* ignore */ }
   return []
 }
@@ -109,6 +110,10 @@ export function setOperationLogsLocal(logs: OperationLog[]) {
   localStorage.setItem(KEYS.logs, JSON.stringify(logs))
 }
 
+export function normalizeServerData(data: ServerData): ServerData {
+  return normalizeHydratableData(data)
+}
+
 // QQ is local-only (per browser), not synced to server
 export function getStoredQQ(): string | null {
   return localStorage.getItem(KEYS.qq)
@@ -127,11 +132,12 @@ export async function loadFromServer(): Promise<LoadFromServerResult> {
   try {
     const data = await fetchData()
     if (!data) return 'unavailable'
-    if (!hasHydratableTeams(data)) return 'empty'
-    setTeamsLocal(data.teams ?? [])
-    setCancellationsLocal(data.cancellations ?? [])
-    setArchivedTeamsLocal(data.archivedTeams ?? [])
-    setOperationLogsLocal(data.logs ?? [])
+    const snapshot = normalizeServerData(data)
+    if (snapshot.teams.length === 0) return 'empty'
+    setTeamsLocal(snapshot.teams)
+    setCancellationsLocal(snapshot.cancellations)
+    setArchivedTeamsLocal(snapshot.archivedTeams)
+    setOperationLogsLocal(snapshot.logs)
     return 'loaded'
   } catch {
     return 'unavailable'

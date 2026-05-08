@@ -388,7 +388,6 @@ export function createLevelStore({
 
     async importBackup(buffer, now = new Date()) {
       const backup = normalizeBackupPayload(await parseBackupBuffer(buffer))
-      await this.backupNow()
       const name = await writeImportedBackup(backup, now)
       const restored = await restoreBackupPayload(backup)
       return {
