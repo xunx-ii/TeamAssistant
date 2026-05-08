@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, memo } from 'react'
-import { Plus } from 'lucide-react'
+import { GripVertical, Plus } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 
@@ -26,6 +26,10 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
       inputRef.current.select()
     }
   }, [editingId])
+
+  useEffect(() => {
+    setDragIndex(null)
+  }, [activeId])
 
   const startEdit = (id: string, name: string) => {
     if (!isAdmin) return
@@ -66,6 +70,11 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
     setDragIndex(null)
   }
 
+  const handleTabClick = (id: string) => {
+    setDragIndex(null)
+    onSwitch(id)
+  }
+
   if (teams.length === 0) return null
 
   return (
@@ -74,18 +83,33 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
         {teams.map((team, i) => (
           <div
             key={team.id}
-            draggable={isAdmin}
             className={`relative flex items-center gap-1 px-4 py-2 text-sm cursor-pointer transition-colors select-none pixel-tab ${
               team.id === activeId
                 ? 'active text-foreground font-bold'
                 : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
             } ${dragIndex === i ? 'opacity-50' : ''}`}
-            onClick={() => onSwitch(team.id)}
+            onClick={() => handleTabClick(team.id)}
             onDoubleClick={() => startEdit(team.id, team.name)}
-            onDragStart={() => handleDragStart(i)}
             onDragOver={(e) => handleDragOver(e)}
             onDrop={() => handleDrop(i)}
           >
+            {isAdmin && teams.length > 1 && (
+              <button
+                type="button"
+                draggable={editingId === null}
+                className="inline-flex h-5 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                aria-label="拖动排序"
+                onClick={e => e.stopPropagation()}
+                onDoubleClick={e => e.stopPropagation()}
+                onDragStart={(e) => {
+                  e.stopPropagation()
+                  handleDragStart(i)
+                }}
+                onDragEnd={() => setDragIndex(null)}
+              >
+                <GripVertical className="h-3.5 w-3.5" />
+              </button>
+            )}
             {editingId === team.id ? (
               <Input
                 ref={inputRef}

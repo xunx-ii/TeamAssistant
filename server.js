@@ -124,6 +124,54 @@ api.post('/data', async (req, res) => {
   }
 })
 
+api.get('/backups', async (_req, res) => {
+  try {
+    const backups = await withSharedStorage(() => store.listBackups())
+    res.json({ ok: true, backups })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'List backups failed' })
+  }
+})
+
+api.post('/backups', async (_req, res) => {
+  try {
+    const name = await withSharedStorage(() => store.backupNow())
+    const backups = await withSharedStorage(() => store.listBackups())
+    res.json({ ok: true, name, backups })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Backup failed' })
+  }
+})
+
+api.post('/backups/restore', async (req, res) => {
+  try {
+    const { name } = req.body ?? {}
+    if (typeof name !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Missing backup name' })
+    }
+    const result = await withSharedStorage(() => store.restoreBackup(name))
+    res.json({ ok: true, data: result.data })
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Restore backup failed' })
+  }
+})
+
+api.post(
+  '/backups/import',
+  express.raw({ type: 'application/octet-stream', limit: '50mb' }),
+  async (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ ok: false, error: 'Missing backup file' })
+      }
+      const result = await withSharedStorage(() => store.importBackup(req.body))
+      res.json({ ok: true, name: result.name, data: result.data })
+    } catch (error) {
+      res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Import backup failed' })
+    }
+  },
+)
+
 api.post('/mutate', async (req, res) => {
   const { mutation } = req.body ?? {}
   if (!mutation?.type) {

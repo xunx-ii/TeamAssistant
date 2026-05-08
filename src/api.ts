@@ -53,6 +53,26 @@ export interface MutationResult {
   error?: string
 }
 
+export interface BackupEntry {
+  name: string
+  createdAt: string
+  size: number
+}
+
+export interface BackupListResult {
+  ok: boolean
+  backups?: BackupEntry[]
+  error?: string
+}
+
+export interface BackupActionResult {
+  ok: boolean
+  name?: string | null
+  backups?: BackupEntry[]
+  data?: ServerData
+  error?: string
+}
+
 type RequestFailure = {
   ok: false
   reason: 'network' | 'invalidResponse'
@@ -196,5 +216,31 @@ export async function validateLock(teamId: string, slotIndex: number, qq: string
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
+  })
+}
+
+export async function fetchBackups(): Promise<BackupListResult> {
+  return requestResult<BackupListResult>(`${API}/backups`, noCache)
+}
+
+export async function createBackup(): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups`, {
+    method: 'POST',
+  })
+}
+
+export async function restoreBackup(name: string): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function importBackupFile(file: File): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: await file.arrayBuffer(),
   })
 }

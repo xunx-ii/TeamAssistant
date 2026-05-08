@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { Level } from 'level'
-import { gunzip } from 'zlib'
+import { gzip, gunzip } from 'zlib'
 import { promisify } from 'util'
 
 import {
@@ -16,6 +16,7 @@ import { normalizeData } from '../server/data-store.js'
 import { normalizeLockData } from '../server/lock-store.js'
 
 const gunzipAsync = promisify(gunzip)
+const gzipAsync = promisify(gzip)
 
 async function withTempDir(run) {
   const dir = await mkdtemp(join(tmpdir(), 'teamassistant-level-'))
@@ -258,6 +259,96 @@ test('level store backup writes compressed files and keeps configured history co
     const latest = JSON.parse(latestBuffer.toString('utf8'))
     assert.deepEqual(latest.data.teams, [])
     assert.deepEqual(latest.locks.slots, [])
+    await store.close()
+  })
+})
+
+test('level store lists and restores compressed backups', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir)
+    await store.init()
+    await store.writeData({
+      teams: [{ id: 'team-before', name: '备份前', slots: [] }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+
+    const backupName = await store.backupNow(new Date('2026-01-01T03:00:00.000Z'))
+    await store.writeData({
+      teams: [{ id: 'team-after', name: '备份后', slots: [] }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+
+    const backups = await store.listBackups()
+    assert.equal(backups[0].name, backupName)
+    assert.equal(backups[0].createdAt, '2026-01-01T03:00:00.000Z')
+    assert.equal(backups[0].size > 0, true)
+
+    const restored = await store.restoreBackup(backupName)
+    assert.equal(restored.data.teams[0].id, 'team-before')
+    assert.equal((await store.readData()).teams[0].id, 'team-before')
+    await store.close()
+  })
+})
+
+test('level store imports a compressed backup and restores it', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir)
+    await store.init()
+    await store.writeData({
+      teams: [{ id: 'team-current', name: '当前团', slots: [] }],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+
+    const imported = {
+      version: 1,
+      createdAt: '2026-01-01T04:00:00.000Z',
+      data: {
+        teams: [{ id: 'team-imported', name: '导入团', slots: [] }],
+        cancellations: [],
+        archivedTeams: [],
+        logs: [],
+      },
+      locks: { slots: [], teams: [] },
+    }
+    const result = await store.importBackup(
+      await gzipAsync(Buffer.from(JSON.stringify(imported), 'utf8')),
+      new Date('2026-01-01T04:30:00.000Z'),
+    )
+
+    assert.equal(result.name, 'backup-2026-01-01T04-30-00-000Z.json.gz')
+    assert.equal(result.data.teams[0].id, 'team-imported')
+    assert.equal((await store.readData()).teams[0].id, 'team-imported')
+    assert.equal((await store.listBackups()).some(item => item.name === result.name), true)
+    await store.close()
+  })
+})
+
+test('level store rejects backup restore payloads without teams', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir)
+    await store.init()
+    await mkdir(join(dir, 'backup'), { recursive: true })
+    await writeFile(join(dir, 'backup', 'backup-2026-01-01T05-00-00-000Z.json'), JSON.stringify({
+      version: 1,
+      createdAt: '2026-01-01T05:00:00.000Z',
+      data: { teams: [], cancellations: [], archivedTeams: [], logs: [] },
+      locks: { slots: [], teams: [] },
+    }))
+
+    await assert.rejects(
+      () => store.restoreBackup('backup-2026-01-01T05-00-00-000Z.json'),
+      /Invalid backup data/,
+    )
+    await assert.rejects(
+      () => store.importBackup(Buffer.from(JSON.stringify({ teams: [] }), 'utf8')),
+      /Invalid backup data/,
+    )
     await store.close()
   })
 })

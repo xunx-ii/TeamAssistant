@@ -1,9 +1,9 @@
 import { Level } from 'level'
 import { existsSync, readFileSync } from 'fs'
-import { mkdir, readdir, rename, rm, writeFile } from 'fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, join } from 'path'
 import { promisify } from 'util'
-import { gzip } from 'zlib'
+import { gzip, gunzip } from 'zlib'
 
 const DATA_KEY = 'app:data'
 const LOCKS_KEY = 'app:locks'
@@ -15,6 +15,7 @@ const BACKUP_PREFIX = 'backup-'
 const BACKUP_SUFFIX = '.json.gz'
 const LEGACY_BACKUP_SUFFIX = '.json'
 const gzipAsync = promisify(gzip)
+const gunzipAsync = promisify(gunzip)
 
 function isNotFoundError(error) {
   return Boolean(
@@ -145,6 +146,15 @@ function backupFileName(now) {
   return `${BACKUP_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}${BACKUP_SUFFIX}`
 }
 
+function backupCreatedAtFromName(name) {
+  const suffix = name.endsWith(BACKUP_SUFFIX) ? BACKUP_SUFFIX : LEGACY_BACKUP_SUFFIX
+  const value = name.slice(BACKUP_PREFIX.length, -suffix.length)
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/)
+  if (!match) return null
+  const [, year, month, day, hour, minute, second, ms] = match
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${ms}Z`
+}
+
 async function writeCompressedJsonFileAtomic(filePath, value) {
   const tmpFile = `${filePath}.tmp`
   const content = Buffer.from(JSON.stringify(value), 'utf8')
@@ -157,6 +167,21 @@ function isBackupFileName(name) {
     name.endsWith(BACKUP_SUFFIX) ||
     name.endsWith(LEGACY_BACKUP_SUFFIX)
   )
+}
+
+function assertSafeBackupName(name) {
+  if (basename(name) !== name || !isBackupFileName(name)) {
+    throw new Error('Invalid backup name')
+  }
+}
+
+function isGzipBuffer(buffer) {
+  return buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b
+}
+
+async function parseBackupBuffer(buffer) {
+  const content = isGzipBuffer(buffer) ? await gunzipAsync(buffer) : buffer
+  return JSON.parse(content.toString('utf8'))
 }
 
 export function createLevelStore({
@@ -228,6 +253,49 @@ export function createLevelStore({
     await Promise.all(stale.map(name => rm(join(backupDir, name), { force: true })))
   }
 
+  function normalizeBackupPayload(payload) {
+    const source = payload && typeof payload === 'object' && 'data' in payload
+      ? payload
+      : { data: payload, locks: {} }
+    const data = normalizeData(source.data)
+    if (data.teams.length === 0) {
+      throw new Error('Invalid backup data')
+    }
+    return {
+      version: Number.isInteger(source.version) ? source.version : 1,
+      createdAt: typeof source.createdAt === 'string' ? source.createdAt : new Date().toISOString(),
+      data,
+      locks: normalizeLocks(source.locks),
+    }
+  }
+
+  async function readBackupPayload(name) {
+    if (!backupDir) throw new Error('Backup directory is not configured')
+    assertSafeBackupName(name)
+    return normalizeBackupPayload(await parseBackupBuffer(await readFile(join(backupDir, name))))
+  }
+
+  async function writeImportedBackup(payload, now) {
+    if (!backupDir) return null
+    await mkdir(backupDir, { recursive: true })
+    const filePath = join(backupDir, backupFileName(now))
+    await writeCompressedJsonFileAtomic(filePath, {
+      ...payload,
+      createdAt: now.toISOString(),
+    })
+    await pruneBackups()
+    return basename(filePath)
+  }
+
+  async function restoreBackupPayload(payload) {
+    await putEncoded(DATA_KEY, payload.data)
+    await putEncoded(LOCKS_KEY, payload.locks)
+    return {
+      data: normalizeData(payload.data),
+      locks: normalizeLocks(payload.locks),
+    }
+  }
+
   return {
     async init() {
       await db.open()
@@ -263,6 +331,46 @@ export function createLevelStore({
       })
       await pruneBackups()
       return basename(filePath)
+    },
+
+    async listBackups() {
+      if (!backupDir) return []
+      const entries = await readdir(backupDir).catch(error => {
+        if (error && typeof error === 'object' && error.code === 'ENOENT') return []
+        throw error
+      })
+      const backups = await Promise.all(entries
+        .filter(isBackupFileName)
+        .map(async name => {
+          const details = await stat(join(backupDir, name))
+          return {
+            name,
+            createdAt: backupCreatedAtFromName(name) ?? details.mtime.toISOString(),
+            size: details.size,
+          }
+        }))
+      return backups.sort((left, right) => right.name.localeCompare(left.name))
+    },
+
+    async readBackup(name) {
+      return readBackupPayload(name)
+    },
+
+    async restoreBackup(name) {
+      const backup = await readBackupPayload(name)
+      await this.backupNow()
+      return restoreBackupPayload(backup)
+    },
+
+    async importBackup(buffer, now = new Date()) {
+      const backup = normalizeBackupPayload(await parseBackupBuffer(buffer))
+      await this.backupNow()
+      const name = await writeImportedBackup(backup, now)
+      const restored = await restoreBackupPayload(backup)
+      return {
+        name,
+        ...restored,
+      }
     },
 
     async close() {

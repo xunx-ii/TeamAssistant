@@ -21,6 +21,7 @@ import { SubsidyConfigDialog } from './components/SubsidyConfig'
 import { SubsidyModal } from './components/SubsidyModal'
 import { SubsidyStats } from './components/SubsidyStats'
 import { PresetSubsidyDialog } from './components/PresetSubsidyDialog'
+import { BackupSettingsDialog } from './components/BackupSettingsDialog'
 import { SlotGrid } from './components/SlotGrid'
 import { SlotRolePicker } from './components/SlotRolePicker'
 import { SignupModal } from './components/SignupModal'
@@ -73,6 +74,7 @@ function App() {
   const [showSubsidyConfig, setShowSubsidyConfig] = useState(false)
   const [showSubsidyStats, setShowSubsidyStats] = useState(false)
   const [showSubsidyPreset, setShowSubsidyPreset] = useState(false)
+  const [showBackupSettings, setShowBackupSettings] = useState(false)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
@@ -211,6 +213,11 @@ function App() {
   }, [applyLocalMutation, serverMode, syncSnapshot])
 
   const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
+  const handleBackupRestored = (data: Snapshot) => {
+    syncSnapshot(data)
+    setActiveTeamId(data.teams[0]?.id ?? '')
+    clearModals()
+  }
 
   const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
   const handleLogout = () => { removeStoredQQ(); setQq(null); setMutationError(''); clearModals() }
@@ -440,6 +447,11 @@ function App() {
                   </span>
                 )}
                 {isAdmin && (
+                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowBackupSettings(true)} disabled={!serverMode}>
+                    备份设置
+                  </Button>
+                )}
+                {isAdmin && (
                   <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyPreset(true)}>
                     补贴预设设置
                   </Button>
@@ -650,6 +662,11 @@ function App() {
       <PresetSubsidyDialog
         open={showSubsidyPreset}
         onClose={() => setShowSubsidyPreset(false)}
+      />
+      <BackupSettingsDialog
+        open={showBackupSettings}
+        onRestored={handleBackupRestored}
+        onClose={() => setShowBackupSettings(false)}
       />
     </>
   )

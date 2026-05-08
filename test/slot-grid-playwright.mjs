@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { cp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
 import { setTimeout as delay } from 'node:timers/promises'
+import { gzipSync } from 'node:zlib'
 import { chromium } from 'playwright'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 5179)
 const baseUrl = `http://127.0.0.1:${port}`
-const apiBaseUrl = 'http://127.0.0.1:23219'
+const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? 23229)
+const apiBaseUrl = `http://127.0.0.1:${apiPort}`
 const runId = `e2e-${Date.now()}`
 
 function createSlots() {
@@ -54,10 +58,10 @@ function createTeam() {
   }
 }
 
-function createEmptyTeam() {
+function createEmptyTeam(name = '管理测试团', id = `team-admin-${runId}`) {
   return {
-    id: `team-admin-${runId}`,
-    name: '管理测试团',
+    id,
+    name,
     note: '',
     config: { reservedSlots: [], locked: false },
     slots: Array.from({ length: 25 }, (_, index) => ({
@@ -86,23 +90,6 @@ function toPersistentData(data) {
     archivedTeams: Array.isArray(data?.archivedTeams) ? data.archivedTeams : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
   }
-}
-
-async function isApiReady() {
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/data`, { cache: 'no-store' })
-    return response.ok
-  } catch {
-    return false
-  }
-}
-
-async function readServerData() {
-  const response = await fetch(`${apiBaseUrl}/api/data`, { cache: 'no-store' })
-  if (!response.ok) {
-    throw new Error(`Failed to read server data: ${response.status}`)
-  }
-  return toPersistentData(await response.json())
 }
 
 async function writeServerData(data) {
@@ -161,31 +148,46 @@ let startedApiServer = false
 let viteServer = null
 let apiOutput = ''
 let viteOutput = ''
-let originalServerData = null
+let importBackupPath = ''
+let serverRoot = ''
+
+async function prepareServerRoot() {
+  const dir = resolve(rootDir, 'node_modules', '.tmp', `teamassistant-e2e-server-${runId}`)
+  await rm(dir, { recursive: true, force: true })
+  await mkdir(dir, { recursive: true })
+  await cp(resolve(rootDir, 'server.js'), join(dir, 'server.js'))
+  await cp(resolve(rootDir, 'server'), join(dir, 'server'), { recursive: true })
+  return dir
+}
 
 let browser
 try {
-  if (!await isApiReady()) {
-    apiServer = spawn(process.execPath, ['server.js'], {
-      cwd: rootDir,
-      env: { ...process.env, BROWSER: 'none' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    startedApiServer = true
-    apiServer.stdout.on('data', chunk => { apiOutput += chunk.toString() })
-    apiServer.stderr.on('data', chunk => { apiOutput += chunk.toString() })
-    await waitForHttp(apiServer, `${apiBaseUrl}/api/data`, 'backend server')
-  }
+  serverRoot = await prepareServerRoot()
+  apiServer = spawn(process.execPath, ['server.js'], {
+    cwd: serverRoot,
+    env: { ...process.env, BROWSER: 'none', PORT: String(apiPort) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  startedApiServer = true
+  apiServer.stdout.on('data', chunk => { apiOutput += chunk.toString() })
+  apiServer.stderr.on('data', chunk => { apiOutput += chunk.toString() })
+  await waitForHttp(apiServer, `${apiBaseUrl}/api/data`, 'backend server')
 
-  originalServerData = await readServerData()
   await writeServerData(createServerData(createTeam()))
+  importBackupPath = resolve(tmpdir(), `teamassistant-import-${runId}.json.gz`)
+  await writeFile(importBackupPath, gzipSync(Buffer.from(JSON.stringify({
+    version: 1,
+    createdAt: new Date().toISOString(),
+    data: createServerData(createEmptyTeam('导入备份团', `team-import-${runId}`)),
+    locks: { slots: [], teams: [] },
+  }))))
 
   viteServer = spawn(
     process.execPath,
     [viteCli, '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
     {
       cwd: rootDir,
-      env: { ...process.env, BROWSER: 'none' },
+      env: { ...process.env, BROWSER: 'none', VITE_API_PROXY_TARGET: apiBaseUrl },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   )
@@ -241,7 +243,15 @@ try {
   await assertCellContains(reservedDialog, /此位置为老板位/)
   await page.close()
 
-  await writeServerData(createServerData(createEmptyTeam()))
+  await writeServerData({
+    teams: [
+      createEmptyTeam(),
+      createEmptyTeam('切换测试团', `team-switch-${runId}`),
+    ],
+    cancellations: [],
+    archivedTeams: [],
+    logs: [],
+  })
 
   const adminPage = await browser.newPage({ viewport: { width: 960, height: 900 } })
   await adminPage.addInitScript(team => {
@@ -253,6 +263,33 @@ try {
   }, createEmptyTeam())
 
   await adminPage.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+  await adminPage.locator('.pixel-tab').filter({ hasText: '切换测试团' }).click()
+  await waitForText(adminPage.locator('h2'), /切换测试团/, adminPage)
+  await adminPage.locator('.pixel-tab').filter({ hasText: '管理测试团' }).click()
+  await waitForText(adminPage.locator('h2'), /管理测试团/, adminPage)
+  for (const opacity of await adminPage.locator('.pixel-tab').evaluateAll(elements => (
+    elements.map(element => getComputedStyle(element).opacity)
+  ))) {
+    assert.equal(opacity, '1')
+  }
+
+  const backupButton = adminPage.getByRole('button', { name: '备份设置' })
+  const presetButton = adminPage.getByRole('button', { name: '补贴预设设置' })
+  const backupButtonBox = await backupButton.boundingBox()
+  const presetButtonBox = await presetButton.boundingBox()
+  assert.ok(backupButtonBox && presetButtonBox && backupButtonBox.x < presetButtonBox.x)
+
+  await adminPage.getByRole('button', { name: '备份设置' }).click()
+  const backupDialog = adminPage.locator('[role="dialog"]')
+  await backupDialog.waitFor()
+  await assertCellContains(backupDialog, /备份设置/)
+  await assertCellContains(backupDialog, /历史备份列表/)
+  await backupDialog.getByRole('button', { name: '立即备份' }).click()
+  await waitForText(backupDialog, /已备份/, adminPage)
+  await assertCellContains(backupDialog, /backup-/)
+  await adminPage.getByRole('button', { name: 'Close' }).click()
+  await backupDialog.waitFor({ state: 'detached' })
+
   await adminPage.getByRole('button', { name: '补贴预设设置' }).click()
   const presetDialog = adminPage.locator('[role="dialog"]')
   await presetDialog.waitFor()
@@ -275,6 +312,36 @@ try {
   await assertCellContains(adminPage.locator('h2'), /\uFFFC 表情团 🌸/)
   await adminPage.getByRole('button', { name: '团队设置' }).click()
 
+  const activeTabAfterSwitch = adminPage.locator('.pixel-tab.active').first()
+  await activeTabAfterSwitch.click()
+  await delay(100)
+  const activeTabOpacity = await activeTabAfterSwitch.evaluate(element => getComputedStyle(element).opacity)
+  assert.equal(activeTabOpacity, '1')
+
+  await adminPage.getByRole('button', { name: '备份设置' }).click()
+  const restoreDialog = adminPage.locator('[role="dialog"]')
+  await restoreDialog.waitFor()
+  adminPage.once('dialog', dialog => { void dialog.accept() })
+  await restoreDialog.getByRole('button', { name: '回退' }).first().click()
+  await waitForText(restoreDialog, /已回退/, adminPage)
+  await adminPage.getByRole('button', { name: 'Close' }).click()
+  await restoreDialog.waitFor({ state: 'detached' })
+  await waitForText(adminPage.locator('h2'), /管理测试团/, adminPage)
+
+  await adminPage.getByRole('button', { name: '备份设置' }).click()
+  const importDialog = adminPage.locator('[role="dialog"]')
+  await importDialog.waitFor()
+  const fileChooserPromise = adminPage.waitForEvent('filechooser')
+  await importDialog.getByRole('button', { name: '导入备份文件' }).click()
+  const fileChooser = await fileChooserPromise
+  const importConfirm = adminPage.waitForEvent('dialog').then(dialog => dialog.accept())
+  await fileChooser.setFiles(importBackupPath)
+  await importConfirm
+  await waitForText(importDialog, /已导入/, adminPage)
+  await adminPage.getByRole('button', { name: 'Close' }).click()
+  await importDialog.waitFor({ state: 'detached' })
+  await waitForText(adminPage.locator('h2'), /导入备份团/, adminPage)
+
   const reserveInputs = adminPage.locator('input[type="number"]')
   const reserveButtons = adminPage.getByRole('button', { name: '预留' })
 
@@ -295,11 +362,12 @@ try {
   throw error
 } finally {
   if (browser) await browser.close()
-  if (originalServerData) {
-    await writeServerData(originalServerData).catch(error => {
-      console.error(`Failed to restore server data: ${error instanceof Error ? error.message : error}`)
-    })
-  }
   viteServer?.kill()
   if (startedApiServer) apiServer?.kill()
+  if (importBackupPath) {
+    await rm(importBackupPath, { force: true }).catch(() => {})
+  }
+  if (serverRoot) {
+    await rm(serverRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {})
+  }
 }

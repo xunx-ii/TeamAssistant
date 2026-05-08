@@ -82,3 +82,52 @@ test('validateLock returns explicit network reason when request fails', async ()
     assert.equal(result.error, '无法连接到报名服务，请确认后端已启动')
   })
 })
+
+test('backup API helpers use the backup endpoints', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    if (String(input).endsWith('/backups/restore')) {
+      return createJsonResponse({
+        ok: true,
+        data: { teams: [], cancellations: [], archivedTeams: [], logs: [] },
+      })
+    }
+    if (String(input).endsWith('/backups/import')) {
+      return createJsonResponse({
+        ok: true,
+        name: 'backup-imported.json.gz',
+        data: { teams: [], cancellations: [], archivedTeams: [], logs: [] },
+      })
+    }
+    return createJsonResponse({
+      ok: true,
+      backups: [{ name: 'backup-2026-01-01T00-00-00-000Z.json.gz', createdAt: '2026-01-01T00:00:00.000Z', size: 12 }],
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-backups`)
+
+    const list = await mod.fetchBackups()
+    assert.equal(list.ok, true)
+    assert.equal(list.backups[0].name, 'backup-2026-01-01T00-00-00-000Z.json.gz')
+
+    const created = await mod.createBackup()
+    assert.equal(created.ok, true)
+
+    const restored = await mod.restoreBackup('backup-2026-01-01T00-00-00-000Z.json.gz')
+    assert.equal(restored.ok, true)
+
+    const file = {
+      arrayBuffer: async () => Buffer.from('backup').buffer,
+    }
+    const imported = await mod.importBackupFile(file)
+    assert.equal(imported.ok, true)
+    assert.equal(imported.name, 'backup-imported.json.gz')
+  })
+
+  assert.equal(calls[0].input, '/api/backups')
+  assert.equal(calls[1].init.method, 'POST')
+  assert.equal(calls[2].input, '/api/backups/restore')
+  assert.equal(calls[3].input, '/api/backups/import')
+  assert.equal(calls[3].init.headers['Content-Type'], 'application/octet-stream')
+})
