@@ -12,6 +12,31 @@ const KEYS = {
 
 let serverMode = false
 
+function reportLocalStorageCorruption(key: string, raw: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  const quarantineKey = `${key}__corrupt__${Date.now()}`
+  try {
+    localStorage.setItem(quarantineKey, raw)
+    localStorage.removeItem(key)
+  } catch {
+    // ignore quota/security failures and keep best-effort warning
+  }
+  console.warn(`[storage] localStorage payload for ${key} is invalid JSON and has been quarantined as ${quarantineKey}: ${message}`)
+}
+
+function loadJsonArray<T>(key: string, normalize: (value: unknown) => T[]): T[] {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return normalize(parsed)
+  } catch (error) {
+    const raw = localStorage.getItem(key)
+    if (raw) reportLocalStorageCorruption(key, raw, error)
+    return []
+  }
+}
+
 export type LoadFromServerResult = 'loaded' | 'empty' | 'unavailable'
 
 export async function initServerMode(): Promise<boolean> {
@@ -25,32 +50,16 @@ export function hasHydratableTeams(data: Pick<ServerData, 'teams'> | null | unde
 
 // localStorage read helpers
 function loadTeamsLocal(): Team[] {
-  try {
-    const raw = localStorage.getItem(KEYS.teams)
-    if (raw) return normalizeHydratableTeams(JSON.parse(raw))
-  } catch { /* ignore */ }
-  return []
+  return loadJsonArray(KEYS.teams, value => normalizeHydratableTeams(value))
 }
 function loadCancellationsLocal(): Cancellation[] {
-  try {
-    const raw = localStorage.getItem(KEYS.cancellations)
-    if (raw) return normalizeHydratableData({ cancellations: JSON.parse(raw) }).cancellations
-  } catch { /* ignore */ }
-  return []
+  return loadJsonArray(KEYS.cancellations, value => normalizeHydratableData({ cancellations: value }).cancellations)
 }
 function loadArchivedTeamsLocal(): ArchivedTeam[] {
-  try {
-    const raw = localStorage.getItem(KEYS.archivedTeams)
-    if (raw) return normalizeHydratableData({ archivedTeams: JSON.parse(raw) }).archivedTeams
-  } catch { /* ignore */ }
-  return []
+  return loadJsonArray(KEYS.archivedTeams, value => normalizeHydratableData({ archivedTeams: value }).archivedTeams)
 }
 function loadLogsLocal(): OperationLog[] {
-  try {
-    const raw = localStorage.getItem(KEYS.logs)
-    if (raw) return normalizeHydratableData({ logs: JSON.parse(raw) }).logs
-  } catch { /* ignore */ }
-  return []
+  return loadJsonArray(KEYS.logs, value => normalizeHydratableData({ logs: value }).logs)
 }
 
 // Public API
