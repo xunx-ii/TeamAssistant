@@ -1,16 +1,19 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
+import { SubsidyPresetLoader } from './SubsidyPresetLoader'
+import { TeamWeekSelector } from './TeamWeekSelector'
+import { loadSubsidyPresets } from '../subsidyPresets'
+import { formatSubsidyPresetPreview } from '../subsidyPresetPreview'
 import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 import {
   DEFAULT_INITIAL_RESERVE_COUNTS,
   normalizeCreateTeamReserveCount,
   type CreateTeamGuideValues,
-  type CreateTeamWeekMode,
 } from '../teamCreation'
-import { getShanghaiDateKey } from '../week'
+import { getCurrentWeekStartKey } from '../week'
 
 interface Props {
   open: boolean
@@ -18,27 +21,26 @@ interface Props {
   onClose: () => void
 }
 
-const weekOptions: { value: CreateTeamWeekMode; label: string }[] = [
-  { value: 'thisWeek', label: '本周' },
-  { value: 'nextWeek', label: '下周' },
-  { value: 'custom', label: '自定义时间' },
-]
-
 export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
   const [name, setName] = useState('')
-  const [weekMode, setWeekMode] = useState<CreateTeamWeekMode>('thisWeek')
-  const [customDate, setCustomDate] = useState('')
-  const [importSubsidyPresets, setImportSubsidyPresets] = useState(false)
+  const [weekStart, setWeekStart] = useState(getCurrentWeekStartKey)
+  const [presetDraftIds, setPresetDraftIds] = useState<Set<string>>(() => new Set())
+  const [loadedPresetIds, setLoadedPresetIds] = useState<string[]>([])
   const [quickReserve, setQuickReserve] = useState(false)
   const [reserveT, setReserveT] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
   const [reserveHealer, setReserveHealer] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
   const [reserveBoss, setReserveBoss] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveBoss)
+  const subsidyPresets = loadSubsidyPresets()
+  const loadedSubsidyPresets = useMemo(() => {
+    const loadedIds = new Set(loadedPresetIds)
+    return subsidyPresets.filter(preset => loadedIds.has(preset.id))
+  }, [loadedPresetIds, subsidyPresets])
 
   const reset = () => {
     setName('')
-    setWeekMode('thisWeek')
-    setCustomDate('')
-    setImportSubsidyPresets(false)
+    setWeekStart(getCurrentWeekStartKey())
+    setPresetDraftIds(new Set())
+    setLoadedPresetIds([])
     setQuickReserve(false)
     setReserveT(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
     setReserveHealer(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
@@ -51,9 +53,8 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
     if (!trimmed) return
     onConfirm({
       name: trimmed,
-      weekMode,
-      customDate,
-      importSubsidyPresets,
+      weekStart,
+      subsidyPresetIds: loadedPresetIds,
       quickReserve,
       reserveT,
       reserveHealer,
@@ -62,11 +63,17 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
     reset()
   }
 
-  const handleWeekModeChange = (mode: CreateTeamWeekMode) => {
-    setWeekMode(mode)
-    if (mode === 'custom' && !customDate) {
-      setCustomDate(getShanghaiDateKey())
-    }
+  const togglePresetDraft = (id: string) => {
+    setPresetDraftIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const applyPresetDraft = () => {
+    setLoadedPresetIds([...presetDraftIds])
   }
 
   return (
@@ -88,42 +95,28 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
             />
           </div>
 
-          <div className="space-y-2">
-            <Label>本次团队时间</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {weekOptions.map(option => (
-                <Button
-                  key={option.value}
-                  type="button"
-                  variant={weekMode === option.value ? 'default' : 'outline'}
-                  size="sm"
-                  aria-pressed={weekMode === option.value}
-                  onClick={() => handleWeekModeChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-            {weekMode === 'custom' && (
-              <Input
-                aria-label="自定义团队日期"
-                type="date"
-                value={customDate}
-                onChange={e => setCustomDate(e.target.value)}
-              />
-            )}
-          </div>
+          <TeamWeekSelector value={weekStart} onChange={setWeekStart} />
 
           <div className="space-y-3">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-primary"
-                checked={importSubsidyPresets}
-                onChange={e => setImportSubsidyPresets(e.target.checked)}
+            <div className="flex flex-wrap items-center gap-2">
+              <SubsidyPresetLoader
+                presets={subsidyPresets}
+                checkedIds={presetDraftIds}
+                onToggle={togglePresetDraft}
+                onApply={applyPresetDraft}
               />
-              导入补贴预设
-            </label>
+            </div>
+            {loadedSubsidyPresets.length > 0 && (
+              <div className="space-y-1 rounded border border-border p-2">
+                {loadedSubsidyPresets.map(preset => (
+                  <p key={preset.id} className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">{preset.name}</span>
+                    {' '}
+                    {formatSubsidyPresetPreview(preset)}
+                  </p>
+                ))}
+              </div>
+            )}
             <label className="flex items-center gap-2 text-sm font-medium">
               <input
                 type="checkbox"

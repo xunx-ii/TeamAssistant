@@ -344,6 +344,11 @@ function App() {
     void runMutation({ type: 'updateTeamNote', teamId: activeTeam.id, note: textNote })
   }
 
+  const handleUpdateWeekStart = (weekStart: string) => {
+    if (!activeTeam) return
+    void runMutation({ type: 'updateTeamWeekStart', teamId: activeTeam.id, weekStart })
+  }
+
   const handleSetSlotRole = async (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => {
     const slotIndex = setRoleSlot
     if (slotIndex === null || !activeTeam) return
@@ -565,10 +570,12 @@ function App() {
               {isAdmin && (
                 <AdminConfig
                   teamName={activeTeam.name}
+                  weekStart={activeTeam.weekStart ?? currentWeekStart}
                   note={activeTeam.note}
                   serverMode={serverMode}
                   locked={activeTeam.config.locked}
                   onRename={handleAdminRename}
+                  onUpdateWeekStart={handleUpdateWeekStart}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
                   onToggleLock={async () => {

@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
+import { SubsidyPresetLoader } from './SubsidyPresetLoader'
 import type { SubsidyType } from '../types'
 import { loadSubsidyPresets } from '../subsidyPresets'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
@@ -21,24 +22,10 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
     })),
   )
   const [dirty, setDirty] = useState(false)
-  const [showPresets, setShowPresets] = useState(false)
   const [checkedPresets, setCheckedPresets] = useState<Set<string>>(new Set())
-  const presetRef = useRef<HTMLDivElement>(null)
 
   const markDirty = () => setDirty(true)
   const presets = loadSubsidyPresets()
-
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (presetRef.current && !presetRef.current.contains(e.target as Node)) {
-        setShowPresets(false)
-      }
-    }
-    if (showPresets) {
-      document.addEventListener('mousedown', handleClick)
-      return () => document.removeEventListener('mousedown', handleClick)
-    }
-  }, [showPresets])
 
   const addType = () => {
     setTypes(prev => [...prev, { id: String(Date.now()), name: '', levels: [] }])
@@ -104,10 +91,9 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
         ...p,
         id: `${p.id}-${Date.now()}`,
         levels: p.levels.map(l => ({ ...l })),
-      }))
+    }))
     setTypes(prev => [...prev, ...newTypes])
     setCheckedPresets(new Set())
-    setShowPresets(false)
     markDirty()
   }
 
@@ -187,39 +173,12 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
         </div>
         <div className="flex gap-2 flex-wrap pt-1">
           <Button size="sm" variant="outline" onClick={addType}>+ 新增补贴类型</Button>
-          <div className="relative" ref={presetRef}>
-            <Button size="sm" variant="outline" onClick={() => setShowPresets(p => !p)}>
-              载入预设 ▾
-            </Button>
-            {showPresets && presets.length > 0 && (
-              <div className="absolute bottom-full left-0 mb-1 bg-background border border-border rounded shadow-lg p-2 min-w-[200px] z-10">
-                <div className="space-y-1 mb-2">
-                  {presets.map(p => (
-                    <label key={p.id} className="flex items-center gap-2 px-2 py-1 hover:bg-muted rounded cursor-pointer text-xs">
-                      <input
-                        type="checkbox"
-                        className="h-3 w-3 accent-primary"
-                        checked={checkedPresets.has(p.id)}
-                        onChange={() => togglePresetCheck(p.id)}
-                      />
-                      <span className="text-foreground">{p.name}</span>
-                      <span className="text-muted-foreground">
-                        ({p.levels.map(l => `${l.name}:${l.gold}`).join(', ')})
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                <Button
-                  size="xs"
-                  className="w-full"
-                  disabled={checkedPresets.size === 0}
-                  onClick={applyCheckedPresets}
-                >
-                  载入选中的预设
-                </Button>
-              </div>
-            )}
-          </div>
+          <SubsidyPresetLoader
+            presets={presets}
+            checkedIds={checkedPresets}
+            onToggle={togglePresetCheck}
+            onApply={applyCheckedPresets}
+          />
           {dirty && (
             <Button size="sm" onClick={handleSave}>保存补贴</Button>
           )}

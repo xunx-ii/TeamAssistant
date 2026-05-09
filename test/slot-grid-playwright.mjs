@@ -319,7 +319,13 @@ try {
   await createDialog.waitFor()
   await createDialog.getByLabel('团队名称').fill('下周补贴团')
   await createDialog.getByRole('button', { name: '下周' }).click()
-  await createDialog.getByLabel('导入补贴预设').check()
+  await assertCellContains(createDialog, /\d{4}年\d+月\d+日-\d{4}年\d+月\d+日周/)
+  await createDialog.getByRole('button', { name: '载入预设 ▾' }).click()
+  await assertCellContains(createDialog, /伤害补贴/)
+  await assertCellContains(createDialog, /第一:8000/)
+  await createDialog.getByLabel(/伤害补贴/).check()
+  await createDialog.getByRole('button', { name: '载入选中的预设' }).click()
+  await assertCellContains(createDialog, /伤害补贴/)
   await createDialog.getByLabel('一键限坑').check()
   await createDialog.getByLabel(/^T$/).fill('2')
   await createDialog.getByLabel('奶').fill('2')
@@ -336,7 +342,7 @@ try {
   })
   assert.ok(createdTeam)
   assert.match(createdTeam.weekStart, /^\d{4}-\d{2}-\d{2}$/)
-  assert.equal(createdTeam.subsidyTypes.length, 3)
+  assert.equal(createdTeam.subsidyTypes.length, 1)
 
   await adminPage.getByRole('button', { name: '补贴登记' }).click()
   const subsidyDialog = adminPage.getByRole('dialog').filter({ hasText: '补贴登记' })
@@ -344,6 +350,29 @@ try {
   await assertCellContains(subsidyDialog, /下周补贴团/)
   await adminPage.getByRole('button', { name: 'Close' }).click()
   await subsidyDialog.waitFor({ state: 'detached' })
+
+  await adminPage.getByRole('button', { name: '团队设置' }).click()
+  await assertCellContains(adminPage.locator('body'), /团队时间/)
+  await assertCellContains(adminPage.locator('body'), /\d{4}年\d+月\d+日-\d{4}年\d+月\d+日周/)
+  await adminPage.getByRole('button', { name: '本周' }).click()
+  await adminPage.waitForFunction(({ name, previousWeekStart }) => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === name)?.weekStart !== previousWeekStart
+  }, { name: '下周补贴团', previousWeekStart: createdTeam.weekStart })
+  const thisWeekTeam = await adminPage.evaluate(() => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === '下周补贴团')
+  })
+  assert.notEqual(thisWeekTeam.weekStart, createdTeam.weekStart)
+  await adminPage.getByRole('button', { name: '自定义时间' }).click()
+  await adminPage.getByLabel('自定义团队日期').fill('2026-05-17')
+  await waitForText(adminPage.locator('body'), /2026年5月11日-2026年5月17日周/, adminPage)
+  const customWeekTeam = await adminPage.evaluate(() => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === '下周补贴团')
+  })
+  assert.equal(customWeekTeam.weekStart, '2026-05-11')
+  await adminPage.getByRole('button', { name: '收起设置' }).click()
   await adminPage.locator('.pixel-tab').filter({ hasText: '管理测试团' }).click()
   await waitForText(adminPage.locator('h2'), /管理测试团/, adminPage)
 

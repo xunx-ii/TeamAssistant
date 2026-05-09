@@ -6,24 +6,29 @@ import { createSubsidyTargets } from '../src/subsidy.ts'
 import {
   createTeamFromGuide,
   normalizeCreateTeamReserveCount,
-  resolveCreateTeamWeekStart,
 } from '../src/teamCreation.ts'
 import { normalizeHydratableData as normalizeServerHydratableData, validateSnapshotData } from '../server/data-store.js'
 
 const now = new Date('2026-05-09T10:00:00+08:00')
 
-const presets = [{
-  id: 'damage',
-  name: '伤害补贴',
-  levels: [{ name: '第一', gold: 8000 }],
-}]
+const presets = [
+  {
+    id: 'damage',
+    name: '伤害补贴',
+    levels: [{ name: '第一', gold: 8000 }],
+  },
+  {
+    id: 'heal',
+    name: '治疗补贴',
+    levels: [{ name: '第一', gold: 5000 }],
+  },
+]
 
 function createGuide(overrides = {}) {
   return {
     name: '下周补贴团',
-    weekMode: 'nextWeek',
-    customDate: '',
-    importSubsidyPresets: true,
+    weekStart: '2026-05-11',
+    subsidyPresetIds: ['damage'],
     quickReserve: true,
     reserveT: 2,
     reserveHealer: 2,
@@ -32,19 +37,12 @@ function createGuide(overrides = {}) {
   }
 }
 
-test('create team guide resolves preset weeks and custom dates', () => {
-  assert.equal(resolveCreateTeamWeekStart(createGuide({ weekMode: 'thisWeek' }), now), '2026-05-04')
-  assert.equal(resolveCreateTeamWeekStart(createGuide({ weekMode: 'nextWeek' }), now), '2026-05-11')
-  assert.equal(resolveCreateTeamWeekStart(createGuide({ weekMode: 'custom', customDate: '2026-05-17' }), now), '2026-05-11')
-  assert.equal(resolveCreateTeamWeekStart(createGuide({ weekMode: 'custom', customDate: 'bad' }), now), '2026-05-04')
-})
-
-test('createTeamFromGuide imports presets and applies initial slot limits', () => {
+test('createTeamFromGuide imports selected presets and applies initial slot limits', () => {
   const team = createTeamFromGuide(createGuide(), presets, now)
 
   assert.equal(team.name, '下周补贴团')
   assert.equal(team.weekStart, '2026-05-11')
-  assert.deepEqual(team.subsidyTypes, presets)
+  assert.deepEqual(team.subsidyTypes, [presets[0]])
   assert.deepEqual(team.config.reservedSlots, [0])
   assert.equal(team.slots[20].status, 'fixed')
   assert.equal(team.slots[20].fixedRole, 'T')

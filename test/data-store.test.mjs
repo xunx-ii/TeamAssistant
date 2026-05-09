@@ -247,6 +247,24 @@ test('setTeamLockState updates team config lock flag', () => {
   assert.equal(unlocked.teams[0].config.locked, false)
 })
 
+test('updateTeamWeekStart stores valid team week values', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const next = apply(createSnapshot(), {
+      type: 'updateTeamWeekStart',
+      teamId: 'team-1',
+      weekStart: '2026-05-11',
+    })
+    assert.equal(next.teams[0].weekStart, '2026-05-11')
+
+    const ignored = apply(next, {
+      type: 'updateTeamWeekStart',
+      teamId: 'team-1',
+      weekStart: 'bad-value',
+    })
+    assert.equal(ignored.teams[0].weekStart, '2026-05-11')
+  }
+})
+
 test('validateDataReplacement rejects empty snapshots and accidental overwrites', () => {
   const current = createSnapshot()
 

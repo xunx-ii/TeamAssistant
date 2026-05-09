@@ -3,15 +3,12 @@ import { createEmptySlots, generateId } from './types'
 import { applyMutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { normalizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
-import { getNextWeekStartKey, getWeekStartKey, getWeekStartKeyFromDateKey } from './week'
-
-export type CreateTeamWeekMode = 'thisWeek' | 'nextWeek' | 'custom'
+import { getWeekStartKey } from './week'
 
 export interface CreateTeamGuideValues {
   name: string
-  weekMode: CreateTeamWeekMode
-  customDate: string
-  importSubsidyPresets: boolean
+  weekStart: string
+  subsidyPresetIds: string[]
   quickReserve: boolean
   reserveT: number
   reserveHealer: number
@@ -37,14 +34,6 @@ export function cloneSubsidyTypes(subsidyTypes: SubsidyType[]) {
   }))
 }
 
-export function resolveCreateTeamWeekStart(values: Pick<CreateTeamGuideValues, 'weekMode' | 'customDate'>, now: Date | number = new Date()) {
-  if (values.weekMode === 'nextWeek') return getNextWeekStartKey(now)
-  if (values.weekMode === 'custom') {
-    return getWeekStartKeyFromDateKey(values.customDate, getWeekStartKey(now))
-  }
-  return getWeekStartKey(now)
-}
-
 export function createDefaultTeam(name = '默认团队', options: { weekStart?: string; subsidyTypes?: SubsidyType[] } = {}): Team {
   const textName = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
   const team: Team = {
@@ -60,9 +49,11 @@ export function createDefaultTeam(name = '默认团队', options: { weekStart?: 
 }
 
 export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPresets: SubsidyType[], now: Date | number = new Date()): Team {
+  const selectedPresetIds = new Set(values.subsidyPresetIds)
+  const selectedSubsidyPresets = subsidyPresets.filter(preset => selectedPresetIds.has(preset.id))
   const team = createDefaultTeam(values.name, {
-    weekStart: resolveCreateTeamWeekStart(values, now),
-    subsidyTypes: values.importSubsidyPresets ? subsidyPresets : undefined,
+    weekStart: values.weekStart || getWeekStartKey(now),
+    subsidyTypes: selectedSubsidyPresets,
   })
 
   if (!values.quickReserve) return team

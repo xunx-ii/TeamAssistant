@@ -14,6 +14,7 @@ export type Mutation =
   | { type: 'archiveTeam'; teamId: string; archivedBy: string; archivedAt?: number; fallbackTeam?: Team }
   | { type: 'restoreArchivedTeam'; archiveId: string; actorQq: string; restoredAt?: number }
   | { type: 'renameTeam'; teamId: string; name: string }
+  | { type: 'updateTeamWeekStart'; teamId: string; weekStart: string }
   | { type: 'updateTeamNote'; teamId: string; note: string }
   | { type: 'reorderTeams'; ids: string[] }
   | { type: 'toggleTeamConfigLock'; teamId: string; locked: boolean }
@@ -133,6 +134,10 @@ function normalizeSubsidyTypes(subsidyTypes: unknown): SubsidyType[] {
             }))
         : [],
     }))
+}
+
+function normalizeWeekStart(value: unknown): string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : ''
 }
 
 function normalizeMemberSubsidySelections(selections: unknown): MemberSubsidySelection[] {
@@ -266,6 +271,13 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
     case 'renameTeam': {
       const team = getTeamOrThrow(next, mutation.teamId)
       team.name = normalizeTeamName(mutation.name, team.name)
+      return next
+    }
+
+    case 'updateTeamWeekStart': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      const weekStart = normalizeWeekStart(mutation.weekStart)
+      if (weekStart) team.weekStart = weekStart
       return next
     }
 

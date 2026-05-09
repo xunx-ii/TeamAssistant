@@ -81,6 +81,10 @@ function normalizeSubsidyTypes(subsidyTypes) {
     }))
 }
 
+function normalizeWeekStart(weekStart) {
+  return typeof weekStart === 'string' && WEEK_START_PATTERN.test(weekStart) ? weekStart : ''
+}
+
 function normalizeMemberSubsidySelections(selections) {
   if (!Array.isArray(selections)) {
     throw new Error('Invalid member subsidy selections')
@@ -598,6 +602,13 @@ export function applyMutation(currentData, mutation) {
     case 'renameTeam': {
       const team = getTeamOrThrow(data, mutation.teamId)
       team.name = normalizeTeamName(mutation.name, team.name)
+      return data
+    }
+
+    case 'updateTeamWeekStart': {
+      const team = getTeamOrThrow(data, mutation.teamId)
+      const weekStart = normalizeWeekStart(mutation.weekStart)
+      if (weekStart) team.weekStart = weekStart
       return data
     }
 

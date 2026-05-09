@@ -2,14 +2,17 @@ import { useEffect, useState, memo } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
+import { TeamWeekSelector } from './TeamWeekSelector'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   teamName: string
+  weekStart: string
   note: string
   serverMode: boolean
   locked: boolean
   onRename: (name: string) => void
+  onUpdateWeekStart: (weekStart: string) => void
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
   onToggleLock: () => void
@@ -18,7 +21,7 @@ interface Props {
   onOpenSubsidyConfig: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMode, locked, onRename, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onRename, onUpdateWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -70,6 +73,11 @@ export const AdminConfig = memo(function AdminConfig({ teamName, note, serverMod
               <Button size="xs" variant="outline" onClick={() => onRename(normalizeTextInput(editName, { maxLength: TEXT_INPUT_LIMITS.teamName }) || teamName)}>保存</Button>
             </div>
           </div>
+          <TeamWeekSelector
+            value={weekStart}
+            label="团队时间"
+            onChange={onUpdateWeekStart}
+          />
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">快速预留</h3>
             <div className="flex flex-wrap gap-4">
