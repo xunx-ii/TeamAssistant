@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -24,6 +24,7 @@ interface Props {
 export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
   const [name, setName] = useState('')
   const [weekStart, setWeekStart] = useState(getCurrentWeekStartKey)
+  const [weekTouched, setWeekTouched] = useState(false)
   const [presetDraftIds, setPresetDraftIds] = useState<Set<string>>(() => new Set())
   const [loadedPresetIds, setLoadedPresetIds] = useState<string[]>([])
   const [quickReserve, setQuickReserve] = useState(false)
@@ -36,9 +37,18 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
     return subsidyPresets.filter(preset => loadedIds.has(preset.id))
   }, [loadedPresetIds, subsidyPresets])
 
+  useEffect(() => {
+    if (weekTouched) return
+    const interval = window.setInterval(() => {
+      setWeekStart(getCurrentWeekStartKey())
+    }, 60_000)
+    return () => window.clearInterval(interval)
+  }, [weekTouched])
+
   const reset = () => {
     setName('')
     setWeekStart(getCurrentWeekStartKey())
+    setWeekTouched(false)
     setPresetDraftIds(new Set())
     setLoadedPresetIds([])
     setQuickReserve(false)
@@ -51,9 +61,10 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
     e.preventDefault()
     const trimmed = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
     if (!trimmed) return
+    const resolvedWeekStart = weekTouched ? weekStart : getCurrentWeekStartKey()
     onConfirm({
       name: trimmed,
-      weekStart,
+      weekStart: resolvedWeekStart,
       subsidyPresetIds: loadedPresetIds,
       quickReserve,
       reserveT,
@@ -76,6 +87,11 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
     setLoadedPresetIds([...presetDraftIds])
   }
 
+  const handleWeekStartChange = (value: string) => {
+    setWeekTouched(true)
+    setWeekStart(value)
+  }
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) { onClose(); reset() } }}>
       <DialogContent className="max-w-md max-h-[86vh] overflow-y-auto">
@@ -95,7 +111,7 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
             />
           </div>
 
-          <TeamWeekSelector value={weekStart} onChange={setWeekStart} />
+          <TeamWeekSelector value={weekStart} onChange={handleWeekStartChange} />
 
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">

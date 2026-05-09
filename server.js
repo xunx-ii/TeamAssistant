@@ -72,6 +72,7 @@ const store = createLevelStore({
   backupDir: BACKUP_DIR,
   maxBackups: BACKUP_HISTORY_LIMIT,
   normalizeData,
+  normalizeBackupData: normalizeHydratableData,
   normalizeLocks: normalizeLockData,
   validateData: validateSnapshotData,
 })

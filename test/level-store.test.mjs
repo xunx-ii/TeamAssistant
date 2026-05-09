@@ -12,7 +12,7 @@ import {
   decodeFromLevelValue,
   encodeForLevelValue,
 } from '../server/level-store.js'
-import { normalizeData, validateSnapshotData } from '../server/data-store.js'
+import { normalizeData, normalizeHydratableData, validateSnapshotData } from '../server/data-store.js'
 import { normalizeLockData } from '../server/lock-store.js'
 
 const gunzipAsync = promisify(gunzip)
@@ -27,7 +27,7 @@ async function withTempDir(run) {
   }
 }
 
-function createStore(dir, maxBackups = 48) {
+function createStore(dir, maxBackups = 48, options = {}) {
   return createLevelStore({
     dbPath: join(dir, 'leveldb'),
     legacyDataFile: join(dir, 'data.json'),
@@ -35,6 +35,7 @@ function createStore(dir, maxBackups = 48) {
     backupDir: join(dir, 'backup'),
     maxBackups,
     normalizeData,
+    normalizeBackupData: options.normalizeBackupData,
     normalizeLocks: normalizeLockData,
     validateData: validateSnapshotData,
   })
@@ -388,6 +389,39 @@ test('level store imports a compressed backup and restores it', async () => {
     assert.equal(result.data.teams[0].id, 'team-imported')
     assert.equal((await store.readData()).teams[0].id, 'team-imported')
     assert.deepEqual((await store.listBackups()).map(item => item.name), [result.name])
+    await store.close()
+  })
+})
+
+test('level store hydrates backup data before validation', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir, 48, { normalizeBackupData: normalizeHydratableData })
+    await store.init()
+    await mkdir(join(dir, 'backup'), { recursive: true })
+
+    const team = {
+      ...createBackupTeam('team-hydrated-backup', '旧周次备份'),
+      weekStart: '2026-05-24',
+      memberSubsidies: {
+        10001: [{ typeId: 'damage', levelName: '高', weekStart: '2026-05-24' }],
+      },
+      subsidyTypes: [{
+        id: 'damage',
+        name: '伤害补贴',
+        levels: [{ name: '高', gold: 500 }],
+      }],
+    }
+    await writeFile(join(dir, 'backup', 'backup-2026-01-01T05-10-00-000Z.json'), JSON.stringify({
+      version: 1,
+      createdAt: '2026-01-01T05:10:00.000Z',
+      data: { teams: [team], cancellations: [], archivedTeams: [], logs: [] },
+      locks: { slots: [], teams: [] },
+    }))
+
+    const restored = await store.restoreBackup('backup-2026-01-01T05-10-00-000Z.json')
+    assert.equal(restored.data.teams[0].weekStart, '2026-05-18')
+    assert.equal(restored.data.teams[0].memberSubsidies['10001'][0].weekStart, '2026-05-18')
+    assert.equal((await store.readData()).teams[0].weekStart, '2026-05-18')
     await store.close()
   })
 })

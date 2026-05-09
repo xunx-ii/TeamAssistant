@@ -315,6 +315,23 @@ try {
   await adminPage.getByRole('button', { name: 'Close' }).click()
   await presetDialog.waitFor({ state: 'detached' })
 
+  await adminPage.getByRole('button', { name: '创建团队' }).click()
+  const staleDefaultDialog = adminPage.getByRole('dialog').filter({ hasText: '创建团队' })
+  await staleDefaultDialog.waitFor()
+  await assertCellContains(staleDefaultDialog, /2026年5月4日-2026年5月10日周/)
+  await staleDefaultDialog.getByLabel('团队名称').fill('跨周默认团')
+  await adminPage.clock.setFixedTime(new Date('2026-05-10T16:10:00.000Z'))
+  await staleDefaultDialog.getByRole('button', { name: '创建' }).click()
+  await staleDefaultDialog.waitFor({ state: 'detached' })
+  await waitForText(adminPage.locator('h2'), /跨周默认团/, adminPage)
+  const staleDefaultTeam = await adminPage.evaluate(() => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === '跨周默认团')
+  })
+  assert.equal(staleDefaultTeam.weekStart, '2026-05-11')
+  await adminPage.locator('.pixel-tab').filter({ hasText: '管理测试团' }).click()
+  await waitForText(adminPage.locator('h2'), /管理测试团/, adminPage)
+
   await adminPage.clock.setFixedTime(new Date('2026-05-10T16:10:00.000Z'))
   await adminPage.getByRole('button', { name: '创建团队' }).click()
   const createDialog = adminPage.getByRole('dialog').filter({ hasText: '创建团队' })

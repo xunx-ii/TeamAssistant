@@ -243,6 +243,7 @@ export function createLevelStore({
   backupDir,
   maxBackups = 48,
   normalizeData,
+  normalizeBackupData = normalizeData,
   normalizeLocks,
   validateData = data => data.teams.length > 0,
 }) {
@@ -318,7 +319,7 @@ export function createLevelStore({
     const source = payload && typeof payload === 'object' && 'data' in payload
       ? payload
       : { data: payload, locks: {} }
-    const data = normalizeData(source.data)
+    const data = normalizeBackupData(source.data)
     if (!validateData(data)) {
       throw new Error('Invalid backup data')
     }
