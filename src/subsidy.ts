@@ -9,6 +9,10 @@ function hasSubsidies(team: Pick<Team, 'subsidyTypes'>) {
   return (team.subsidyTypes?.length ?? 0) > 0
 }
 
+function getTeamSubsidyWeekStart(team: Pick<Team, 'weekStart'>, fallbackWeekStart: string) {
+  return team.weekStart ?? fallbackWeekStart
+}
+
 function normalizeSelectionsForWeek(selections: MemberSubsidySelection[] | undefined, fallbackWeekStart: string) {
   return (selections ?? [])
     .map(selection => ({
@@ -36,11 +40,12 @@ export function createSubsidyTargets(
 
   for (const team of teams) {
     if (!hasSubsidies(team)) continue
+    const teamWeekStart = getTeamSubsidyWeekStart(team, currentWeekStart)
     targets.push({
       id: `team:${team.id}`,
       name: team.name,
-      weekStart: currentWeekStart,
-      currentSelections: qq ? normalizeSelectionsForWeek(getMemberSubsidySelections(team.memberSubsidies, qq), currentWeekStart) : [],
+      weekStart: teamWeekStart,
+      currentSelections: qq ? normalizeSelectionsForWeek(getMemberSubsidySelections(team.memberSubsidies, qq), teamWeekStart) : [],
       teamId: team.id,
       subsidyTypes: team.subsidyTypes ?? [],
       memberSubsidies: team.memberSubsidies ?? {},
@@ -49,7 +54,7 @@ export function createSubsidyTargets(
 
   for (const archive of archivedTeams) {
     if (!hasSubsidies(archive.team)) continue
-    const archiveWeekStart = getWeekStartKey(archive.archivedAt)
+    const archiveWeekStart = getTeamSubsidyWeekStart(archive.team, getWeekStartKey(archive.archivedAt))
     targets.push({
       id: `archive:${archive.id}`,
       name: `${archive.team.name}（归档）`,

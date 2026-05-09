@@ -10,6 +10,7 @@ interface HydratableSnapshot {
 
 const VALID_SLOT_STATUSES = new Set(['empty', 'occupied', 'reserved', 'fixed'])
 const VALID_ROLES = new Set(['T', '治疗', 'DPS'])
+const WEEK_START_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -128,6 +129,10 @@ function normalizeSubsidyTypes(subsidyTypes: unknown): SubsidyType[] | undefined
     }))
 }
 
+function normalizeWeekStart(value: unknown) {
+  return typeof value === 'string' && WEEK_START_PATTERN.test(value) ? value : undefined
+}
+
 function normalizeMemberSubsidies(memberSubsidies: unknown) {
   if (!isRecord(memberSubsidies)) return undefined
   const normalized: NonNullable<Team['memberSubsidies']> = {}
@@ -171,6 +176,8 @@ function normalizeTeam(team: unknown): Team | null {
   }
   const subsidyTypes = normalizeSubsidyTypes(team.subsidyTypes)
   const memberSubsidies = normalizeMemberSubsidies(team.memberSubsidies)
+  const weekStart = normalizeWeekStart(team.weekStart)
+  if (weekStart) normalized.weekStart = weekStart
   if (subsidyTypes) normalized.subsidyTypes = subsidyTypes
   if (memberSubsidies) normalized.memberSubsidies = memberSubsidies
   return normalized

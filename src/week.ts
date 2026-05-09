@@ -4,6 +4,24 @@ function formatWeekKey(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
+function parseDateKey(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() + 1 !== month ||
+    date.getUTCDate() !== day
+  ) {
+    return null
+  }
+  return { year, month, day, weekday: date.getUTCDay() }
+}
+
 function getWeekStartParts(value: Date | number = new Date()) {
   const parts = getShanghaiDateParts(value)
   if (!parts) {
@@ -24,6 +42,31 @@ export function getWeekStartDate(value: Date | number = new Date()) {
 export function getWeekStartKey(value: Date | number = new Date()) {
   const parts = getWeekStartParts(value)
   return formatWeekKey(parts.year, parts.month, parts.day)
+}
+
+export function getShanghaiDateKey(value: Date | number = new Date()) {
+  const parts = getShanghaiDateParts(value)
+  if (!parts) return ''
+  return formatWeekKey(parts.year, parts.month, parts.day)
+}
+
+export function getWeekStartKeyFromDateKey(value: string, fallback = getWeekStartKey()) {
+  const parts = parseDateKey(value)
+  if (!parts) return fallback
+  const offset = parts.weekday === 0 ? -6 : 1 - parts.weekday
+  const monday = addShanghaiDays(parts.year, parts.month, parts.day, offset)
+  return formatWeekKey(monday.year, monday.month, monday.day)
+}
+
+export function addWeeksToWeekStartKey(value: string, weeks: number) {
+  const parts = parseDateKey(value)
+  if (!parts) return value
+  const shifted = addShanghaiDays(parts.year, parts.month, parts.day, weeks * 7)
+  return formatWeekKey(shifted.year, shifted.month, shifted.day)
+}
+
+export function getNextWeekStartKey(value: Date | number = new Date()) {
+  return addWeeksToWeekStartKey(getWeekStartKey(value), 1)
 }
 
 export function formatWeekRange(value: string) {

@@ -10,13 +10,14 @@ import {
   initServerMode, loadFromServer, normalizeServerData,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget } from './types'
-import { createEmptySlots, generateId } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { createSubsidyTargets } from './subsidy'
+import { loadSubsidyPresets } from './subsidyPresets'
+import { createDefaultTeam, createTeamFromGuide, type CreateTeamGuideValues } from './teamCreation'
 import { getCurrentWeekStartKey } from './week'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
@@ -36,17 +37,6 @@ import { OperationLogDialog } from './components/OperationLogDialog'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
-
-function createDefaultTeam(name = '默认团队'): Team {
-  const textName = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
-  return {
-    id: generateId(),
-    name: normalizeTeamName(textName, '默认团队'),
-    note: '',
-    config: { reservedSlots: [], locked: false },
-    slots: createEmptySlots(),
-  }
-}
 
 function findPendingNotice(qq: string | null, cancellations: Cancellation[]) {
   if (!qq) return null
@@ -102,7 +92,10 @@ function App() {
   const notice = findPendingNotice(qq, cancellations)
   const currentWeekStart = getCurrentWeekStartKey()
   const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
-  const subsidyRegistrationTargets = useMemo(() => subsidyTargets.filter(target => target.weekStart === currentWeekStart), [subsidyTargets, currentWeekStart])
+  const subsidyRegistrationTargets = useMemo(
+    () => subsidyTargets.filter(target => target.teamId || target.weekStart === currentWeekStart),
+    [subsidyTargets, currentWeekStart],
+  )
 
   const syncSnapshot = useCallback((snapshot: Snapshot) => {
     const nextTeams = snapshot.teams ?? []
@@ -274,9 +267,8 @@ function App() {
     }
   }, [activeTeam, runMutation])
 
-  const handleCreateTeam = async (name: string) => {
-    const teamName = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
-    const team = createDefaultTeam(normalizeTeamName(teamName, '默认团队'))
+  const handleCreateTeam = async (values: CreateTeamGuideValues) => {
+    const team = createTeamFromGuide(values, loadSubsidyPresets())
     const result = await runMutation({ type: 'createTeam', team })
     if (result.ok) {
       setActiveTeamId(team.id)

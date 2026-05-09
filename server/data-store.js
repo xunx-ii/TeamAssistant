@@ -14,6 +14,7 @@ export function normalizeData(data) {
 const TOTAL_SLOTS = 25
 const VALID_SLOT_STATUSES = new Set(['empty', 'occupied', 'reserved', 'fixed'])
 const VALID_ROLES = new Set(['T', '治疗', 'DPS'])
+const WEEK_START_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function isPlainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -142,6 +143,10 @@ function isValidTeamConfig(config) {
   )
 }
 
+function isValidWeekStart(weekStart) {
+  return weekStart === undefined || (typeof weekStart === 'string' && WEEK_START_PATTERN.test(weekStart))
+}
+
 function isValidSubsidyTypes(subsidyTypes) {
   if (subsidyTypes === undefined) return true
   return Array.isArray(subsidyTypes) && subsidyTypes.every(type => (
@@ -197,6 +202,10 @@ function normalizeHydratableConfig(config) {
 
 function normalizeHydratableSubsidyTypes(subsidyTypes) {
   return Array.isArray(subsidyTypes) ? normalizeSubsidyTypes(subsidyTypes) : undefined
+}
+
+function normalizeHydratableWeekStart(weekStart) {
+  return typeof weekStart === 'string' && WEEK_START_PATTERN.test(weekStart) ? weekStart : undefined
 }
 
 function normalizeHydratableMemberSubsidies(memberSubsidies) {
@@ -277,6 +286,9 @@ function normalizeHydratableTeam(team) {
   }
   const subsidyTypes = normalizeHydratableSubsidyTypes(team.subsidyTypes)
   const memberSubsidies = normalizeHydratableMemberSubsidies(team.memberSubsidies)
+  const weekStart = normalizeHydratableWeekStart(team.weekStart)
+  if (weekStart) normalized.weekStart = weekStart
+  else delete normalized.weekStart
   if (subsidyTypes) normalized.subsidyTypes = subsidyTypes
   if (memberSubsidies) normalized.memberSubsidies = memberSubsidies
   return normalized
@@ -325,6 +337,7 @@ function isValidSnapshotTeam(team) {
     typeof team.id === 'string' &&
     typeof team.name === 'string' &&
     typeof team.note === 'string' &&
+    isValidWeekStart(team.weekStart) &&
     isValidTeamConfig(team.config) &&
     Array.isArray(team.slots) &&
     team.slots.length === TOTAL_SLOTS &&

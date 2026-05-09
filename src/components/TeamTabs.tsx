@@ -137,7 +137,7 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
           </div>
         ))}
         {isAdmin && (
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded border-2 border-border bg-transparent inline-flex items-center justify-center mb-0.5" onClick={onCreate} title="创建团队">
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded border-2 border-border bg-transparent inline-flex items-center justify-center mb-0.5" onClick={onCreate} title="创建团队" aria-label="创建团队">
             <Plus className="h-4 w-4" />
           </Button>
         )}

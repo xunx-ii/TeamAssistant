@@ -53,6 +53,7 @@ export interface Team {
   id: string
   name: string
   note: string
+  weekStart?: string
   config: TeamConfig
   slots: Slot[]
   subsidyTypes?: SubsidyType[]
