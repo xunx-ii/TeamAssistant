@@ -687,11 +687,13 @@ function App() {
           onClose={() => setSetRoleSlot(null)}
         />
       )}
-      <CreateTeamDialog
-        open={showCreateTeam}
-        onConfirm={handleCreateTeam}
-        onClose={() => setShowCreateTeam(false)}
-      />
+      {showCreateTeam && (
+        <CreateTeamDialog
+          open={showCreateTeam}
+          onConfirm={handleCreateTeam}
+          onClose={() => setShowCreateTeam(false)}
+        />
+      )}
       <OperationLogDialog
         open={showLogs}
         teamName={activeTeam?.name ?? ''}

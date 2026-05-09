@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -18,8 +18,8 @@ interface Props {
 }
 
 export function TeamWeekSelector({ value, onChange, label = '本次团队时间', customDateLabel = '自定义团队日期' }: Props) {
-  const currentWeekStart = useMemo(() => getCurrentWeekStartKey(), [])
-  const nextWeekStart = useMemo(() => getNextWeekStartKey(), [])
+  const currentWeekStart = getCurrentWeekStartKey()
+  const nextWeekStart = getNextWeekStartKey()
   const resolvedValue = value || currentWeekStart
   const [customOpen, setCustomOpen] = useState(false)
   const derivedMode = resolvedValue === currentWeekStart
@@ -28,14 +28,14 @@ export function TeamWeekSelector({ value, onChange, label = '本次团队时间'
   const selectedMode = customOpen ? 'custom' : derivedMode
 
   const handleCustomDateChange = (date: string) => {
-    onChange(getWeekStartKeyFromDateKey(date, currentWeekStart))
+    onChange(getWeekStartKeyFromDateKey(date, getCurrentWeekStartKey()))
   }
 
   const handleCustomMode = () => {
     setCustomOpen(true)
     if (derivedMode !== 'custom') {
       const date = getShanghaiDateKey()
-      onChange(getWeekStartKeyFromDateKey(date, currentWeekStart))
+      onChange(getWeekStartKeyFromDateKey(date, getCurrentWeekStartKey()))
     }
   }
 
@@ -50,7 +50,7 @@ export function TeamWeekSelector({ value, onChange, label = '本次团队时间'
           aria-pressed={selectedMode === 'thisWeek'}
           onClick={() => {
             setCustomOpen(false)
-            onChange(currentWeekStart)
+            onChange(getCurrentWeekStartKey())
           }}
         >
           本周
@@ -62,7 +62,7 @@ export function TeamWeekSelector({ value, onChange, label = '本次团队时间'
           aria-pressed={selectedMode === 'nextWeek'}
           onClick={() => {
             setCustomOpen(false)
-            onChange(nextWeekStart)
+            onChange(getNextWeekStartKey())
           }}
         >
           下周

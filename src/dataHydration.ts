@@ -1,5 +1,6 @@
 import type { ArchivedTeam, Cancellation, Member, OperationLog, Slot, SubsidyType, Team, TeamConfig } from './types'
 import { createEmptySlots, TOTAL_SLOTS } from './types'
+import { normalizeWeekStartKey } from './week'
 
 interface HydratableSnapshot {
   teams: Team[]
@@ -10,7 +11,6 @@ interface HydratableSnapshot {
 
 const VALID_SLOT_STATUSES = new Set(['empty', 'occupied', 'reserved', 'fixed'])
 const VALID_ROLES = new Set(['T', '治疗', 'DPS'])
-const WEEK_START_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -130,7 +130,7 @@ function normalizeSubsidyTypes(subsidyTypes: unknown): SubsidyType[] | undefined
 }
 
 function normalizeWeekStart(value: unknown) {
-  return typeof value === 'string' && WEEK_START_PATTERN.test(value) ? value : undefined
+  return normalizeWeekStartKey(value) || undefined
 }
 
 function normalizeMemberSubsidies(memberSubsidies: unknown) {
@@ -145,8 +145,9 @@ function normalizeMemberSubsidies(memberSubsidies: unknown) {
           typeId: toText(selection.typeId),
           levelName: toText(selection.levelName),
         }
-        if (typeof selection.weekStart === 'string') {
-          normalizedSelection.weekStart = selection.weekStart
+        const weekStart = normalizeWeekStart(selection.weekStart)
+        if (weekStart) {
+          normalizedSelection.weekStart = weekStart
         }
         return normalizedSelection
       }))

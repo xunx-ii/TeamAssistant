@@ -256,12 +256,58 @@ test('updateTeamWeekStart stores valid team week values', () => {
     })
     assert.equal(next.teams[0].weekStart, '2026-05-11')
 
-    const ignored = apply(next, {
+    const normalized = apply(next, {
+      type: 'updateTeamWeekStart',
+      teamId: 'team-1',
+      weekStart: '2026-05-24',
+    })
+    assert.equal(normalized.teams[0].weekStart, '2026-05-18')
+
+    const ignored = apply(normalized, {
       type: 'updateTeamWeekStart',
       teamId: 'team-1',
       weekStart: 'bad-value',
     })
-    assert.equal(ignored.teams[0].weekStart, '2026-05-11')
+    assert.equal(ignored.teams[0].weekStart, '2026-05-18')
+
+    const invalidDate = apply(normalized, {
+      type: 'updateTeamWeekStart',
+      teamId: 'team-1',
+      weekStart: '2026-99-99',
+    })
+    assert.equal(invalidDate.teams[0].weekStart, '2026-05-18')
+  }
+})
+
+test('team weekStart validation rejects invalid stored dates', () => {
+  const monday = createSnapshot()
+  monday.teams[0].weekStart = '2026-05-18'
+  assert.equal(validateSnapshotData(monday), true)
+
+  const nonMonday = createSnapshot()
+  nonMonday.teams[0].weekStart = '2026-05-24'
+  assert.equal(validateSnapshotData(nonMonday), false)
+
+  const invalidDate = createSnapshot()
+  invalidDate.teams[0].weekStart = '2026-99-99'
+  assert.equal(validateSnapshotData(invalidDate), false)
+})
+
+test('hydration normalizes team and subsidy week starts', () => {
+  const snapshot = createSnapshot()
+  snapshot.teams[0].weekStart = '2026-05-24'
+  snapshot.teams[0].memberSubsidies = {
+    10001: [
+      { typeId: 'damage', levelName: '高', weekStart: '2026-05-24' },
+      { typeId: 'damage', levelName: '坏日期', weekStart: '2026-99-99' },
+    ],
+  }
+
+  for (const hydrate of [normalizeHydratableData, normalizeClientHydratableData]) {
+    const hydrated = hydrate(snapshot)
+    assert.equal(hydrated.teams[0].weekStart, '2026-05-18')
+    assert.equal(hydrated.teams[0].memberSubsidies['10001'][0].weekStart, '2026-05-18')
+    assert.equal('weekStart' in hydrated.teams[0].memberSubsidies['10001'][1], false)
   }
 })
 
@@ -478,6 +524,28 @@ test('registerMemberSubsidies replaces only the selected week', () => {
       { typeId: 'damage', levelName: '上周', weekStart: '2026-04-27' },
       { typeId: 'damage', levelName: '新本周', weekStart: '2026-05-04' },
     ])
+
+    const normalizedWeek = apply(next, {
+      type: 'registerMemberSubsidies',
+      teamId: 'team-1',
+      qq: '10001',
+      selections: [{ typeId: 'damage', levelName: '周日记录' }],
+      weekStart: '2026-05-24',
+    })
+    assert.deepEqual(normalizedWeek.teams[0].memberSubsidies['10001'], [
+      { typeId: 'damage', levelName: '上周', weekStart: '2026-04-27' },
+      { typeId: 'damage', levelName: '新本周', weekStart: '2026-05-04' },
+      { typeId: 'damage', levelName: '周日记录', weekStart: '2026-05-18' },
+    ])
+
+    const invalidWeek = apply(normalizedWeek, {
+      type: 'registerMemberSubsidies',
+      teamId: 'team-1',
+      qq: '10001',
+      selections: [{ typeId: 'damage', levelName: '坏日期' }],
+      weekStart: '2026-99-99',
+    })
+    assert.deepEqual(invalidWeek.teams[0].memberSubsidies['10001'], normalizedWeek.teams[0].memberSubsidies['10001'])
   }
 })
 

@@ -13,6 +13,7 @@ import {
   getWeekStartDate,
   getWeekStartKey,
   getWeekStartKeyFromDateKey,
+  normalizeWeekStartKey,
 } from '../src/week.ts'
 
 test('week helpers use Asia/Shanghai calendar boundaries', () => {
@@ -23,6 +24,9 @@ test('week helpers use Asia/Shanghai calendar boundaries', () => {
   assert.equal(getNextWeekStartKey(new Date('2026-05-09T00:00:00.000Z')), '2026-05-11')
   assert.equal(getWeekStartKeyFromDateKey('2026-05-17', '2026-05-04'), '2026-05-11')
   assert.equal(getWeekStartKeyFromDateKey('bad-value', '2026-05-04'), '2026-05-04')
+  assert.equal(normalizeWeekStartKey('2026-05-24'), '2026-05-18')
+  assert.equal(normalizeWeekStartKey('2026-02-31'), '')
+  assert.equal(formatWeekRange('2026-99-99'), '2026-99-99')
   assert.equal(formatWeekRange('2025-12-29'), '2025年12月29日-2026年1月4日周')
 })
 

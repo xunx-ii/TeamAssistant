@@ -3,7 +3,7 @@ import { createEmptySlots, generateId } from './types'
 import { applyMutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { normalizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
-import { getWeekStartKey } from './week'
+import { getWeekStartKey, normalizeWeekStartKey } from './week'
 
 export interface CreateTeamGuideValues {
   name: string
@@ -43,7 +43,8 @@ export function createDefaultTeam(name = '默认团队', options: { weekStart?: 
     config: { reservedSlots: [], locked: false },
     slots: createEmptySlots(),
   }
-  if (options.weekStart) team.weekStart = options.weekStart
+  const weekStart = normalizeWeekStartKey(options.weekStart)
+  if (weekStart) team.weekStart = weekStart
   if (options.subsidyTypes?.length) team.subsidyTypes = cloneSubsidyTypes(options.subsidyTypes)
   return team
 }
@@ -52,7 +53,7 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
   const selectedPresetIds = new Set(values.subsidyPresetIds)
   const selectedSubsidyPresets = subsidyPresets.filter(preset => selectedPresetIds.has(preset.id))
   const team = createDefaultTeam(values.name, {
-    weekStart: values.weekStart || getWeekStartKey(now),
+    weekStart: normalizeWeekStartKey(values.weekStart, getWeekStartKey(now)),
     subsidyTypes: selectedSubsidyPresets,
   })
 

@@ -1,5 +1,6 @@
 import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, SubsidyType, Team } from './types'
 import { normalizeTeamName } from './teamName'
+import { normalizeWeekStartKey } from './week'
 
 export interface Snapshot {
   teams: Team[]
@@ -137,7 +138,7 @@ function normalizeSubsidyTypes(subsidyTypes: unknown): SubsidyType[] {
 }
 
 function normalizeWeekStart(value: unknown): string {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : ''
+  return normalizeWeekStartKey(value)
 }
 
 function normalizeMemberSubsidySelections(selections: unknown): MemberSubsidySelection[] {
@@ -151,8 +152,9 @@ function normalizeMemberSubsidySelections(selections: unknown): MemberSubsidySel
         typeId: toText(selection.typeId),
         levelName: toText(selection.levelName),
       }
-      if (typeof selection.weekStart === 'string') {
-        normalized.weekStart = selection.weekStart
+      const weekStart = normalizeWeekStart(selection.weekStart)
+      if (weekStart) {
+        normalized.weekStart = weekStart
       }
       return normalized
     })
@@ -228,12 +230,17 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
   const next = cloneSnapshot(snapshot)
 
   switch (mutation.type) {
-    case 'createTeam':
-      next.teams.push({
+    case 'createTeam': {
+      const team = {
         ...mutation.team,
         name: normalizeTeamName(mutation.team.name, '默认团队'),
-      })
+      }
+      const weekStart = normalizeWeekStart(mutation.team.weekStart)
+      if (weekStart) team.weekStart = weekStart
+      else delete team.weekStart
+      next.teams.push(team)
       return next
+    }
 
     case 'deleteTeam':
       next.teams = next.teams.filter(team => team.id !== mutation.teamId)
@@ -504,16 +511,21 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 
     case 'registerMemberSubsidies': {
       const team = getSubsidyTeamOrThrow(next, mutation)
+      const hasScopedWeekStart = typeof mutation.weekStart === 'string' && mutation.weekStart.length > 0
+      const weekStart = normalizeWeekStart(mutation.weekStart)
+      if (hasScopedWeekStart && !weekStart) {
+        return next
+      }
       if (!team.memberSubsidies) {
         team.memberSubsidies = {}
       }
       const memberQq = toText(mutation.qq)
       const existing = normalizeMemberSubsidySelections(getRecordValue(team.memberSubsidies, memberQq) ?? [])
       const normalizedSelections = normalizeMemberSubsidySelections(mutation.selections)
-      if (mutation.weekStart) {
+      if (weekStart) {
         const nextSelections = [
-          ...existing.filter(selection => selection.weekStart && selection.weekStart !== mutation.weekStart),
-          ...normalizedSelections.map(selection => ({ ...selection, weekStart: mutation.weekStart })),
+          ...existing.filter(selection => selection.weekStart && selection.weekStart !== weekStart),
+          ...normalizedSelections.map(selection => ({ ...selection, weekStart })),
         ]
         setRecordValue(team.memberSubsidies, memberQq, nextSelections)
       } else {

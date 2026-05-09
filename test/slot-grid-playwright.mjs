@@ -254,6 +254,7 @@ try {
   })
 
   const adminPage = await browser.newPage({ viewport: { width: 960, height: 900 } })
+  await adminPage.clock.setFixedTime(new Date('2026-05-10T15:50:00.000Z'))
   await adminPage.addInitScript(team => {
     localStorage.setItem('team_qq', '89906502')
     localStorage.setItem('team_teams_v3', JSON.stringify([team]))
@@ -314,12 +315,14 @@ try {
   await adminPage.getByRole('button', { name: 'Close' }).click()
   await presetDialog.waitFor({ state: 'detached' })
 
+  await adminPage.clock.setFixedTime(new Date('2026-05-10T16:10:00.000Z'))
   await adminPage.getByRole('button', { name: '创建团队' }).click()
   const createDialog = adminPage.getByRole('dialog').filter({ hasText: '创建团队' })
   await createDialog.waitFor()
+  await assertCellContains(createDialog, /2026年5月11日-2026年5月17日周/)
   await createDialog.getByLabel('团队名称').fill('下周补贴团')
   await createDialog.getByRole('button', { name: '下周' }).click()
-  await assertCellContains(createDialog, /\d{4}年\d+月\d+日-\d{4}年\d+月\d+日周/)
+  await assertCellContains(createDialog, /2026年5月18日-2026年5月24日周/)
   await createDialog.getByRole('button', { name: '载入预设 ▾' }).click()
   await assertCellContains(createDialog, /伤害补贴/)
   await assertCellContains(createDialog, /第一:8000/)
@@ -341,7 +344,7 @@ try {
     return teams.find(team => team.name === '下周补贴团')
   })
   assert.ok(createdTeam)
-  assert.match(createdTeam.weekStart, /^\d{4}-\d{2}-\d{2}$/)
+  assert.equal(createdTeam.weekStart, '2026-05-18')
   assert.equal(createdTeam.subsidyTypes.length, 1)
 
   await adminPage.getByRole('button', { name: '补贴登记' }).click()
@@ -365,7 +368,7 @@ try {
     const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
     return teams.find(team => team.name === '下周补贴团')
   })
-  assert.notEqual(thisWeekTeam.weekStart, createdTeam.weekStart)
+  assert.equal(thisWeekTeam.weekStart, '2026-05-11')
   await adminPage.getByRole('button', { name: '自定义时间' }).click()
   await adminPage.getByLabel('自定义团队日期').fill('2026-06-21')
   await waitForText(adminPage.locator('body'), /2026年6月15日-2026年6月21日周/, adminPage)

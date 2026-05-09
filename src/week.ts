@@ -58,6 +58,10 @@ export function getWeekStartKeyFromDateKey(value: string, fallback = getWeekStar
   return formatWeekKey(monday.year, monday.month, monday.day)
 }
 
+export function normalizeWeekStartKey(value: unknown, fallback = '') {
+  return typeof value === 'string' ? getWeekStartKeyFromDateKey(value, fallback) : fallback
+}
+
 export function addWeeksToWeekStartKey(value: string, weeks: number) {
   const parts = parseDateKey(value)
   if (!parts) return value
@@ -70,11 +74,9 @@ export function getNextWeekStartKey(value: Date | number = new Date()) {
 }
 
 export function formatWeekRange(value: string) {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!match) return value
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
+  const parts = parseDateKey(value)
+  if (!parts) return value
+  const { year, month, day } = parts
   const end = addShanghaiDays(year, month, day, 6)
   return `${year}年${month}月${day}日-${end.year}年${end.month}月${end.day}日周`
 }

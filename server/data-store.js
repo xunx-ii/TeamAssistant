@@ -14,7 +14,45 @@ export function normalizeData(data) {
 const TOTAL_SLOTS = 25
 const VALID_SLOT_STATUSES = new Set(['empty', 'occupied', 'reserved', 'fixed'])
 const VALID_ROLES = new Set(['T', '治疗', 'DPS'])
-const WEEK_START_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+function formatWeekKey(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function parseDateKey(value) {
+  const match = typeof value === 'string' ? value.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() + 1 !== month ||
+    date.getUTCDate() !== day
+  ) {
+    return null
+  }
+  return { year, month, day, weekday: date.getUTCDay() }
+}
+
+function addDateKeyDays(year, month, day, days) {
+  const date = new Date(Date.UTC(year, month - 1, day + days))
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  }
+}
+
+function normalizeWeekStartKey(value, fallback = '') {
+  const parts = parseDateKey(value)
+  if (!parts) return fallback
+  const offset = parts.weekday === 0 ? -6 : 1 - parts.weekday
+  const monday = addDateKeyDays(parts.year, parts.month, parts.day, offset)
+  return formatWeekKey(monday.year, monday.month, monday.day)
+}
 
 function isPlainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -82,7 +120,7 @@ function normalizeSubsidyTypes(subsidyTypes) {
 }
 
 function normalizeWeekStart(weekStart) {
-  return typeof weekStart === 'string' && WEEK_START_PATTERN.test(weekStart) ? weekStart : ''
+  return normalizeWeekStartKey(weekStart)
 }
 
 function normalizeMemberSubsidySelections(selections) {
@@ -96,8 +134,9 @@ function normalizeMemberSubsidySelections(selections) {
         typeId: toText(selection.typeId),
         levelName: toText(selection.levelName),
       }
-      if (typeof selection.weekStart === 'string') {
-        normalized.weekStart = selection.weekStart
+      const weekStart = normalizeWeekStart(selection.weekStart)
+      if (weekStart) {
+        normalized.weekStart = weekStart
       }
       return normalized
     })
@@ -148,7 +187,7 @@ function isValidTeamConfig(config) {
 }
 
 function isValidWeekStart(weekStart) {
-  return weekStart === undefined || (typeof weekStart === 'string' && WEEK_START_PATTERN.test(weekStart))
+  return weekStart === undefined || (typeof weekStart === 'string' && normalizeWeekStartKey(weekStart) === weekStart)
 }
 
 function isValidSubsidyTypes(subsidyTypes) {
@@ -174,7 +213,7 @@ function isValidMemberSubsidies(memberSubsidies) {
       isPlainObject(selection) &&
       typeof selection.typeId === 'string' &&
       typeof selection.levelName === 'string' &&
-      (!Object.prototype.hasOwnProperty.call(selection, 'weekStart') || typeof selection.weekStart === 'string')
+      (!Object.prototype.hasOwnProperty.call(selection, 'weekStart') || isValidWeekStart(selection.weekStart))
     ))
   ))
 }
@@ -209,7 +248,7 @@ function normalizeHydratableSubsidyTypes(subsidyTypes) {
 }
 
 function normalizeHydratableWeekStart(weekStart) {
-  return typeof weekStart === 'string' && WEEK_START_PATTERN.test(weekStart) ? weekStart : undefined
+  return normalizeWeekStart(weekStart) || undefined
 }
 
 function normalizeHydratableMemberSubsidies(memberSubsidies) {
@@ -558,10 +597,14 @@ export function applyMutation(currentData, mutation) {
 
   switch (mutation.type) {
     case 'createTeam': {
-      data.teams.push({
+      const team = {
         ...mutation.team,
         name: normalizeTeamName(mutation.team?.name, '默认团队'),
-      })
+      }
+      const weekStart = normalizeWeekStart(mutation.team?.weekStart)
+      if (weekStart) team.weekStart = weekStart
+      else delete team.weekStart
+      data.teams.push(team)
       return data
     }
 
@@ -828,16 +871,21 @@ export function applyMutation(currentData, mutation) {
 
     case 'registerMemberSubsidies': {
       const team = getSubsidyTeamOrThrow(data, mutation)
+      const hasScopedWeekStart = typeof mutation.weekStart === 'string' && mutation.weekStart.length > 0
+      const weekStart = normalizeWeekStart(mutation.weekStart)
+      if (hasScopedWeekStart && !weekStart) {
+        return data
+      }
       if (!team.memberSubsidies) {
         team.memberSubsidies = {}
       }
       const qq = toText(mutation.qq)
       const existing = normalizeMemberSubsidySelections(getRecordValue(team.memberSubsidies, qq) ?? [])
       const normalizedSelections = normalizeMemberSubsidySelections(mutation.selections)
-      if (typeof mutation.weekStart === 'string' && mutation.weekStart) {
+      if (weekStart) {
         const nextSelections = [
-          ...existing.filter(selection => selection.weekStart && selection.weekStart !== mutation.weekStart),
-          ...normalizedSelections.map(selection => ({ ...selection, weekStart: mutation.weekStart })),
+          ...existing.filter(selection => selection.weekStart && selection.weekStart !== weekStart),
+          ...normalizedSelections.map(selection => ({ ...selection, weekStart })),
         ]
         setRecordValue(team.memberSubsidies, qq, nextSelections)
       } else {
