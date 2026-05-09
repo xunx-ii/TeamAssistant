@@ -3,9 +3,9 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 import {
-  addWeeksToWeekStartKey,
   formatWeekRange,
   getCurrentWeekStartKey,
+  getNextWeekStartKey,
   getShanghaiDateKey,
   getWeekStartKeyFromDateKey,
 } from '../week'
@@ -15,28 +15,27 @@ interface Props {
   onChange: (weekStart: string) => void
   label?: string
   customDateLabel?: string
-  referenceWeekStart?: string
 }
 
-export function TeamWeekSelector({ value, onChange, label = '本次团队时间', customDateLabel = '自定义团队日期', referenceWeekStart }: Props) {
-  const baseWeekStart = useMemo(() => referenceWeekStart || getCurrentWeekStartKey(), [referenceWeekStart])
-  const nextWeekStart = useMemo(() => addWeeksToWeekStartKey(baseWeekStart, 1), [baseWeekStart])
-  const resolvedValue = value || baseWeekStart
+export function TeamWeekSelector({ value, onChange, label = '本次团队时间', customDateLabel = '自定义团队日期' }: Props) {
+  const currentWeekStart = useMemo(() => getCurrentWeekStartKey(), [])
+  const nextWeekStart = useMemo(() => getNextWeekStartKey(), [])
+  const resolvedValue = value || currentWeekStart
   const [customOpen, setCustomOpen] = useState(false)
-  const derivedMode = resolvedValue === baseWeekStart
+  const derivedMode = resolvedValue === currentWeekStart
     ? 'thisWeek'
     : (resolvedValue === nextWeekStart ? 'nextWeek' : 'custom')
   const selectedMode = customOpen ? 'custom' : derivedMode
 
   const handleCustomDateChange = (date: string) => {
-    onChange(getWeekStartKeyFromDateKey(date, baseWeekStart))
+    onChange(getWeekStartKeyFromDateKey(date, currentWeekStart))
   }
 
   const handleCustomMode = () => {
     setCustomOpen(true)
     if (derivedMode !== 'custom') {
       const date = getShanghaiDateKey()
-      onChange(getWeekStartKeyFromDateKey(date, baseWeekStart))
+      onChange(getWeekStartKeyFromDateKey(date, currentWeekStart))
     }
   }
 
@@ -51,7 +50,7 @@ export function TeamWeekSelector({ value, onChange, label = '本次团队时间'
           aria-pressed={selectedMode === 'thisWeek'}
           onClick={() => {
             setCustomOpen(false)
-            onChange(baseWeekStart)
+            onChange(currentWeekStart)
           }}
         >
           本周

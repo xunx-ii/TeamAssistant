@@ -87,7 +87,6 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
             <TeamWeekSelector
               value={editWeekStart}
               label="调整时间"
-              referenceWeekStart={weekStart}
               onChange={updateEditWeekStart}
             />
             <div className="flex justify-end">
