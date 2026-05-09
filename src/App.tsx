@@ -15,7 +15,7 @@ import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult,
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
-import { createSubsidyTargets } from './subsidy'
+import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
 import { loadSubsidyPresets } from './subsidyPresets'
 import { createDefaultTeam, createTeamFromGuide, type CreateTeamGuideValues } from './teamCreation'
 import { getCurrentWeekStartKey } from './week'
@@ -93,7 +93,7 @@ function App() {
   const currentWeekStart = getCurrentWeekStartKey()
   const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
   const subsidyRegistrationTargets = useMemo(
-    () => subsidyTargets.filter(target => target.teamId || target.weekStart === currentWeekStart),
+    () => getSubsidyRegistrationTargets(subsidyTargets, currentWeekStart),
     [subsidyTargets, currentWeekStart],
   )
 
@@ -389,6 +389,7 @@ function App() {
 
   const handleRegisterSubsidies = (target: SubsidyTarget, selections: MemberSubsidySelection[]) => {
     if (!qq) return
+    if (target.weekStart !== currentWeekStart) return
     void runMutation({
       type: 'registerMemberSubsidies',
       teamId: target.teamId,

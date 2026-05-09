@@ -70,6 +70,10 @@ export function createSubsidyTargets(
   return targets
 }
 
+export function getSubsidyRegistrationTargets(targets: SubsidyTarget[], currentWeekStart = getCurrentWeekStartKey()) {
+  return targets.filter(target => target.weekStart === currentWeekStart)
+}
+
 export function getSubsidyWeekOptions(targets: SubsidyTarget[], currentWeekStart = getCurrentWeekStartKey()) {
   const weeks = new Set<string>([currentWeekStart])
   for (const target of targets) {
