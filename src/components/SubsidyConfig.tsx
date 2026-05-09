@@ -4,17 +4,17 @@ import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { SubsidyPresetLoader } from './SubsidyPresetLoader'
 import type { SubsidyType } from '../types'
-import { loadSubsidyPresets } from '../subsidyPresets'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
+  subsidyPresets: SubsidyType[]
   subsidyTypes: SubsidyType[]
   onSave: (types: SubsidyType[]) => void
   onClose: () => void
 }
 
-export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Props) {
+export function SubsidyConfigDialog({ open, subsidyPresets, subsidyTypes, onSave, onClose }: Props) {
   const [types, setTypes] = useState<SubsidyType[]>(() =>
     subsidyTypes.map(t => ({
       ...t,
@@ -25,7 +25,7 @@ export function SubsidyConfigDialog({ open, subsidyTypes, onSave, onClose }: Pro
   const [checkedPresets, setCheckedPresets] = useState<Set<string>>(new Set())
 
   const markDirty = () => setDirty(true)
-  const presets = loadSubsidyPresets()
+  const presets = subsidyPresets
 
   const addType = () => {
     setTypes(prev => [...prev, { id: String(Date.now()), name: '', levels: [] }])

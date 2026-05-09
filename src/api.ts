@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, OperationLog, Team } from './types'
+import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team } from './types'
 import type { Mutation } from './dataStore'
 
 const API = '/api'
@@ -13,6 +13,7 @@ export interface ServerData {
   cancellations: Cancellation[]
   archivedTeams: ArchivedTeam[]
   logs: OperationLog[]
+  subsidyPresets?: SubsidyType[]
   locks?: SlotLock[]
 }
 
@@ -219,6 +220,20 @@ export async function validateLock(teamId: string, slotIndex: number, qq: string
   })
 }
 
+
+export async function fetchSubsidyPresets(): Promise<SubsidyType[] | null> {
+  const data = await requestData<{ presets?: SubsidyType[] }>(`${API}/subsidy-presets`, noCache)
+  return Array.isArray(data?.presets) ? data.presets : null
+}
+
+export async function pushSubsidyPresets(presets: SubsidyType[]): Promise<boolean> {
+  const result = await requestResult<{ ok: boolean }>(`${API}/subsidy-presets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ presets }),
+  })
+  return result.ok
+}
 export async function fetchBackups(): Promise<BackupListResult> {
   return requestResult<BackupListResult>(`${API}/backups`, noCache)
 }

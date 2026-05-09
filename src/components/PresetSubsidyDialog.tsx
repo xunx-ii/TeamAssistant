@@ -3,28 +3,33 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import type { SubsidyLevel, SubsidyType } from '../types'
-import { loadSubsidyPresets, saveSubsidyPresets } from '../subsidyPresets'
+import { saveSubsidyPresetsRemote } from '../subsidyPresets'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
+  subsidyPresets: SubsidyType[]
+  onSaved: (presets: SubsidyType[]) => void
   onClose: () => void
 }
 
 interface EditorProps {
+  subsidyPresets: SubsidyType[]
+  onSaved: (presets: SubsidyType[]) => void
   onClose: () => void
 }
 
-export function PresetSubsidyDialog({ open, onClose }: Props) {
+export function PresetSubsidyDialog({ open, subsidyPresets, onSaved, onClose }: Props) {
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      {open && <PresetSubsidyEditor onClose={onClose} />}
+      {open && <PresetSubsidyEditor subsidyPresets={subsidyPresets} onSaved={onSaved} onClose={onClose} />}
     </Dialog>
   )
 }
 
-function PresetSubsidyEditor({ onClose }: EditorProps) {
-  const [presets, setPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
+function PresetSubsidyEditor({ subsidyPresets, onSaved, onClose }: EditorProps) {
+  const [presets, setPresets] = useState<SubsidyType[]>(subsidyPresets)
+  const [saveError, setSaveError] = useState('')
 
   const addType = () => {
     setPresets(prev => [...prev, { id: `preset-${Date.now()}`, name: '', levels: [] }])
@@ -64,7 +69,8 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
     }))
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setSaveError('')
     const valid = presets
       .map(t => ({
         ...t,
@@ -77,7 +83,12 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
           .filter(l => l.name),
       }))
       .filter(t => t.name && t.levels.length > 0)
-    saveSubsidyPresets(valid)
+    const saved = await saveSubsidyPresetsRemote(valid)
+    if (!saved) {
+      setSaveError('保存失败：未同步到服务器，请稍后重试')
+      return
+    }
+    onSaved(valid)
     onClose()
   }
 
@@ -139,6 +150,9 @@ function PresetSubsidyEditor({ onClose }: EditorProps) {
           <Button size="sm" variant="outline" onClick={addType}>+ 新增预设类型</Button>
           <Button size="sm" onClick={handleSave}>保存预设</Button>
         </div>
+        {saveError && (
+          <p className="text-xs text-destructive">{saveError}</p>
+        )}
       </div>
     </DialogContent>
   )

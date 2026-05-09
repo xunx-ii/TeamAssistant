@@ -7,6 +7,7 @@ import { gzip, gunzip } from 'zlib'
 
 const DATA_KEY = 'app:data'
 const LOCKS_KEY = 'app:locks'
+const SUBSIDY_PRESETS_KEY = 'app:subsidy-presets'
 const ENCODING_MARKER = '__teamAssistantEncoding'
 const BASE64_UTF8 = 'base64:utf8'
 const BASE64_UTF16LE = 'base64:utf16le'
@@ -246,6 +247,7 @@ export function createLevelStore({
   normalizeBackupData = normalizeData,
   normalizeLocks,
   validateData = data => data.teams.length > 0,
+  normalizeSubsidyPresets = value => Array.isArray(value) ? value : [],
 }) {
   const db = new Level(dbPath, { valueEncoding: 'json' })
 
@@ -328,6 +330,7 @@ export function createLevelStore({
       createdAt: typeof source.createdAt === 'string' ? source.createdAt : formatShanghaiISOString(new Date()),
       data,
       locks: normalizeLocks(source.locks),
+      subsidyPresets: normalizeSubsidyPresets(source.subsidyPresets),
     }
   }
 
@@ -352,9 +355,11 @@ export function createLevelStore({
   async function restoreBackupPayload(payload) {
     await putEncoded(DATA_KEY, payload.data)
     await putEncoded(LOCKS_KEY, payload.locks)
+    await putEncoded(SUBSIDY_PRESETS_KEY, payload.subsidyPresets)
     return {
       data: normalizeData(payload.data),
       locks: normalizeLocks(payload.locks),
+      subsidyPresets: normalizeSubsidyPresets(payload.subsidyPresets),
     }
   }
 
@@ -363,6 +368,7 @@ export function createLevelStore({
       await db.open()
       await migrateLegacy(DATA_KEY, legacyDataFile, normalizeData, normalizeData({}))
       await migrateLegacy(LOCKS_KEY, legacyLocksFile, normalizeLocks, normalizeLocks({}))
+      await migrateLegacy(SUBSIDY_PRESETS_KEY, null, normalizeSubsidyPresets, normalizeSubsidyPresets([]))
     },
 
     async readData() {
@@ -390,6 +396,7 @@ export function createLevelStore({
         createdAt: formatShanghaiISOString(target.createdAt),
         data: await this.readData(),
         locks: await this.readLocks(),
+        subsidyPresets: await this.readSubsidyPresets(),
       })
       await pruneBackups()
       return target.name
@@ -446,6 +453,14 @@ export function createLevelStore({
 
     async close() {
       await db.close()
+    },
+
+    async readSubsidyPresets() {
+      return getDecoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets, normalizeSubsidyPresets([]))
+    },
+
+    async writeSubsidyPresets(presets) {
+      await putEncoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets(presets))
     },
   }
 }

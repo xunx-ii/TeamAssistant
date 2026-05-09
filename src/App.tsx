@@ -65,6 +65,7 @@ function App() {
   const [archivedTeams, setArchivedTeams] = useState<ArchivedTeam[]>(loadArchivedTeams)
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>(loadOperationLogs)
   const [adminQQs, setAdminQQs] = useState<string[]>([])
+  const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
 
   const [signupSlot, setSignupSlot] = useState<number | null>(null)
   const [editSlot, setEditSlot] = useState<number | null>(null)
@@ -116,6 +117,8 @@ function App() {
     initServerMode().then(async (sm) => {
       if (sm) {
         const loadResult = await loadFromServer()
+        const loadedData = await fetchData()
+        if (loadedData?.subsidyPresets) setSubsidyPresets(loadedData.subsidyPresets)
         if (loadResult === 'loaded') {
           const loadedTeams = loadTeams()
           const loadedCancellations = loadCancellations()
@@ -160,6 +163,9 @@ function App() {
       const data = await fetchData()
       if (!data) return
       const snapshot = normalizeServerData(data)
+      if (Array.isArray(data.subsidyPresets)) {
+        setSubsidyPresets(data.subsidyPresets)
+      }
       if (snapshot.teams.length === 0) return
       if (data.locks) setLocks(data.locks)
       const snapshotJson = JSON.stringify(snapshot)
@@ -690,6 +696,7 @@ function App() {
       )}
       {showCreateTeam && (
         <CreateTeamDialog
+        subsidyPresets={subsidyPresets}
           open={showCreateTeam}
           onConfirm={handleCreateTeam}
           onClose={() => setShowCreateTeam(false)}
@@ -718,6 +725,7 @@ function App() {
       )}
       {showSubsidyConfig && (
         <SubsidyConfigDialog
+        subsidyPresets={subsidyPresets}
           key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
           open={showSubsidyConfig}
           subsidyTypes={activeTeam?.subsidyTypes || []}
@@ -733,6 +741,8 @@ function App() {
       />
       <PresetSubsidyDialog
         open={showSubsidyPreset}
+        subsidyPresets={subsidyPresets}
+        onSaved={setSubsidyPresets}
         onClose={() => setShowSubsidyPreset(false)}
       />
       <BackupSettingsDialog

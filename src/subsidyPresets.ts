@@ -1,3 +1,4 @@
+import { fetchSubsidyPresets, pushSubsidyPresets } from './api'
 import type { SubsidyType } from './types'
 
 const STORAGE_KEY = 'team_subsidy_presets_v1'
@@ -46,4 +47,17 @@ export function loadSubsidyPresets(): SubsidyType[] {
 
 export function saveSubsidyPresets(presets: SubsidyType[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(presets))
+}
+
+
+export async function syncSubsidyPresetsFromServer(): Promise<SubsidyType[] | null> {
+  const presets = await fetchSubsidyPresets()
+  if (!presets) return null
+  saveSubsidyPresets(presets)
+  return presets
+}
+
+export async function saveSubsidyPresetsRemote(presets: SubsidyType[]): Promise<boolean> {
+  saveSubsidyPresets(presets)
+  return pushSubsidyPresets(presets)
 }

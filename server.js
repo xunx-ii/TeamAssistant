@@ -54,6 +54,28 @@ function loadAdminQQs() {
 
 const ADMIN_QQS = loadAdminQQs()
 
+function normalizeSubsidyPresets(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(item => item && typeof item === 'object')
+    .map(item => {
+      const source = item
+      const levels = Array.isArray(source.levels) ? source.levels : []
+      return {
+        id: typeof source.id === 'string' ? source.id : String(source.id ?? ''),
+        name: typeof source.name === 'string' ? source.name : String(source.name ?? ''),
+        levels: levels
+          .filter(level => level && typeof level === 'object')
+          .map(level => ({
+            name: typeof level.name === 'string' ? level.name : String(level.name ?? ''),
+            gold: Math.max(0, Number.isFinite(Number(level.gold)) ? Number(level.gold) : 0),
+          }))
+          .filter(level => level.name),
+      }
+    })
+    .filter(item => item.id && item.name && item.levels.length > 0)
+}
+
 function isAdminQq(qq) {
   return typeof qq === 'string' && ADMIN_QQS.has(qq)
 }
@@ -74,6 +96,7 @@ const store = createLevelStore({
   normalizeData,
   normalizeBackupData: normalizeHydratableData,
   normalizeLocks: normalizeLockData,
+  normalizeSubsidyPresets,
   validateData: validateSnapshotData,
 })
 
@@ -121,6 +144,7 @@ api.get('/data', async (_req, res) => {
     const data = await withSharedStorage(async () => {
       const current = await loadData()
       current.locks = getPublicLocks(await loadLocks()).slots
+      current.subsidyPresets = normalizeSubsidyPresets(await store.readSubsidyPresets())
       return current
     })
     res.json(data)
@@ -149,6 +173,24 @@ api.post('/data', async (req, res) => {
   } catch (error) {
     const status = error && typeof error === 'object' && 'status' in error ? error.status : 500
     res.status(status).json({ ok: false, error: error instanceof Error ? error.message : 'Save failed' })
+  }
+})
+
+api.get('/subsidy-presets', async (_req, res) => {
+  try {
+    const presets = await withSharedStorage(() => store.readSubsidyPresets())
+    res.json({ ok: true, presets: normalizeSubsidyPresets(presets) })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Load subsidy presets failed' })
+  }
+})
+
+api.post('/subsidy-presets', async (req, res) => {
+  try {
+    await withSharedStorage(() => store.writeSubsidyPresets(normalizeSubsidyPresets(req.body?.presets)))
+    res.json({ ok: true })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Save subsidy presets failed' })
   }
 })
 

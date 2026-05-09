@@ -1,3 +1,4 @@
+import type { SubsidyType } from '../types'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
@@ -5,7 +6,6 @@ import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { SubsidyPresetLoader } from './SubsidyPresetLoader'
 import { TeamWeekSelector } from './TeamWeekSelector'
-import { loadSubsidyPresets } from '../subsidyPresets'
 import { formatSubsidyPresetPreview } from '../subsidyPresetPreview'
 import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 import {
@@ -17,11 +17,12 @@ import { getCurrentWeekStartKey } from '../week'
 
 interface Props {
   open: boolean
+  subsidyPresets: SubsidyType[]
   onConfirm: (values: CreateTeamGuideValues) => void
   onClose: () => void
 }
 
-export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
+export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: Props) {
   const [name, setName] = useState('')
   const [weekStart, setWeekStart] = useState(getCurrentWeekStartKey)
   const [weekTouched, setWeekTouched] = useState(false)
@@ -31,7 +32,6 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
   const [reserveT, setReserveT] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
   const [reserveHealer, setReserveHealer] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
   const [reserveBoss, setReserveBoss] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveBoss)
-  const subsidyPresets = loadSubsidyPresets()
   const loadedSubsidyPresets = useMemo(() => {
     const loadedIds = new Set(loadedPresetIds)
     return subsidyPresets.filter(preset => loadedIds.has(preset.id))
