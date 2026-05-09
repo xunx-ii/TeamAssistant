@@ -4,6 +4,7 @@ import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
 import { TeamWeekSelector } from './TeamWeekSelector'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
+import { formatWeekRange } from '../week'
 
 interface Props {
   teamName: string
@@ -12,7 +13,7 @@ interface Props {
   serverMode: boolean
   locked: boolean
   onRename: (name: string) => void
-  onUpdateWeekStart: (weekStart: string) => void
+  onSaveWeekStart: (weekStart: string) => void
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
   onToggleLock: () => void
@@ -21,13 +22,18 @@ interface Props {
   onOpenSubsidyConfig: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onRename, onUpdateWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
   const [reserveB, setReserveB] = useState(0)
   const [editName, setEditName] = useState(teamName)
+  const [weekDraft, setWeekDraft] = useState(() => ({ source: weekStart, value: weekStart }))
   const normalizeReserveCount = (value: string) => Math.min(25, Math.max(0, parseInt(sanitizeIntegerInput(value, 2)) || 0))
+  const editWeekStart = weekDraft.source === weekStart ? weekDraft.value : weekStart
+  const updateEditWeekStart = (value: string) => {
+    setWeekDraft({ source: weekStart, value })
+  }
 
   useEffect(() => {
     setEditName(teamName)
@@ -73,11 +79,28 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
               <Button size="xs" variant="outline" onClick={() => onRename(normalizeTextInput(editName, { maxLength: TEXT_INPUT_LIMITS.teamName }) || teamName)}>保存</Button>
             </div>
           </div>
-          <TeamWeekSelector
-            value={weekStart}
-            label="团队时间"
-            onChange={onUpdateWeekStart}
-          />
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-foreground">团队时间</h3>
+            <p className="text-xs text-muted-foreground" aria-label="团队实际时间">
+              实际时间：{formatWeekRange(weekStart)}
+            </p>
+            <TeamWeekSelector
+              value={editWeekStart}
+              label="调整时间"
+              referenceWeekStart={weekStart}
+              onChange={updateEditWeekStart}
+            />
+            <div className="flex justify-end">
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={editWeekStart === weekStart}
+                onClick={() => onSaveWeekStart(editWeekStart)}
+              >
+                保存时间
+              </Button>
+            </div>
+          </div>
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">快速预留</h3>
             <div className="flex flex-wrap gap-4">

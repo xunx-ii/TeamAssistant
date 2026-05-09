@@ -9,9 +9,10 @@ interface Props {
   onToggle: (id: string) => void
   onApply: () => void
   applyDisabled?: boolean
+  inline?: boolean
 }
 
-export function SubsidyPresetLoader({ presets, checkedIds, onToggle, onApply, applyDisabled = false }: Props) {
+export function SubsidyPresetLoader({ presets, checkedIds, onToggle, onApply, applyDisabled = false, inline = false }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -38,9 +39,12 @@ export function SubsidyPresetLoader({ presets, checkedIds, onToggle, onApply, ap
         载入预设 ▾
       </Button>
       {open && (
-        <div className="absolute left-0 top-full mt-1 bg-background border border-border rounded shadow-lg p-2 min-w-[220px] max-w-[min(80vw,360px)] z-20">
+        <div className={inline
+          ? 'mt-2 rounded border border-border bg-background p-2 shadow-sm'
+          : 'absolute left-0 top-full mt-1 bg-background border border-border rounded shadow-lg p-2 min-w-[220px] max-w-[min(80vw,360px)] z-20'
+        }>
           {presets.length > 0 ? (
-            <div className="space-y-1 mb-2">
+            <div className="mb-2 max-h-56 space-y-1 overflow-y-auto pr-1">
               {presets.map(preset => (
                 <label key={preset.id} className="flex items-start gap-2 px-2 py-1 hover:bg-muted rounded cursor-pointer text-xs">
                   <input

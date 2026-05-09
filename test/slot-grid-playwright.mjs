@@ -353,8 +353,10 @@ try {
 
   await adminPage.getByRole('button', { name: '团队设置' }).click()
   await assertCellContains(adminPage.locator('body'), /团队时间/)
+  await assertCellContains(adminPage.locator('body'), /实际时间：/)
   await assertCellContains(adminPage.locator('body'), /\d{4}年\d+月\d+日-\d{4}年\d+月\d+日周/)
-  await adminPage.getByRole('button', { name: '本周' }).click()
+  await adminPage.getByRole('button', { name: '下周' }).click()
+  await adminPage.getByRole('button', { name: '保存时间' }).click()
   await adminPage.waitForFunction(({ name, previousWeekStart }) => {
     const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
     return teams.find(team => team.name === name)?.weekStart !== previousWeekStart
@@ -367,6 +369,11 @@ try {
   await adminPage.getByRole('button', { name: '自定义时间' }).click()
   await adminPage.getByLabel('自定义团队日期').fill('2026-05-17')
   await waitForText(adminPage.locator('body'), /2026年5月11日-2026年5月17日周/, adminPage)
+  await adminPage.getByRole('button', { name: '保存时间' }).click()
+  await adminPage.waitForFunction(({ name }) => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === name)?.weekStart === '2026-05-11'
+  }, { name: '下周补贴团' })
   const customWeekTeam = await adminPage.evaluate(() => {
     const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
     return teams.find(team => team.name === '下周补贴团')

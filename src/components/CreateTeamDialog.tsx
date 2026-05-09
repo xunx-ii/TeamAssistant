@@ -104,6 +104,7 @@ export function CreateTeamDialog({ open, onConfirm, onClose }: Props) {
                 checkedIds={presetDraftIds}
                 onToggle={togglePresetDraft}
                 onApply={applyPresetDraft}
+                inline
               />
             </div>
             {loadedSubsidyPresets.length > 0 && (

@@ -575,7 +575,7 @@ function App() {
                   serverMode={serverMode}
                   locked={activeTeam.config.locked}
                   onRename={handleAdminRename}
-                  onUpdateWeekStart={handleUpdateWeekStart}
+                  onSaveWeekStart={handleUpdateWeekStart}
                   onUpdateNote={handleUpdateNote}
                   onQuickReserve={handleQuickReserve}
                   onToggleLock={async () => {
