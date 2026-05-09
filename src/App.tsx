@@ -11,12 +11,12 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type SlotLock, type TeamLockInfo } from './api'
+import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
-import { loadSubsidyPresets } from './subsidyPresets'
+import { loadSubsidyPresets, saveSubsidyPresets } from './subsidyPresets'
 import { createDefaultTeam, createTeamFromGuide, type CreateTeamGuideValues } from './teamCreation'
 import { getCurrentWeekStartKey } from './week'
 import { TeamTabs } from './components/TeamTabs'
@@ -113,12 +113,19 @@ function App() {
     setOperationLogsLocal(nextLogs)
   }, [])
 
+  const syncSubsidyPresets = useCallback((presets: SubsidyType[]) => {
+    setSubsidyPresets(presets)
+    saveSubsidyPresets(presets)
+  }, [])
+
   useEffect(() => {
     initServerMode().then(async (sm) => {
       if (sm) {
         const loadResult = await loadFromServer()
         const loadedData = await fetchData()
-        if (loadedData?.subsidyPresets) setSubsidyPresets(loadedData.subsidyPresets)
+        if (Array.isArray(loadedData?.subsidyPresets)) {
+          syncSubsidyPresets(loadedData.subsidyPresets)
+        }
         if (loadResult === 'loaded') {
           const loadedTeams = loadTeams()
           const loadedCancellations = loadCancellations()
@@ -139,7 +146,7 @@ function App() {
       }
       setServerMode(sm)
     })
-  }, [syncSnapshot])
+  }, [syncSnapshot, syncSubsidyPresets])
 
   useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
   useEffect(() => { initTheme() }, [])
@@ -164,7 +171,7 @@ function App() {
       if (!data) return
       const snapshot = normalizeServerData(data)
       if (Array.isArray(data.subsidyPresets)) {
-        setSubsidyPresets(data.subsidyPresets)
+        syncSubsidyPresets(data.subsidyPresets)
       }
       if (snapshot.teams.length === 0) return
       if (data.locks) setLocks(data.locks)
@@ -177,7 +184,7 @@ function App() {
     poll()
     const interval = setInterval(poll, 2000)
     return () => clearInterval(interval)
-  }, [serverMode, syncSnapshot])
+  }, [serverMode, syncSnapshot, syncSubsidyPresets])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
@@ -225,9 +232,13 @@ function App() {
   }, [applyLocalMutation, serverMode, syncSnapshot])
 
   const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
-  const handleBackupRestored = (data: Snapshot) => {
-    syncSnapshot(data)
-    setActiveTeamId(data.teams[0]?.id ?? '')
+  const handleBackupRestored = (data: ServerData) => {
+    const snapshot = normalizeServerData(data)
+    syncSnapshot(snapshot)
+    if (Array.isArray(data.subsidyPresets)) {
+      syncSubsidyPresets(data.subsidyPresets)
+    }
+    setActiveTeamId(snapshot.teams[0]?.id ?? '')
     clearModals()
   }
 
@@ -274,7 +285,7 @@ function App() {
   }, [activeTeam, runMutation])
 
   const handleCreateTeam = async (values: CreateTeamGuideValues) => {
-    const team = createTeamFromGuide(values, loadSubsidyPresets())
+    const team = createTeamFromGuide(values, subsidyPresets)
     const result = await runMutation({ type: 'createTeam', team })
     if (result.ok) {
       setActiveTeamId(team.id)
@@ -696,7 +707,7 @@ function App() {
       )}
       {showCreateTeam && (
         <CreateTeamDialog
-        subsidyPresets={subsidyPresets}
+          subsidyPresets={subsidyPresets}
           open={showCreateTeam}
           onConfirm={handleCreateTeam}
           onClose={() => setShowCreateTeam(false)}
@@ -725,7 +736,7 @@ function App() {
       )}
       {showSubsidyConfig && (
         <SubsidyConfigDialog
-        subsidyPresets={subsidyPresets}
+          subsidyPresets={subsidyPresets}
           key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
           open={showSubsidyConfig}
           subsidyTypes={activeTeam?.subsidyTypes || []}
@@ -741,6 +752,7 @@ function App() {
       />
       <PresetSubsidyDialog
         open={showSubsidyPreset}
+        serverMode={serverMode}
         subsidyPresets={subsidyPresets}
         onSaved={setSubsidyPresets}
         onClose={() => setShowSubsidyPreset(false)}

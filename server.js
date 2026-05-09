@@ -43,6 +43,34 @@ const STORAGE_LOCK_STALE_MS = 15_000
 const STORAGE_LOCK_TIMEOUT_MS = 10_000
 const LOCK_LOG = process.env.DEBUG === '1'
 
+const DEFAULT_SUBSIDY_PRESETS = [
+  {
+    id: 'preset-damage',
+    name: '伤害补贴',
+    levels: [
+      { name: '第一', gold: 8000 },
+      { name: '第二', gold: 5000 },
+      { name: '第三', gold: 3000 },
+    ],
+  },
+  {
+    id: 'preset-heal',
+    name: '治疗补贴',
+    levels: [
+      { name: '第一', gold: 5000 },
+      { name: '第二', gold: 3000 },
+    ],
+  },
+  {
+    id: 'preset-tank',
+    name: 'T补贴',
+    levels: [
+      { name: '第一', gold: 5000 },
+      { name: '第二', gold: 3000 },
+    ],
+  },
+]
+
 function loadAdminQQs() {
   try {
     const config = JSON.parse(readFileSync(ADMIN_FILE, 'utf8'))
@@ -97,6 +125,7 @@ const store = createLevelStore({
   normalizeBackupData: normalizeHydratableData,
   normalizeLocks: normalizeLockData,
   normalizeSubsidyPresets,
+  defaultSubsidyPresets: DEFAULT_SUBSIDY_PRESETS,
   validateData: validateSnapshotData,
 })
 
@@ -223,7 +252,13 @@ api.post('/backups/restore', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Missing backup name' })
     }
     const result = await withSharedStorage(() => store.restoreBackup(name))
-    res.json({ ok: true, data: result.data })
+    res.json({
+      ok: true,
+      data: {
+        ...result.data,
+        subsidyPresets: normalizeSubsidyPresets(result.subsidyPresets),
+      },
+    })
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Restore backup failed' })
   }
@@ -254,7 +289,14 @@ api.post(
         return res.status(400).json({ ok: false, error: 'Missing backup file' })
       }
       const result = await withSharedStorage(() => store.importBackup(req.body))
-      res.json({ ok: true, name: result.name, data: result.data })
+      res.json({
+        ok: true,
+        name: result.name,
+        data: {
+          ...result.data,
+          subsidyPresets: normalizeSubsidyPresets(result.subsidyPresets),
+        },
+      })
     } catch (error) {
       res.status(400).json({ ok: false, error: error instanceof Error ? error.message : 'Import backup failed' })
     }

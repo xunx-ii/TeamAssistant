@@ -136,3 +136,27 @@ test('backup API helpers use the backup endpoints', async () => {
   assert.equal(calls[4].input, '/api/backups/import')
   assert.equal(calls[4].init.headers['Content-Type'], 'application/octet-stream')
 })
+
+test('subsidy preset API helpers use the preset endpoints', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    if (init.method === 'POST') return createJsonResponse({ ok: true })
+    return createJsonResponse({
+      ok: true,
+      presets: [{ id: 'preset-damage', name: '伤害补贴', levels: [{ name: '第一', gold: 8000 }] }],
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-subsidy-presets`)
+
+    const presets = await mod.fetchSubsidyPresets()
+    assert.equal(presets[0].name, '伤害补贴')
+
+    const pushed = await mod.pushSubsidyPresets(presets)
+    assert.equal(pushed, true)
+  })
+
+  assert.equal(calls[0].input, '/api/subsidy-presets')
+  assert.equal(calls[1].input, '/api/subsidy-presets')
+  assert.equal(calls[1].init.method, 'POST')
+})

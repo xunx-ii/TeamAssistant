@@ -8,6 +8,7 @@ import { gzip, gunzip } from 'zlib'
 const DATA_KEY = 'app:data'
 const LOCKS_KEY = 'app:locks'
 const SUBSIDY_PRESETS_KEY = 'app:subsidy-presets'
+const SUBSIDY_PRESETS_CONFIGURED_KEY = 'app:subsidy-presets-configured'
 const ENCODING_MARKER = '__teamAssistantEncoding'
 const BASE64_UTF8 = 'base64:utf8'
 const BASE64_UTF16LE = 'base64:utf16le'
@@ -248,8 +249,13 @@ export function createLevelStore({
   normalizeLocks,
   validateData = data => data.teams.length > 0,
   normalizeSubsidyPresets = value => Array.isArray(value) ? value : [],
+  defaultSubsidyPresets = [],
 }) {
   const db = new Level(dbPath, { valueEncoding: 'json' })
+
+  function getDefaultSubsidyPresets() {
+    return normalizeSubsidyPresets(defaultSubsidyPresets)
+  }
 
   async function getDecoded(key, normalize, fallback) {
     try {
@@ -263,6 +269,37 @@ export function createLevelStore({
 
   async function putEncoded(key, value) {
     await db.put(key, encodeForLevelValue(value))
+  }
+
+  async function getExistingDecoded(key, normalize) {
+    try {
+      return {
+        found: true,
+        value: normalize(decodeFromLevelValue(await db.get(key))),
+      }
+    } catch (error) {
+      if (isNotFoundError(error)) return { found: false, value: null }
+      throw error
+    }
+  }
+
+  async function hasValue(key) {
+    try {
+      await db.get(key)
+      return true
+    } catch (error) {
+      if (isNotFoundError(error)) return false
+      throw error
+    }
+  }
+
+  async function readSubsidyPresetsValue() {
+    return getDecoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets, getDefaultSubsidyPresets())
+  }
+
+  async function writeSubsidyPresetsValue(presets, configured = true) {
+    await putEncoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets(presets))
+    await putEncoded(SUBSIDY_PRESETS_CONFIGURED_KEY, configured)
   }
 
   function isFallbackValue(value, fallback) {
@@ -321,6 +358,7 @@ export function createLevelStore({
     const source = payload && typeof payload === 'object' && 'data' in payload
       ? payload
       : { data: payload, locks: {} }
+    const hasSubsidyPresets = Object.prototype.hasOwnProperty.call(source, 'subsidyPresets')
     const data = normalizeBackupData(source.data)
     if (!validateData(data)) {
       throw new Error('Invalid backup data')
@@ -330,7 +368,22 @@ export function createLevelStore({
       createdAt: typeof source.createdAt === 'string' ? source.createdAt : formatShanghaiISOString(new Date()),
       data,
       locks: normalizeLocks(source.locks),
-      subsidyPresets: normalizeSubsidyPresets(source.subsidyPresets),
+      subsidyPresets: hasSubsidyPresets ? normalizeSubsidyPresets(source.subsidyPresets) : [],
+      hasSubsidyPresets,
+    }
+  }
+
+  async function migrateSubsidyPresets() {
+    const current = await getExistingDecoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets)
+    const defaultPresets = getDefaultSubsidyPresets()
+    if (!current.found) {
+      await writeSubsidyPresetsValue(defaultPresets, false)
+      return
+    }
+
+    const configured = await hasValue(SUBSIDY_PRESETS_CONFIGURED_KEY)
+    if (!configured && current.value.length === 0 && defaultPresets.length > 0) {
+      await writeSubsidyPresetsValue(defaultPresets, false)
     }
   }
 
@@ -345,8 +398,11 @@ export function createLevelStore({
     await mkdir(backupDir, { recursive: true })
     const target = await createBackupTarget(backupDir, now)
     await writeCompressedJsonFileAtomic(target.filePath, {
-      ...payload,
+      version: payload.version,
       createdAt: formatShanghaiISOString(target.createdAt),
+      data: payload.data,
+      locks: payload.locks,
+      ...(payload.hasSubsidyPresets ? { subsidyPresets: payload.subsidyPresets } : {}),
     })
     await pruneBackups()
     return target.name
@@ -355,11 +411,16 @@ export function createLevelStore({
   async function restoreBackupPayload(payload) {
     await putEncoded(DATA_KEY, payload.data)
     await putEncoded(LOCKS_KEY, payload.locks)
-    await putEncoded(SUBSIDY_PRESETS_KEY, payload.subsidyPresets)
+    const subsidyPresets = payload.hasSubsidyPresets
+      ? normalizeSubsidyPresets(payload.subsidyPresets)
+      : await readSubsidyPresetsValue()
+    if (payload.hasSubsidyPresets) {
+      await writeSubsidyPresetsValue(subsidyPresets, true)
+    }
     return {
       data: normalizeData(payload.data),
       locks: normalizeLocks(payload.locks),
-      subsidyPresets: normalizeSubsidyPresets(payload.subsidyPresets),
+      subsidyPresets,
     }
   }
 
@@ -368,7 +429,7 @@ export function createLevelStore({
       await db.open()
       await migrateLegacy(DATA_KEY, legacyDataFile, normalizeData, normalizeData({}))
       await migrateLegacy(LOCKS_KEY, legacyLocksFile, normalizeLocks, normalizeLocks({}))
-      await migrateLegacy(SUBSIDY_PRESETS_KEY, null, normalizeSubsidyPresets, normalizeSubsidyPresets([]))
+      await migrateSubsidyPresets()
     },
 
     async readData() {
@@ -396,7 +457,7 @@ export function createLevelStore({
         createdAt: formatShanghaiISOString(target.createdAt),
         data: await this.readData(),
         locks: await this.readLocks(),
-        subsidyPresets: await this.readSubsidyPresets(),
+        subsidyPresets: await readSubsidyPresetsValue(),
       })
       await pruneBackups()
       return target.name
@@ -456,11 +517,11 @@ export function createLevelStore({
     },
 
     async readSubsidyPresets() {
-      return getDecoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets, normalizeSubsidyPresets([]))
+      return readSubsidyPresetsValue()
     },
 
     async writeSubsidyPresets(presets) {
-      await putEncoded(SUBSIDY_PRESETS_KEY, normalizeSubsidyPresets(presets))
+      await writeSubsidyPresetsValue(presets)
     },
   }
 }

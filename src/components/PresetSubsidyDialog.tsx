@@ -3,33 +3,36 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import type { SubsidyLevel, SubsidyType } from '../types'
-import { saveSubsidyPresetsRemote } from '../subsidyPresets'
+import { saveSubsidyPresets, saveSubsidyPresetsRemote } from '../subsidyPresets'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   open: boolean
+  serverMode: boolean
   subsidyPresets: SubsidyType[]
   onSaved: (presets: SubsidyType[]) => void
   onClose: () => void
 }
 
 interface EditorProps {
+  serverMode: boolean
   subsidyPresets: SubsidyType[]
   onSaved: (presets: SubsidyType[]) => void
   onClose: () => void
 }
 
-export function PresetSubsidyDialog({ open, subsidyPresets, onSaved, onClose }: Props) {
+export function PresetSubsidyDialog({ open, serverMode, subsidyPresets, onSaved, onClose }: Props) {
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      {open && <PresetSubsidyEditor subsidyPresets={subsidyPresets} onSaved={onSaved} onClose={onClose} />}
+      {open && <PresetSubsidyEditor serverMode={serverMode} subsidyPresets={subsidyPresets} onSaved={onSaved} onClose={onClose} />}
     </Dialog>
   )
 }
 
-function PresetSubsidyEditor({ subsidyPresets, onSaved, onClose }: EditorProps) {
+function PresetSubsidyEditor({ serverMode, subsidyPresets, onSaved, onClose }: EditorProps) {
   const [presets, setPresets] = useState<SubsidyType[]>(subsidyPresets)
   const [saveError, setSaveError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const addType = () => {
     setPresets(prev => [...prev, { id: `preset-${Date.now()}`, name: '', levels: [] }])
@@ -70,26 +73,36 @@ function PresetSubsidyEditor({ subsidyPresets, onSaved, onClose }: EditorProps) 
   }
 
   const handleSave = async () => {
+    if (saving) return
+    setSaving(true)
     setSaveError('')
-    const valid = presets
-      .map(t => ({
-        ...t,
-        name: normalizeTextInput(t.name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }),
-        levels: t.levels
-          .map(l => ({
-            ...l,
-            name: normalizeTextInput(l.name, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
-          }))
-          .filter(l => l.name),
-      }))
-      .filter(t => t.name && t.levels.length > 0)
-    const saved = await saveSubsidyPresetsRemote(valid)
-    if (!saved) {
-      setSaveError('保存失败：未同步到服务器，请稍后重试')
-      return
+    try {
+      const valid = presets
+        .map(t => ({
+          ...t,
+          name: normalizeTextInput(t.name, { maxLength: TEXT_INPUT_LIMITS.subsidyName }),
+          levels: t.levels
+            .map(l => ({
+              ...l,
+              name: normalizeTextInput(l.name, { maxLength: TEXT_INPUT_LIMITS.subsidyLevelName }),
+            }))
+            .filter(l => l.name),
+        }))
+        .filter(t => t.name && t.levels.length > 0)
+      if (serverMode) {
+        const saved = await saveSubsidyPresetsRemote(valid)
+        if (!saved) {
+          setSaveError('保存失败：未同步到服务器，请稍后重试')
+          return
+        }
+      } else {
+        saveSubsidyPresets(valid)
+      }
+      onSaved(valid)
+      onClose()
+    } finally {
+      setSaving(false)
     }
-    onSaved(valid)
-    onClose()
   }
 
   return (
@@ -147,8 +160,8 @@ function PresetSubsidyEditor({ subsidyPresets, onSaved, onClose }: EditorProps) 
           <p className="text-xs text-muted-foreground text-center py-4">暂无预设，请新增</p>
         )}
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={addType}>+ 新增预设类型</Button>
-          <Button size="sm" onClick={handleSave}>保存预设</Button>
+          <Button size="sm" variant="outline" onClick={addType} disabled={saving}>+ 新增预设类型</Button>
+          <Button size="sm" onClick={handleSave} disabled={saving}>保存预设</Button>
         </div>
         {saveError && (
           <p className="text-xs text-destructive">{saveError}</p>

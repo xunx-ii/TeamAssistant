@@ -37,6 +37,8 @@ function createStore(dir, maxBackups = 48, options = {}) {
     normalizeData,
     normalizeBackupData: options.normalizeBackupData,
     normalizeLocks: normalizeLockData,
+    normalizeSubsidyPresets: options.normalizeSubsidyPresets,
+    defaultSubsidyPresets: options.defaultSubsidyPresets,
     validateData: validateSnapshotData,
   })
 }
@@ -55,6 +57,35 @@ function createBackupTeam(id, name) {
       fixedMartialArtIndex: null,
     })),
   }
+}
+
+function normalizeTestPresets(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      id: String(item.id ?? ''),
+      name: String(item.name ?? ''),
+      levels: Array.isArray(item.levels)
+        ? item.levels.map(level => ({
+            name: String(level.name ?? ''),
+            gold: Number(level.gold) || 0,
+          })).filter(level => level.name)
+        : [],
+    }))
+    .filter(item => item.id && item.name && item.levels.length > 0)
+}
+
+const defaultPreset = {
+  id: 'preset-damage',
+  name: '伤害补贴',
+  levels: [{ name: '第一', gold: 8000 }],
+}
+
+const customPreset = {
+  id: 'preset-custom',
+  name: '自定义补贴',
+  levels: [{ name: '高', gold: 5000 }],
 }
 
 test('level store migrates legacy json data and locks', async () => {
@@ -389,6 +420,70 @@ test('level store imports a compressed backup and restores it', async () => {
     assert.equal(result.data.teams[0].id, 'team-imported')
     assert.equal((await store.readData()).teams[0].id, 'team-imported')
     assert.deepEqual((await store.listBackups()).map(item => item.name), [result.name])
+    await store.close()
+  })
+})
+
+test('level store initializes subsidy presets with defaults and preserves explicit empty presets', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir, 48, {
+      normalizeSubsidyPresets: normalizeTestPresets,
+      defaultSubsidyPresets: [defaultPreset],
+    })
+    await store.init()
+
+    assert.deepEqual(await store.readSubsidyPresets(), [defaultPreset])
+    await store.writeSubsidyPresets([])
+    await store.close()
+
+    const restartedStore = createStore(dir, 48, {
+      normalizeSubsidyPresets: normalizeTestPresets,
+      defaultSubsidyPresets: [defaultPreset],
+    })
+    await restartedStore.init()
+
+    assert.deepEqual(await restartedStore.readSubsidyPresets(), [])
+    await restartedStore.close()
+  })
+})
+
+test('level store restores backup subsidy presets only when the backup contains them', async () => {
+  await withTempDir(async (dir) => {
+    const store = createStore(dir, 48, {
+      normalizeSubsidyPresets: normalizeTestPresets,
+      defaultSubsidyPresets: [defaultPreset],
+    })
+    await store.init()
+    await store.writeData({
+      teams: [createBackupTeam('team-current', '当前团')],
+      cancellations: [],
+      archivedTeams: [],
+      logs: [],
+    })
+    await store.writeSubsidyPresets([customPreset])
+    await mkdir(join(dir, 'backup'), { recursive: true })
+
+    await writeFile(join(dir, 'backup', 'backup-2026-01-01T04-00-00-000Z.json'), JSON.stringify({
+      version: 1,
+      createdAt: '2026-01-01T04:00:00.000Z',
+      data: { teams: [createBackupTeam('team-legacy', '旧备份')], cancellations: [], archivedTeams: [], logs: [] },
+      locks: { slots: [], teams: [] },
+    }))
+    const legacyRestore = await store.restoreBackup('backup-2026-01-01T04-00-00-000Z.json')
+    assert.deepEqual(legacyRestore.subsidyPresets, [customPreset])
+    assert.deepEqual(await store.readSubsidyPresets(), [customPreset])
+
+    await writeFile(join(dir, 'backup', 'backup-2026-01-01T04-30-00-000Z.json'), JSON.stringify({
+      version: 1,
+      createdAt: '2026-01-01T04:30:00.000Z',
+      data: { teams: [createBackupTeam('team-with-presets', '带预设备份')], cancellations: [], archivedTeams: [], logs: [] },
+      locks: { slots: [], teams: [] },
+      subsidyPresets: [defaultPreset],
+    }))
+    const presetRestore = await store.restoreBackup('backup-2026-01-01T04-30-00-000Z.json')
+    assert.deepEqual(presetRestore.subsidyPresets, [defaultPreset])
+    assert.deepEqual(await store.readSubsidyPresets(), [defaultPreset])
+
     await store.close()
   })
 })
