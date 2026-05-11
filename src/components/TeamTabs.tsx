@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, memo } from 'react'
 import { GripVertical, Plus } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
+import { isTextInputComposing, normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
   teams: { id: string; name: string }[]
@@ -47,6 +47,7 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isTextInputComposing(e)) return
     if (e.key === 'Enter') commitEdit()
     if (e.key === 'Escape') setEditingId(null)
   }

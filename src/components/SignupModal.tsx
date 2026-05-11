@@ -6,6 +6,7 @@ import { ChevronsUpDown, Search, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { useImeSafeInputHandlers } from './ui/imeInput'
 import { Label } from './ui/label'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
@@ -42,6 +43,15 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
+  const maSearchInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
+    value: martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch,
+    onChange: e => {
+      if (readOnly) return
+      setMartialArt('')
+      setMaSearch(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.search }))
+      setShowMaDropdown(true)
+    },
+  })
 
   const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
   const isDPS = selectedMa?.role === 'DPS'
@@ -207,13 +217,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
                   type="text"
                   className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
                   placeholder={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : '搜索心法'}
-                  value={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch}
-                  onChange={e => {
-                    if (readOnly) return
-                    setMartialArt('')
-                    setMaSearch(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.search }))
-                    setShowMaDropdown(true)
-                  }}
+                  {...maSearchInputHandlers}
                   maxLength={TEXT_INPUT_LIMITS.search}
                   onDrop={event => {
                     if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()

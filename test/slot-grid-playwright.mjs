@@ -142,6 +142,47 @@ async function waitForText(locator, expected, page) {
   assert.fail(`Timed out waiting for ${expected}. Current text: ${text ?? ''}. Storage: ${storage}`)
 }
 
+async function beginTextComposition(locator, value) {
+  await locator.focus()
+  return locator.evaluate((element, nextValue) => {
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype
+    const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (!valueSetter) throw new Error('Cannot set text control value')
+
+    element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }))
+    valueSetter.call(element, nextValue)
+    element.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: nextValue,
+      inputType: 'insertCompositionText',
+      isComposing: true,
+    }))
+    return element.value
+  }, value)
+}
+
+async function commitTextComposition(locator, value) {
+  return locator.evaluate((element, nextValue) => {
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype
+    const valueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (!valueSetter) throw new Error('Cannot set text control value')
+
+    valueSetter.call(element, nextValue)
+    element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: nextValue }))
+    element.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: nextValue,
+      inputType: 'insertText',
+      isComposing: false,
+    }))
+    return element.value
+  }, value)
+}
+
 const viteCli = resolve(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
 let apiServer = null
 let startedApiServer = false
@@ -430,6 +471,32 @@ try {
   await waitForText(adminPage.locator('h2'), /表情团 🌸/, adminPage)
   await assertCellContains(adminPage.locator('h2'), /^表情团 🌸$/)
   await adminPage.getByRole('button', { name: '团队设置' }).click()
+
+  await adminPage.getByRole('button', { name: '创建团队' }).click()
+  const imeCreateDialog = adminPage.getByRole('dialog').filter({ hasText: '创建团队' })
+  await imeCreateDialog.waitFor()
+  const imeTeamInput = imeCreateDialog.getByLabel('团队名称')
+  assert.equal(await beginTextComposition(imeTeamInput, 'pinyin'), 'pinyin')
+  assert.equal(await imeTeamInput.inputValue(), 'pinyin')
+  await commitTextComposition(imeTeamInput, '拼音团')
+  assert.equal(await imeTeamInput.inputValue(), '拼音团')
+  await adminPage.getByRole('button', { name: 'Close' }).click()
+  await imeCreateDialog.waitFor({ state: 'detached' })
+
+  const teamNoteTextarea = adminPage.getByPlaceholder('填写团队备注，显示在表格下方')
+  assert.equal(await beginTextComposition(teamNoteTextarea, 'beizhu'), 'beizhu')
+  await delay(100)
+  const noteDuringComposition = await adminPage.evaluate(() => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === '表情团 🌸')?.note ?? ''
+  })
+  assert.equal(noteDuringComposition, '')
+  await commitTextComposition(teamNoteTextarea, '备注')
+  await adminPage.waitForFunction(() => {
+    const teams = JSON.parse(localStorage.getItem('team_teams_v3') ?? '[]')
+    return teams.find(team => team.name === '表情团 🌸')?.note === '备注'
+  })
+  assert.equal(await teamNoteTextarea.inputValue(), '备注')
 
   const activeTabAfterSwitch = adminPage.locator('.pixel-tab.active').first()
   await activeTabAfterSwitch.click()

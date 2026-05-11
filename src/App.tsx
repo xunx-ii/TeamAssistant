@@ -36,6 +36,7 @@ import { ArchiveDialog } from './components/ArchiveDialog'
 import { OperationLogDialog } from './components/OperationLogDialog'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
+import { useImeSafeInputHandlers } from './components/ui/imeInput'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 
 function findPendingNotice(qq: string | null, cancellations: Cancellation[]) {
@@ -796,6 +797,10 @@ function App() {
 
 function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
   const [inputQq, setInputQq] = useState('')
+  const qqInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
+    value: inputQq,
+    onChange: e => setInputQq(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq })),
+  })
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const t = normalizeTextInput(inputQq, { maxLength: TEXT_INPUT_LIMITS.qq })
@@ -848,9 +853,8 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
               type="text"
               className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
               placeholder="输入QQ号开始冒险..."
-              value={inputQq}
               maxLength={TEXT_INPUT_LIMITS.qq}
-              onChange={e => setInputQq(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq }))}
+              {...qqInputHandlers}
               onDrop={event => {
                 if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()
               }}

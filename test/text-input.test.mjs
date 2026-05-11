@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  isTextInputComposing,
   normalizeTextInput,
   sanitizeIntegerInput,
   sanitizeTextInput,
@@ -32,4 +33,12 @@ test('normalizeTextInput caps overlong text by code point', () => {
 
 test('sanitizeIntegerInput accepts only short digit text', () => {
   assert.equal(sanitizeIntegerInput('12a3图片456789', 6), '123456')
+})
+
+test('isTextInputComposing detects native and tracked composition states', () => {
+  assert.equal(isTextInputComposing({ nativeEvent: { isComposing: true } }), true)
+  assert.equal(isTextInputComposing({ nativeEvent: { keyCode: 229 } }), true)
+  assert.equal(isTextInputComposing({ nativeEvent: { isComposing: false } }, true), true)
+  assert.equal(isTextInputComposing({ nativeEvent: { isComposing: false } }), false)
+  assert.equal(isTextInputComposing({}), false)
 })

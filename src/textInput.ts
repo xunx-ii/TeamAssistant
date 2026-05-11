@@ -15,6 +15,15 @@ type TextInputOptions = {
   multiline?: boolean
 }
 
+type ComposingInputEvent = {
+  nativeEvent?: unknown
+}
+
+type MaybeKeyboardEvent = {
+  isComposing?: boolean
+  keyCode?: number
+}
+
 const EMBEDDED_PAYLOAD_PATTERN = /\bdata:(?:image|audio|video|application)\/[a-z0-9.+-]+(?:;[a-z0-9=.+-]+)*;base64,[a-z0-9+/=]+/gi
 const MEDIA_HTML_PATTERN = /<(?:img|video|audio|source|object|embed|iframe)\b[^>]*>/gi
 const FILE_REFERENCE_PATTERN = /\b(?:blob|filesystem|file):[^\s]+/gi
@@ -99,4 +108,17 @@ export function hasNonTextTransfer(data: DataTransfer | null) {
 export function sanitizeIntegerInput(value: unknown, maxLength = TEXT_INPUT_LIMITS.gearScore) {
   if (typeof value !== 'string') return ''
   return value.replace(/\D+/g, '').slice(0, maxLength)
+}
+
+export function isTextInputComposing(event: ComposingInputEvent, composing = false) {
+  if (composing) return true
+  const nativeEvent = event.nativeEvent
+  return (
+    typeof nativeEvent === 'object' &&
+    nativeEvent !== null &&
+    (
+      (nativeEvent as MaybeKeyboardEvent).isComposing === true ||
+      (nativeEvent as MaybeKeyboardEvent).keyCode === 229
+    )
+  )
 }
