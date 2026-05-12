@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, SubsidyType, Team } from './types'
+import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, SubsidyType, Team, UserProfiles } from './types'
 import { normalizeTeamName } from './teamName'
 import { normalizeWeekStartKey } from './week'
 
@@ -7,6 +7,7 @@ export interface Snapshot {
   cancellations: Cancellation[]
   archivedTeams: ArchivedTeam[]
   logs: OperationLog[]
+  userProfiles: UserProfiles
 }
 
 export type Mutation =
@@ -59,6 +60,7 @@ export type Mutation =
       expectedMemberQq?: string | null
     }
   | { type: 'dismissCancellation'; qq: string; timestamp: number }
+  | { type: 'updateNickname'; qq: string; nickname: string }
   | { type: 'updateTeamSubsidyTypes'; teamId: string; subsidyTypes: SubsidyType[] }
   | { type: 'registerMemberSubsidies'; teamId?: string; archiveId?: string; qq: string; selections: MemberSubsidySelection[]; weekStart?: string }
 
@@ -69,6 +71,7 @@ function cloneSnapshot(snapshot: Snapshot): Snapshot {
     cancellations: Array.isArray(cloned.cancellations) ? cloned.cancellations : [],
     archivedTeams: Array.isArray(cloned.archivedTeams) ? cloned.archivedTeams : [],
     logs: Array.isArray(cloned.logs) ? cloned.logs : [],
+    userProfiles: isPlainObject(cloned.userProfiles) ? cloned.userProfiles as UserProfiles : {},
   }
 }
 
@@ -98,6 +101,13 @@ function setRecordValue<T>(record: Record<string, T>, key: unknown, value: T) {
 
 function getRecordValue<T>(record: Record<string, T>, key: unknown): T | undefined {
   return Object.getOwnPropertyDescriptor(record, toText(key))?.value as T | undefined
+}
+
+function normalizeNickname(value: unknown): string {
+  const normalized = toText(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+  return Array.from(normalized).slice(0, 20).join('')
 }
 
 function normalizeMember(member: unknown): Member {
@@ -489,6 +499,30 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
         item.qq !== mutation.qq || item.timestamp !== mutation.timestamp
       ))
       return next
+
+    case 'updateNickname': {
+      const qq = toText(mutation.qq)
+      const nickname = normalizeNickname(mutation.nickname)
+      if (!qq || !nickname) return next
+      if (!next.userProfiles) {
+        next.userProfiles = {}
+      }
+      const previous = getRecordValue(next.userProfiles, qq)?.nickname ?? ''
+      setRecordValue(next.userProfiles, qq, { nickname })
+      const action = previous
+        ? `修改昵称：${previous} -> ${nickname}`
+        : `设置昵称：${nickname}`
+      const timestamp = Date.now()
+      next.logs.push({
+        id: `${timestamp}-global-${next.logs.length + 1}`,
+        teamId: '',
+        teamName: '',
+        timestamp,
+        actorQq: qq,
+        action,
+      })
+      return next
+    }
 
     case 'updateTeamSubsidyTypes': {
       const team = getTeamOrThrow(next, mutation.teamId)

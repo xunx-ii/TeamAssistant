@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, Member, OperationLog, Slot, SubsidyType, Team, TeamConfig } from './types'
+import type { ArchivedTeam, Cancellation, Member, OperationLog, Slot, SubsidyType, Team, TeamConfig, UserProfiles } from './types'
 import { createEmptySlots, TOTAL_SLOTS } from './types'
 import { normalizeWeekStartKey } from './week'
 
@@ -7,6 +7,7 @@ interface HydratableSnapshot {
   cancellations: Cancellation[]
   archivedTeams: ArchivedTeam[]
   logs: OperationLog[]
+  userProfiles: UserProfiles
 }
 
 const VALID_SLOT_STATUSES = new Set(['empty', 'occupied', 'reserved', 'fixed'])
@@ -221,6 +222,18 @@ function normalizeLog(log: unknown): OperationLog | null {
   }
 }
 
+function normalizeUserProfiles(userProfiles: unknown): UserProfiles {
+  if (!isRecord(userProfiles)) return {}
+  const normalized: UserProfiles = {}
+  for (const [qq, profile] of Object.entries(userProfiles)) {
+    if (!isRecord(profile)) continue
+    const nickname = Array.from(toText(profile.nickname).replace(/\s+/g, ' ').trim()).slice(0, 20).join('')
+    if (!nickname) continue
+    setRecordValue(normalized, qq, { nickname })
+  }
+  return normalized
+}
+
 export function normalizeHydratableData(data: unknown): HydratableSnapshot {
   const source = isRecord(data) ? data : {}
   return {
@@ -232,6 +245,7 @@ export function normalizeHydratableData(data: unknown): HydratableSnapshot {
       ? source.archivedTeams.map(normalizeArchivedTeam).filter((item): item is ArchivedTeam => Boolean(item))
       : [],
     logs: Array.isArray(source.logs) ? source.logs.map(normalizeLog).filter((log): log is OperationLog => Boolean(log)) : [],
+    userProfiles: normalizeUserProfiles(source.userProfiles),
   }
 }
 

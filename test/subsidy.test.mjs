@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from '../src/subsidy.ts'
+import { createSubsidyStatRows, getSubsidyStatUserLines } from '../src/components/SubsidyStats.tsx'
 
 function createTeam(id, name, weekStart) {
   return {
@@ -46,4 +47,18 @@ test('subsidy registration targets only keep current week teams', () => {
 
   const registrationTargets = getSubsidyRegistrationTargets(targets, currentWeekStart)
   assert.deepEqual(registrationTargets.map(target => target.id), ['team:team-current', 'archive:archive-current'])
+})
+
+test('subsidy stats rows expose QQ and nickname as separate user lines', () => {
+  const team = createTeam('team-current', '本周团', '2026-05-11')
+  team.memberSubsidies = {
+    10001: [{ typeId: 'damage', levelName: '高', weekStart: '2026-05-11' }],
+  }
+  const targets = createSubsidyTargets([team], [], '10001', '2026-05-11')
+  const rows = createSubsidyStatRows(targets, '2026-05-11')
+
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].qq, '10001')
+  assert.deepEqual(getSubsidyStatUserLines(rows[0], { 10001: { nickname: '兔扇' } }), ['10001', '兔扇'])
+  assert.deepEqual(getSubsidyStatUserLines(rows[0], {}), ['10001', '未设置'])
 })

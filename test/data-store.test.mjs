@@ -34,6 +34,7 @@ function createSnapshot() {
     cancellations: [],
     archivedTeams: [],
     logs: [],
+    userProfiles: {},
   }
 }
 
@@ -308,6 +309,58 @@ test('hydration normalizes team and subsidy week starts', () => {
     assert.equal(hydrated.teams[0].weekStart, '2026-05-18')
     assert.equal(hydrated.teams[0].memberSubsidies['10001'][0].weekStart, '2026-05-18')
     assert.equal('weekStart' in hydrated.teams[0].memberSubsidies['10001'][1], false)
+  }
+})
+
+test('hydration defaults missing user profiles and normalizes nicknames', () => {
+  const snapshot = createSnapshot()
+  delete snapshot.userProfiles
+
+  for (const hydrate of [normalizeHydratableData, normalizeClientHydratableData]) {
+    const hydrated = hydrate(snapshot)
+    assert.deepEqual(hydrated.userProfiles, {})
+
+    const withProfiles = hydrate({
+      ...snapshot,
+      userProfiles: {
+        10001: { nickname: '  Alice   Beta  ' },
+        10002: { nickname: 'abcdefghijklmnopqrstuv' },
+        10003: { nickname: '' },
+      },
+    })
+    assert.deepEqual(withProfiles.userProfiles['10001'], { nickname: 'Alice Beta' })
+    assert.equal(withProfiles.userProfiles['10002'].nickname, 'abcdefghijklmnopqrst')
+    assert.equal(withProfiles.userProfiles['10003'], undefined)
+  }
+})
+
+test('updateNickname stores duplicate nicknames and appends global logs', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const first = apply(createSnapshot(), {
+      type: 'updateNickname',
+      qq: '10001',
+      nickname: '  兔扇  ',
+    })
+    assert.equal(first.userProfiles['10001'].nickname, '兔扇')
+    assert.equal(first.logs.at(-1).teamId, '')
+    assert.equal(first.logs.at(-1).actorQq, '10001')
+    assert.equal(first.logs.at(-1).action, '设置昵称：兔扇')
+
+    const duplicate = apply(first, {
+      type: 'updateNickname',
+      qq: '10002',
+      nickname: '兔扇',
+    })
+    assert.equal(duplicate.userProfiles['10002'].nickname, '兔扇')
+    assert.equal(duplicate.logs.at(-1).action, '设置昵称：兔扇')
+
+    const renamed = apply(duplicate, {
+      type: 'updateNickname',
+      qq: '10001',
+      nickname: '新兔扇',
+    })
+    assert.equal(renamed.userProfiles['10001'].nickname, '新兔扇')
+    assert.equal(renamed.logs.at(-1).action, '修改昵称：兔扇 -> 新兔扇')
   }
 })
 

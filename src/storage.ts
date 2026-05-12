@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, OperationLog, Team } from './types'
+import type { ArchivedTeam, Cancellation, OperationLog, Team, UserProfiles } from './types'
 import { checkServer, fetchData, pushData, type ServerData } from './api'
 import { normalizeHydratableData, normalizeHydratableTeams } from './dataHydration'
 
@@ -7,6 +7,7 @@ const KEYS = {
   cancellations: 'team_cancellations_v3',
   archivedTeams: 'team_archived_teams_v1',
   logs: 'team_operation_logs_v1',
+  userProfiles: 'team_user_profiles_v1',
   qq: 'team_qq',
 }
 
@@ -61,6 +62,17 @@ function loadArchivedTeamsLocal(): ArchivedTeam[] {
 function loadLogsLocal(): OperationLog[] {
   return loadJsonArray(KEYS.logs, value => normalizeHydratableData({ logs: value }).logs)
 }
+function loadUserProfilesLocal(): UserProfiles {
+  try {
+    const raw = localStorage.getItem(KEYS.userProfiles)
+    if (!raw) return {}
+    return normalizeHydratableData({ userProfiles: JSON.parse(raw) }).userProfiles
+  } catch (error) {
+    const raw = localStorage.getItem(KEYS.userProfiles)
+    if (raw) reportLocalStorageCorruption(KEYS.userProfiles, raw, error)
+    return {}
+  }
+}
 
 // Public API
 export function loadTeams(): Team[] {
@@ -79,6 +91,7 @@ export async function saveTeams(teams: Team[]) {
       cancellations: loadCancellationsLocal(),
       archivedTeams: loadArchivedTeamsLocal(),
       logs: loadLogsLocal(),
+      userProfiles: loadUserProfilesLocal(),
     })
   }
 }
@@ -99,6 +112,7 @@ export async function saveCancellations(cancellations: Cancellation[]) {
       cancellations,
       archivedTeams: loadArchivedTeamsLocal(),
       logs: loadLogsLocal(),
+      userProfiles: loadUserProfilesLocal(),
     })
   }
 }
@@ -117,6 +131,14 @@ export function loadOperationLogs(): OperationLog[] {
 
 export function setOperationLogsLocal(logs: OperationLog[]) {
   localStorage.setItem(KEYS.logs, JSON.stringify(logs))
+}
+
+export function loadUserProfiles(): UserProfiles {
+  return loadUserProfilesLocal()
+}
+
+export function setUserProfilesLocal(userProfiles: UserProfiles) {
+  localStorage.setItem(KEYS.userProfiles, JSON.stringify(userProfiles))
 }
 
 export function normalizeServerData(data: ServerData): ServerData {
@@ -147,6 +169,7 @@ export async function loadFromServer(): Promise<LoadFromServerResult> {
     setCancellationsLocal(snapshot.cancellations)
     setArchivedTeamsLocal(snapshot.archivedTeams)
     setOperationLogsLocal(snapshot.logs)
+    setUserProfilesLocal(snapshot.userProfiles)
     return 'loaded'
   } catch {
     return 'unavailable'

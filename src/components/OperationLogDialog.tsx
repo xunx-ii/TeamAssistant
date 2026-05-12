@@ -23,13 +23,13 @@ export function OperationLogDialog({ open, teamName, logs, onClose }: Props) {
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">暂无日志</div>
           ) : (
             <div className="divide-y divide-border text-sm">
-              <div className="grid grid-cols-[92px_78px_1fr] gap-2 bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <div className="grid grid-cols-[92px_96px_1fr] gap-2 bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground">
                 <span>时间</span>
                 <span>用户</span>
                 <span>操作</span>
               </div>
               {sortedLogs.map(log => (
-                <div key={log.id} className="grid grid-cols-[92px_78px_1fr] gap-2 px-3 py-2">
+                <div key={log.id} className="grid grid-cols-[92px_96px_1fr] gap-2 px-3 py-2">
                   <span className="font-mono text-[11px] text-muted-foreground">{formatShanghaiMonthDayTimeSecond(log.timestamp)}</span>
                   <span className="truncate font-mono text-xs text-foreground">{log.actorQq || '-'}</span>
                   <span className="break-words text-foreground">{log.action}</span>

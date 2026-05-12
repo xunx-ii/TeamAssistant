@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team } from './types'
+import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team, UserProfiles } from './types'
 import type { Mutation } from './dataStore'
 
 const API = '/api'
@@ -13,6 +13,7 @@ export interface ServerData {
   cancellations: Cancellation[]
   archivedTeams: ArchivedTeam[]
   logs: OperationLog[]
+  userProfiles: UserProfiles
   subsidyPresets?: SubsidyType[]
   locks?: SlotLock[]
 }

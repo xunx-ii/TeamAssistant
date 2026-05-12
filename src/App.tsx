@@ -7,9 +7,10 @@ import {
   loadCancellations, setCancellationsLocal,
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
+  loadUserProfiles, setUserProfilesLocal,
   initServerMode, loadFromServer, normalizeServerData,
 } from './storage'
-import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget } from './types'
+import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
@@ -34,6 +35,7 @@ import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { ArchiveDialog } from './components/ArchiveDialog'
 import { OperationLogDialog } from './components/OperationLogDialog'
+import { NicknameDialog } from './components/NicknameDialog'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { useImeSafeInputHandlers } from './components/ui/imeInput'
@@ -65,6 +67,7 @@ function App() {
   const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
   const [archivedTeams, setArchivedTeams] = useState<ArchivedTeam[]>(loadArchivedTeams)
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>(loadOperationLogs)
+  const [userProfiles, setUserProfiles] = useState<UserProfiles>(loadUserProfiles)
   const [adminQQs, setAdminQQs] = useState<string[]>([])
   const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
 
@@ -80,6 +83,7 @@ function App() {
   const [showSubsidyStats, setShowSubsidyStats] = useState(false)
   const [showSubsidyPreset, setShowSubsidyPreset] = useState(false)
   const [showBackupSettings, setShowBackupSettings] = useState(false)
+  const [showNicknameDialog, setShowNicknameDialog] = useState(false)
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
@@ -93,6 +97,8 @@ function App() {
   const activeTeam = teams.find(t => t.id === resolvedActiveTeamId) ?? teams[0]
   const notice = findPendingNotice(qq, cancellations)
   const currentWeekStart = getCurrentWeekStartKey()
+  const currentNickname = qq ? (userProfiles[qq]?.nickname ?? '') : ''
+  const requiresNickname = Boolean(qq) && !currentNickname
   const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
   const subsidyRegistrationTargets = useMemo(
     () => getSubsidyRegistrationTargets(subsidyTargets, currentWeekStart),
@@ -104,14 +110,17 @@ function App() {
     const nextCancellations = snapshot.cancellations ?? []
     const nextArchivedTeams = snapshot.archivedTeams ?? []
     const nextLogs = snapshot.logs ?? []
+    const nextUserProfiles = snapshot.userProfiles ?? {}
     setTeams(nextTeams)
     setCancellations(nextCancellations)
     setArchivedTeams(nextArchivedTeams)
     setOperationLogs(nextLogs)
+    setUserProfiles(nextUserProfiles)
     setTeamsLocal(nextTeams)
     setCancellationsLocal(nextCancellations)
     setArchivedTeamsLocal(nextArchivedTeams)
     setOperationLogsLocal(nextLogs)
+    setUserProfilesLocal(nextUserProfiles)
   }, [])
 
   const syncSubsidyPresets = useCallback((presets: SubsidyType[]) => {
@@ -137,6 +146,7 @@ function App() {
             cancellations: loadedCancellations,
             archivedTeams: loadedArchivedTeams,
             logs: loadedLogs,
+            userProfiles: loadUserProfiles(),
           })
           if (loadedTeams.length > 0) {
             setActiveTeamId(loadedTeams[0].id)
@@ -192,10 +202,10 @@ function App() {
   }
 
   const applyLocalMutation = useCallback((mutation: Mutation) => {
-    const next = applyMutation({ teams, cancellations, archivedTeams, logs: operationLogs }, mutation)
+    const next = applyMutation({ teams, cancellations, archivedTeams, logs: operationLogs, userProfiles }, mutation)
     syncSnapshot(next)
     return next
-  }, [teams, cancellations, archivedTeams, operationLogs, syncSnapshot])
+  }, [teams, cancellations, archivedTeams, operationLogs, userProfiles, syncSnapshot])
 
   const runMutation = useCallback(async (mutation: Mutation): Promise<MutationResult> => {
     setMutationError('')
@@ -211,6 +221,7 @@ function App() {
         cancellations: result.data.cancellations,
         archivedTeams: result.data.archivedTeams ?? [],
         logs: result.data.logs ?? [],
+        userProfiles: result.data.userProfiles ?? {},
       })
       return result
     }
@@ -258,7 +269,19 @@ function App() {
   }, [])
 
   const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
-  const handleLogout = () => { removeStoredQQ(); setQq(null); setMutationError(''); clearModals() }
+  const handleLogout = () => { removeStoredQQ(); setQq(null); setShowNicknameDialog(false); setMutationError(''); clearModals() }
+
+  const handleSaveNickname = async (nickname: string) => {
+    if (!qq) return
+    if (currentNickname === nickname) {
+      setShowNicknameDialog(false)
+      return
+    }
+    const result = await runMutation({ type: 'updateNickname', qq, nickname })
+    if (result.ok) {
+      setShowNicknameDialog(false)
+    }
+  }
 
   const dismissNotice = async () => {
     if (notice) {
@@ -562,7 +585,14 @@ function App() {
                     SYNC
                   </span>
                 )}
-                <span className="text-sm text-muted-foreground font-mono">{qq}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="pixel-btn max-w-[160px] truncate text-xs"
+                  onClick={() => setShowNicknameDialog(true)}
+                >
+                  {currentNickname || '设置昵称'}
+                </Button>
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
               </div>
             </div>
@@ -617,6 +647,7 @@ function App() {
                 slots={activeTeam.slots}
                 config={activeTeam.config}
                 currentQQ={qq}
+                userProfiles={userProfiles}
                 isAdmin={isAdmin}
                 locks={locks.filter(l => l.teamId === activeTeam.id)}
                 teamLocked={teamLocks.some(t => t.teamId === activeTeam.id)}
@@ -648,6 +679,7 @@ function App() {
         key={`signup-${activeTeam?.id ?? 'none'}-${signupSlot ?? 'none'}`}
         open={signupSlot !== null}
         qq={qq}
+        nickname={currentNickname}
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
         teamId={activeTeam?.id}
         isAdminEditing={false}
@@ -662,11 +694,13 @@ function App() {
         const isOwnSlot = existingMember?.qq === qq
         const isAdminEdit = isAdmin && !isOwnSlot
         const isViewOnly = !!existingMember && !isOwnSlot && !isAdmin
+        const modalQq = isViewOnly ? (existingMember?.qq ?? qq) : (isAdminEdit ? (existingMember?.qq ?? qq) : qq)
         return (
           <SignupModal
             key={`edit-${activeTeam.id}-${editSlot}-${existingMember?.qq ?? 'empty'}-${existingMember?.martialArtIndex ?? 'none'}`}
             open={true}
-            qq={isViewOnly ? (existingMember?.qq ?? qq) : (isAdminEdit ? (existingMember?.qq ?? qq) : qq)}
+            qq={modalQq}
+            nickname={userProfiles[modalQq]?.nickname}
             lockOwnerQq={isAdminEdit ? qq : undefined}
             existing={existingMember}
             slotInfo={activeTeam.slots[editSlot]}
@@ -717,7 +751,7 @@ function App() {
       <OperationLogDialog
         open={showLogs}
         teamName={activeTeam?.name ?? ''}
-        logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id) : []}
+        logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
         onClose={() => setShowLogs(false)}
       />
       <ArchiveDialog
@@ -749,7 +783,17 @@ function App() {
         key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
         open={showSubsidyStats}
         targets={subsidyTargets}
+        userProfiles={userProfiles}
         onClose={() => setShowSubsidyStats(false)}
+      />
+      <NicknameDialog
+        open={showNicknameDialog || requiresNickname}
+        qq={qq}
+        nickname={currentNickname}
+        required={requiresNickname}
+        onConfirm={(nickname) => { void handleSaveNickname(nickname) }}
+        onClose={() => setShowNicknameDialog(false)}
+        onLogout={handleLogout}
       />
       <PresetSubsidyDialog
         open={showSubsidyPreset}

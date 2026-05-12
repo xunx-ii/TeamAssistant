@@ -13,6 +13,7 @@ import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeT
 interface Props {
   open: boolean
   qq: string
+  nickname?: string
   lockOwnerQq?: string
   existing?: Member
   isAdminEditing: boolean
@@ -27,7 +28,7 @@ interface Props {
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
@@ -205,6 +206,10 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
           <div className="space-y-1.5">
             <Label>QQ</Label>
             <Input value={qq} disabled />
+          </div>
+          <div className="space-y-1.5">
+            <Label>昵称</Label>
+            <Input value={nickname || '未设置'} disabled />
           </div>
           <div className="space-y-1.5 relative" ref={dropdownRef}>
             <Label>心法</Label>

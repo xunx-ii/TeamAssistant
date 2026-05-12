@@ -7,6 +7,12 @@ export interface Member {
   hasOrangeWeapon?: boolean
 }
 
+export interface UserProfile {
+  nickname: string
+}
+
+export type UserProfiles = Record<string, UserProfile>
+
 export interface SubsidyLevel {
   name: string
   gold: number

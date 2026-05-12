@@ -8,6 +8,7 @@ export function normalizeData(data) {
     cancellations: Array.isArray(data?.cancellations) ? data.cancellations : [],
     archivedTeams: Array.isArray(data?.archivedTeams) ? data.archivedTeams : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
+    userProfiles: isPlainObject(data?.userProfiles) ? data.userProfiles : {},
   }
 }
 
@@ -80,6 +81,13 @@ function setRecordValue(record, key, value) {
 
 function getRecordValue(record, key) {
   return Object.getOwnPropertyDescriptor(record, toText(key))?.value
+}
+
+function normalizeNickname(value) {
+  const normalized = toText(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+  return Array.from(normalized).slice(0, 20).join('')
 }
 
 function normalizeMember(member) {
@@ -374,6 +382,18 @@ function normalizeHydratableLog(log) {
   }
 }
 
+function normalizeHydratableUserProfiles(userProfiles) {
+  if (!isPlainObject(userProfiles)) return {}
+  const normalized = {}
+  for (const [qq, profile] of Object.entries(userProfiles)) {
+    if (!isPlainObject(profile)) continue
+    const nickname = normalizeNickname(profile.nickname)
+    if (!nickname) continue
+    setRecordValue(normalized, qq, { nickname })
+  }
+  return normalized
+}
+
 function isValidSnapshotTeam(team) {
   return Boolean(
     isPlainObject(team) &&
@@ -400,12 +420,22 @@ function isValidArchivedTeam(archive) {
   )
 }
 
+function isValidUserProfiles(userProfiles) {
+  return isPlainObject(userProfiles) && Object.values(userProfiles).every(profile => (
+    isPlainObject(profile) &&
+    typeof profile.nickname === 'string' &&
+    profile.nickname.length > 0 &&
+    Array.from(profile.nickname).length <= 20
+  ))
+}
+
 export function validateSnapshotData(data) {
   const snapshot = normalizeData(data)
   return (
     snapshot.teams.length > 0 &&
     snapshot.teams.every(isValidSnapshotTeam) &&
-    snapshot.archivedTeams.every(isValidArchivedTeam)
+    snapshot.archivedTeams.every(isValidArchivedTeam) &&
+    isValidUserProfiles(snapshot.userProfiles)
   )
 }
 
@@ -416,6 +446,7 @@ export function normalizeHydratableData(data) {
     cancellations: snapshot.cancellations.map(normalizeHydratableCancellation).filter(Boolean),
     archivedTeams: snapshot.archivedTeams.map(normalizeHydratableArchivedTeam).filter(Boolean),
     logs: snapshot.logs.map(normalizeHydratableLog).filter(Boolean),
+    userProfiles: normalizeHydratableUserProfiles(snapshot.userProfiles),
   }
 }
 
@@ -847,6 +878,30 @@ export function applyMutation(currentData, mutation) {
       data.cancellations = data.cancellations.filter(item => (
         item.qq !== mutation.qq || item.timestamp !== mutation.timestamp
       ))
+      return data
+    }
+
+    case 'updateNickname': {
+      const qq = toText(mutation.qq)
+      const nickname = normalizeNickname(mutation.nickname)
+      if (!qq || !nickname) return data
+      if (!isPlainObject(data.userProfiles)) {
+        data.userProfiles = {}
+      }
+      const previous = getRecordValue(data.userProfiles, qq)?.nickname ?? ''
+      setRecordValue(data.userProfiles, qq, { nickname })
+      const action = previous
+        ? `修改昵称：${previous} -> ${nickname}`
+        : `设置昵称：${nickname}`
+      const timestamp = Date.now()
+      data.logs.push({
+        id: `${timestamp}-global-${data.logs.length + 1}`,
+        teamId: '',
+        teamName: '',
+        timestamp,
+        actorQq: qq,
+        action,
+      })
       return data
     }
 
