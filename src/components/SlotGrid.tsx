@@ -1,6 +1,6 @@
 import { useMemo, useCallback, memo, type ReactNode } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
-import type { Slot, TeamConfig, UserProfiles } from '../types'
+import type { Slot, TeamConfig } from '../types'
 import type { SlotLock } from '../api'
 import { PixelStar } from './PixelRabbit'
 import {
@@ -15,7 +15,6 @@ interface Props {
   slots: Slot[]
   config: TeamConfig
   currentQQ: string
-  userProfiles: UserProfiles
   isAdmin: boolean
   locks: SlotLock[]
   teamLocked: boolean
@@ -55,7 +54,7 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   return counts
 }
 
-export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userProfiles, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole, onView }: Props) {
+export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole, onView }: Props) {
   const counts = getRoleCounts(slots, config.reservedSlots)
 
   const lockMap = useMemo(() => {
@@ -179,7 +178,6 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
             const maIdx = parseInt(m.martialArtIndex)
             const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null
             const roleLabel = ma?.role === 'T' ? 'T' : ma?.role === '治疗' ? '奶' : 'DPS'
-            const nickname = userProfiles[m.qq]?.nickname ?? ''
             const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300' :
                               ma?.role === '治疗' ? 'text-pink-600 bg-pink-100 border-pink-300' :
                               'text-blue-600 bg-blue-100 border-blue-300'
@@ -208,9 +206,6 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
                   <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
                     <span className="sm:hidden">{m.characterId}</span>
                     <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>
-                  </div>
-                  <div className={`w-full text-[10px] leading-3 text-foreground sm:text-[11px] sm:leading-4 ${nickname ? '' : 'opacity-0'}`}>
-                    <span className="block truncate">{nickname || '昵称占位'}</span>
                   </div>
                   <div className={`w-full text-[9px] leading-3 text-muted-foreground italic sm:text-[10px] sm:leading-4 ${m.note ? '' : 'opacity-0'}`}>
                     {m.note || '备注占位'}

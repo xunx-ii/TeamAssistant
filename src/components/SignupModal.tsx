@@ -107,14 +107,14 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     e.preventDefault()
     const textMartialArt = sanitizeIntegerInput(martialArt, 3)
     const textGearScore = sanitizeIntegerInput(gearScore, TEXT_INPUT_LIMITS.gearScore)
-    const textCharacterId = normalizeTextInput(characterId, { maxLength: TEXT_INPUT_LIMITS.characterId })
+    const fallbackCharacterId = normalizeTextInput(nickname, { maxLength: TEXT_INPUT_LIMITS.characterId })
+    const textCharacterId = normalizeTextInput(characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }) || fallbackCharacterId
     const textNote = normalizeTextInput(note, { maxLength: TEXT_INPUT_LIMITS.note })
     setMartialArt(textMartialArt)
     setGearScore(textGearScore)
     setCharacterId(textCharacterId)
     setNote(textNote)
-    if (!textMartialArt || !textCharacterId) return
-    if (isDPS && !textGearScore) return
+    if (!textMartialArt || !textGearScore || !textCharacterId) return
     setError('')
     if (teamId && slotInfo != null && lockTimestamp > 0) {
       const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)

@@ -446,15 +446,17 @@ function App() {
     if (slotIndex === null || !qq || !activeTeam) return
     const originalQq = editSlot !== null ? activeTeam.slots[editSlot]?.member?.qq : null
     if (originalQq && originalQq !== qq && !isAdmin) return
+    const memberQq = originalQq || qq
+    const fallbackNickname = normalizeTextInput(userProfiles[memberQq]?.nickname ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId })
     const memberData: Omit<Member, 'qq'> = {
       martialArtIndex: sanitizeIntegerInput(data.martialArtIndex, 3),
       gearScore: sanitizeIntegerInput(data.gearScore, TEXT_INPUT_LIMITS.gearScore),
-      characterId: normalizeTextInput(data.characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }),
+      characterId: normalizeTextInput(data.characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }) || fallbackNickname,
       note: normalizeTextInput(data.note, { maxLength: TEXT_INPUT_LIMITS.note }),
       hasOrangeWeapon: data.hasOrangeWeapon,
     }
-    if (!memberData.martialArtIndex || !memberData.characterId) return
-    const member: Member = { qq: originalQq || qq, ...memberData }
+    if (!memberData.martialArtIndex || !memberData.gearScore || !memberData.characterId) return
+    const member: Member = { qq: memberQq, ...memberData }
     const result = await runMutation({
       type: 'signupSlot',
       teamId: activeTeam.id,
@@ -647,7 +649,6 @@ function App() {
                 slots={activeTeam.slots}
                 config={activeTeam.config}
                 currentQQ={qq}
-                userProfiles={userProfiles}
                 isAdmin={isAdmin}
                 locks={locks.filter(l => l.teamId === activeTeam.id)}
                 teamLocked={teamLocks.some(t => t.teamId === activeTeam.id)}
