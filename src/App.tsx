@@ -8,7 +8,7 @@ import {
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
   loadUserProfiles, setUserProfilesLocal,
-  initServerData, normalizeServerData,
+  initServerMode, loadFromServer, normalizeServerData,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
@@ -130,23 +130,33 @@ function App() {
   }, [])
 
   useEffect(() => {
-    initServerData().then(async (loadedData) => {
-      const sm = Boolean(loadedData)
+    initServerMode().then(async (sm) => {
+      if (sm) {
+        const loadResult = await loadFromServer()
+        const loadedData = await fetchData()
+        if (Array.isArray(loadedData?.subsidyPresets)) {
+          syncSubsidyPresets(loadedData.subsidyPresets)
+        }
+        if (loadResult === 'loaded') {
+          const loadedTeams = loadTeams()
+          const loadedCancellations = loadCancellations()
+          const loadedArchivedTeams = loadArchivedTeams()
+          const loadedLogs = loadOperationLogs()
+          syncSnapshot({
+            teams: loadedTeams,
+            cancellations: loadedCancellations,
+            archivedTeams: loadedArchivedTeams,
+            logs: loadedLogs,
+            userProfiles: loadUserProfiles(),
+          })
+          if (loadedTeams.length > 0) {
+            setActiveTeamId(loadedTeams[0].id)
+          }
+        } else if (loadResult === 'empty') {
+          await saveTeams(loadTeams())
+        }
+      }
       setServerMode(sm)
-      if (!loadedData) return
-
-      if (Array.isArray(loadedData.subsidyPresets)) {
-        syncSubsidyPresets(loadedData.subsidyPresets)
-      }
-
-      const snapshot = normalizeServerData(loadedData)
-      if (snapshot.teams.length > 0) {
-        syncSnapshot(snapshot)
-        setActiveTeamId(snapshot.teams[0].id)
-        return
-      }
-
-      await saveTeams(loadTeams())
     })
   }, [syncSnapshot, syncSubsidyPresets])
 

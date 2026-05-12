@@ -45,12 +45,6 @@ export async function initServerMode(): Promise<boolean> {
   return serverMode
 }
 
-export async function initServerData(): Promise<ServerData | null> {
-  const data = await fetchData()
-  serverMode = Boolean(data)
-  return data
-}
-
 export function hasHydratableTeams(data: Pick<ServerData, 'teams'> | null | undefined): data is ServerData {
   return normalizeHydratableData(data).teams.length > 0
 }
