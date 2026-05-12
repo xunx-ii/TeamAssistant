@@ -86,6 +86,7 @@ function App() {
   const [showNicknameDialog, setShowNicknameDialog] = useState(false)
   const [nicknameError, setNicknameError] = useState('')
   const [serverMode, setServerMode] = useState(false)
+  const [initializing, setInitializing] = useState(true)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
   const [mutationError, setMutationError] = useState('')
@@ -130,10 +131,19 @@ function App() {
   }, [])
 
   useEffect(() => {
-    initServerMode().then(async (sm) => {
+    let active = true
+    const initialize = async () => {
+      const [sm, admins] = await Promise.all([
+        initServerMode(),
+        loadAdminQQs(),
+      ])
+      if (!active) return
+      setAdminQQs(admins)
       if (sm) {
         const loadResult = await loadFromServer()
+        if (!active) return
         const loadedData = await fetchData()
+        if (!active) return
         if (Array.isArray(loadedData?.subsidyPresets)) {
           syncSubsidyPresets(loadedData.subsidyPresets)
         }
@@ -156,11 +166,20 @@ function App() {
           await saveTeams(loadTeams())
         }
       }
+      if (!active) return
       setServerMode(sm)
+      setInitializing(false)
+    }
+    initialize().catch(() => {
+      if (!active) return
+      setServerMode(false)
+      setInitializing(false)
     })
+    return () => {
+      active = false
+    }
   }, [syncSnapshot, syncSubsidyPresets])
 
-  useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
   useEffect(() => { initTheme() }, [])
 
   useEffect(() => {
@@ -528,6 +547,16 @@ function App() {
       }
     }
     return indices
+  }
+
+  if (initializing) {
+    return (
+      <div className="min-h-screen bg-background pixel-bg-pattern flex items-center justify-center px-4">
+        <div className="pixel-card px-5 py-4 text-sm font-medium text-foreground">
+          正在加载中
+        </div>
+      </div>
+    )
   }
 
   if (!qq) {
