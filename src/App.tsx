@@ -54,6 +54,18 @@ interface AppConfirmOptions {
   destructive?: boolean
 }
 
+const LOADING_MESSAGES = [
+  '正在猛猛敲门...',
+  '别急，团长还在找钥匙开门...',
+  '门好像卡住了，正在用力推...',
+  '门坏了！正在砸门...',
+  '快开门！你们在里面干嘛！！！',
+]
+
+function pickLoadingMessage() {
+  return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)] ?? LOADING_MESSAGES[0]
+}
+
 function App() {
   const [qq, setQq] = useState<string | null>(getStoredQQ)
   const [teams, setTeams] = useState<Team[]>(() => {
@@ -88,6 +100,7 @@ function App() {
   const [serverMode, setServerMode] = useState(false)
   const [initializing, setInitializing] = useState(true)
   const [showLoadingTransition, setShowLoadingTransition] = useState(true)
+  const [loadingMessage] = useState(pickLoadingMessage)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
   const [mutationError, setMutationError] = useState('')
@@ -573,7 +586,7 @@ function App() {
           <PixelCarrot size={34} />
         </div>
         <div className="pixel-card loading-card">
-          正在加载中
+          {loadingMessage}
         </div>
       </div>
     </div>
