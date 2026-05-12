@@ -424,7 +424,7 @@ function isValidUserProfiles(userProfiles) {
   return isPlainObject(userProfiles) && Object.values(userProfiles).every(profile => (
     isPlainObject(profile) &&
     typeof profile.nickname === 'string' &&
-    profile.nickname.length > 0 &&
+    normalizeNickname(profile.nickname) === profile.nickname &&
     Array.from(profile.nickname).length <= 20
   ))
 }

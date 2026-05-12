@@ -114,7 +114,18 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     setGearScore(textGearScore)
     setCharacterId(textCharacterId)
     setNote(textNote)
-    if (!textMartialArt || !textGearScore || !textCharacterId) return
+    if (!textMartialArt) {
+      setError('请选择心法')
+      return
+    }
+    if (!textGearScore) {
+      setError(isDPS ? '请填写装分' : '请填写层数')
+      return
+    }
+    if (!textCharacterId) {
+      setError('请填写角色ID')
+      return
+    }
     setError('')
     if (teamId && slotInfo != null && lockTimestamp > 0) {
       const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)

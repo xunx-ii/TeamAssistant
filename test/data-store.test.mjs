@@ -364,6 +364,20 @@ test('updateNickname stores duplicate nicknames and appends global logs', () => 
   }
 })
 
+test('validateSnapshotData rejects unnormalized user profile nicknames', () => {
+  const blank = createSnapshot()
+  blank.userProfiles = { 10001: { nickname: '   ' } }
+  assert.equal(validateSnapshotData(blank), false)
+
+  const padded = createSnapshot()
+  padded.userProfiles = { 10001: { nickname: ' 兔扇 ' } }
+  assert.equal(validateSnapshotData(padded), false)
+
+  const normalized = createSnapshot()
+  normalized.userProfiles = { 10001: { nickname: '兔扇' } }
+  assert.equal(validateSnapshotData(normalized), true)
+})
+
 test('validateDataReplacement rejects empty snapshots and accidental overwrites', () => {
   const current = createSnapshot()
 

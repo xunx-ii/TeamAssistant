@@ -11,26 +11,28 @@ interface Props {
   qq: string
   nickname: string
   required?: boolean
+  errorMessage?: string
   onConfirm: (nickname: string) => void
   onClose: () => void
   onLogout?: () => void
 }
 
-export function NicknameDialog({ open, qq, nickname, required = false, onConfirm, onClose, onLogout }: Props) {
+export function NicknameDialog({ open, qq, nickname, required = false, errorMessage = '', onConfirm, onClose, onLogout }: Props) {
   const [value, setValue] = useState(nickname)
-  const [error, setError] = useState('')
+  const [localError, setLocalError] = useState('')
+  const error = localError || errorMessage
   const inputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value,
     onChange: event => {
       setValue(sanitizeTextInput(event.target.value, { maxLength: TEXT_INPUT_LIMITS.nickname }))
-      setError('')
+      setLocalError('')
     },
   })
 
   useEffect(() => {
     if (!open) return
     setValue(nickname)
-    setError('')
+    setLocalError('')
   }, [nickname, open])
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -38,7 +40,7 @@ export function NicknameDialog({ open, qq, nickname, required = false, onConfirm
     const normalized = normalizeTextInput(value, { maxLength: TEXT_INPUT_LIMITS.nickname })
     setValue(normalized)
     if (!normalized) {
-      setError('请输入昵称')
+      setLocalError('请输入昵称')
       return
     }
     onConfirm(normalized)

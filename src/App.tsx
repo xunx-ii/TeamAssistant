@@ -84,6 +84,7 @@ function App() {
   const [showSubsidyPreset, setShowSubsidyPreset] = useState(false)
   const [showBackupSettings, setShowBackupSettings] = useState(false)
   const [showNicknameDialog, setShowNicknameDialog] = useState(false)
+  const [nicknameError, setNicknameError] = useState('')
   const [serverMode, setServerMode] = useState(false)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
@@ -269,10 +270,11 @@ function App() {
   }, [])
 
   const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
-  const handleLogout = () => { removeStoredQQ(); setQq(null); setShowNicknameDialog(false); setMutationError(''); clearModals() }
+  const handleLogout = () => { removeStoredQQ(); setQq(null); setShowNicknameDialog(false); setNicknameError(''); setMutationError(''); clearModals() }
 
   const handleSaveNickname = async (nickname: string) => {
     if (!qq) return
+    setNicknameError('')
     if (currentNickname === nickname) {
       setShowNicknameDialog(false)
       return
@@ -280,7 +282,9 @@ function App() {
     const result = await runMutation({ type: 'updateNickname', qq, nickname })
     if (result.ok) {
       setShowNicknameDialog(false)
+      return
     }
+    setNicknameError(result.error || '昵称保存失败，请稍后再试')
   }
 
   const dismissNotice = async () => {
@@ -591,7 +595,10 @@ function App() {
                   variant="outline"
                   size="sm"
                   className="pixel-btn max-w-[160px] truncate text-xs"
-                  onClick={() => setShowNicknameDialog(true)}
+                  onClick={() => {
+                    setNicknameError('')
+                    setShowNicknameDialog(true)
+                  }}
                 >
                   {currentNickname || '设置昵称'}
                 </Button>
@@ -792,8 +799,12 @@ function App() {
         qq={qq}
         nickname={currentNickname}
         required={requiresNickname}
+        errorMessage={nicknameError}
         onConfirm={(nickname) => { void handleSaveNickname(nickname) }}
-        onClose={() => setShowNicknameDialog(false)}
+        onClose={() => {
+          setNicknameError('')
+          setShowNicknameDialog(false)
+        }}
         onLogout={handleLogout}
       />
       <PresetSubsidyDialog
