@@ -170,17 +170,11 @@ function App() {
       if (!active) return
       setServerMode(sm)
       setInitializing(false)
-      window.setTimeout(() => {
-        if (active) setShowLoadingTransition(false)
-      }, 680)
     }
     initialize().catch(() => {
       if (!active) return
       setServerMode(false)
       setInitializing(false)
-      window.setTimeout(() => {
-        if (active) setShowLoadingTransition(false)
-      }, 680)
     })
     return () => {
       active = false
@@ -557,7 +551,15 @@ function App() {
   }
 
   const loadingOverlay = showLoadingTransition ? (
-    <div className={`loading-transition ${initializing ? '' : 'loading-transition-exit'}`}>
+    <div
+      className={`loading-transition ${initializing ? '' : 'loading-transition-exit'}`}
+      onAnimationEnd={(event) => {
+        if (!initializing && event.currentTarget === event.target) {
+          setShowLoadingTransition(false)
+        }
+      }}
+    >
+      <div className="loading-backdrop" />
       <div className="loading-pixel-gate loading-pixel-gate-left" />
       <div className="loading-pixel-gate loading-pixel-gate-right" />
       <div className="loading-scanline" />
@@ -584,7 +586,9 @@ function App() {
   if (!qq) {
     return (
       <>
-        <LoginPage onLogin={handleLogin} />
+        <div className="app-enter">
+          <LoginPage onLogin={handleLogin} />
+        </div>
         {loadingOverlay}
       </>
     )
@@ -595,7 +599,7 @@ function App() {
       {notice && (
         <CancellationNotice open={!!notice} notice={notice} onDismiss={() => { void dismissNotice() }} />
       )}
-      <div className="min-h-screen bg-background pixel-bg-pattern">
+      <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
         {/* Decorative floating elements */}
         <div className="fixed top-20 left-4 opacity-20 pointer-events-none pixel-carrot-float hidden lg:block">
           <PixelCarrot size={32} />
