@@ -87,6 +87,7 @@ function App() {
   const [nicknameError, setNicknameError] = useState('')
   const [serverMode, setServerMode] = useState(false)
   const [initializing, setInitializing] = useState(true)
+  const [showLoadingTransition, setShowLoadingTransition] = useState(true)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
   const [mutationError, setMutationError] = useState('')
@@ -169,11 +170,17 @@ function App() {
       if (!active) return
       setServerMode(sm)
       setInitializing(false)
+      window.setTimeout(() => {
+        if (active) setShowLoadingTransition(false)
+      }, 680)
     }
     initialize().catch(() => {
       if (!active) return
       setServerMode(false)
       setInitializing(false)
+      window.setTimeout(() => {
+        if (active) setShowLoadingTransition(false)
+      }, 680)
     })
     return () => {
       active = false
@@ -549,18 +556,38 @@ function App() {
     return indices
   }
 
-  if (initializing) {
-    return (
-      <div className="min-h-screen bg-background pixel-bg-pattern flex items-center justify-center px-4">
-        <div className="pixel-card px-5 py-4 text-sm font-medium text-foreground">
+  const loadingOverlay = showLoadingTransition ? (
+    <div className={`loading-transition ${initializing ? '' : 'loading-transition-exit'}`}>
+      <div className="loading-pixel-gate loading-pixel-gate-left" />
+      <div className="loading-pixel-gate loading-pixel-gate-right" />
+      <div className="loading-scanline" />
+      <div className="loading-core">
+        <div className="loading-stars" aria-hidden="true">
+          <PixelStar size={14} />
+          <PixelHeart size={16} />
+          <PixelStar size={14} />
+        </div>
+        <div className="loading-rabbit" aria-hidden="true">
+          <PixelCarrot size={34} />
+        </div>
+        <div className="pixel-card loading-card">
           正在加载中
         </div>
       </div>
-    )
+    </div>
+  ) : null
+
+  if (initializing) {
+    return <>{loadingOverlay}</>
   }
 
   if (!qq) {
-    return <LoginPage onLogin={handleLogin} />
+    return (
+      <>
+        <LoginPage onLogin={handleLogin} />
+        {loadingOverlay}
+      </>
+    )
   }
 
   return (
@@ -876,6 +903,7 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {loadingOverlay}
     </>
   )
 }
