@@ -161,6 +161,12 @@ export function createRuntimeState({
   let lockPersistTimer = null
   let lockPersistPromise = Promise.resolve()
   let lockPersistDirty = false
+  let lockCleanupTimer = null
+  let publicDataSnapshotCache = null
+  let publicDataJsonCache = null
+  let publicLocksSnapshotCache = null
+  let publicLocksJsonCache = null
+  let versionJsonCache = null
   const listeners = new Set()
 
   function getVersion() {
@@ -169,6 +175,27 @@ export function createRuntimeState({
       dataVersion,
       lockVersion,
     }
+  }
+
+  function getVersionJson() {
+    if (!versionJsonCache) {
+      versionJsonCache = JSON.stringify(getVersion())
+    }
+    return versionJsonCache
+  }
+
+  function invalidateDataCache() {
+    publicDataSnapshotCache = null
+    publicDataJsonCache = null
+    versionJsonCache = null
+  }
+
+  function invalidateLockCache() {
+    publicLocksSnapshotCache = null
+    publicLocksJsonCache = null
+    publicDataSnapshotCache = null
+    publicDataJsonCache = null
+    versionJsonCache = null
   }
 
   function emitChange(type) {
@@ -196,9 +223,20 @@ export function createRuntimeState({
     return lockDataFromState(locks)
   }
 
-  function publicData() {
+  function publicLocksSnapshot() {
+    if (!publicLocksSnapshotCache) {
+      publicLocksSnapshotCache = {
+        ...publicLockState(),
+        lockVersion,
+      }
+    }
+    return publicLocksSnapshotCache
+  }
+
+  function publicDataSnapshot() {
+    if (publicDataSnapshotCache) return publicDataSnapshotCache
     const publicLocks = publicLockState()
-    return {
+    publicDataSnapshotCache = {
       ...clone(data),
       locks: publicLocks.slots,
       teamLocks: publicLocks.teams,
@@ -206,21 +244,46 @@ export function createRuntimeState({
       dataVersion,
       lockVersion,
     }
+    return publicDataSnapshotCache
+  }
+
+  function publicData() {
+    return clone(publicDataSnapshot())
   }
 
   function publicLocks() {
+    return clone(publicLocksSnapshot())
+  }
+
+  function publicDataJson() {
+    if (!publicDataJsonCache) {
+      publicDataJsonCache = JSON.stringify(publicDataSnapshot())
+    }
+    return publicDataJsonCache
+  }
+
+  function publicLocksJson() {
+    if (!publicLocksJsonCache) {
+      publicLocksJsonCache = JSON.stringify(publicLocksSnapshot())
+    }
+    return publicLocksJsonCache
+  }
+
+  function getLockCounts() {
     return {
-      ...publicLockState(),
-      lockVersion,
+      slots: locks.slotLocks.size,
+      teams: locks.teamLocks.size,
     }
   }
 
   function bumpDataVersion() {
     dataVersion += 1
+    invalidateDataCache()
   }
 
   function bumpLockVersion() {
     lockVersion += 1
+    invalidateLockCache()
   }
 
   function enqueueStateWrite(task) {
@@ -262,6 +325,26 @@ export function createRuntimeState({
     await dataPersistPromise
   }
 
+  function scheduleLockCleanup() {
+    if (lockCleanupTimer) {
+      clearTimeout(lockCleanupTimer)
+      lockCleanupTimer = null
+    }
+
+    let nextExpiry = Infinity
+    for (const lock of locks.slotLocks.values()) {
+      nextExpiry = Math.min(nextExpiry, lock.timestamp + lockTimeout)
+    }
+    if (!Number.isFinite(nextExpiry)) return
+
+    const delayMs = Math.max(0, nextExpiry - Date.now() + 1)
+    lockCleanupTimer = setTimeout(() => {
+      lockCleanupTimer = null
+      cleanRuntimeLocks({ force: true })
+    }, delayMs)
+    lockCleanupTimer.unref?.()
+  }
+
   async function persistLocksNow() {
     const nextLocks = normalizeLockData(lockDataFromState(locks))
     await store.writeLocks(nextLocks)
@@ -299,14 +382,17 @@ export function createRuntimeState({
   function replaceLocks(nextLocks, { persist = true, notify = true } = {}) {
     locks = nextLocks?.slotLocks instanceof Map ? cloneLockState(nextLocks) : createLockState(nextLocks)
     bumpLockVersion()
+    scheduleLockCleanup()
     if (persist) scheduleLockPersist()
     if (notify) emitChange('locks')
   }
 
-  function cleanRuntimeLocks({ persist = true, notify = true } = {}) {
+  function cleanRuntimeLocks({ persist = true, notify = true, force = false } = {}) {
     const cleaned = cleanExpiredLockState(locks, lockTimeout)
     if (cleaned.changed) {
       replaceLocks(cleaned.lockState, { persist, notify })
+    } else if (force) {
+      scheduleLockCleanup()
     }
     return locks
   }
@@ -316,12 +402,17 @@ export function createRuntimeState({
     const cleanedLocks = cleanExpiredLockState(createLockState(await store.readLocks()), lockTimeout)
     locks = cloneLockState(cleanedLocks.lockState)
     subsidyPresets = normalizeSubsidyPresets(await store.readSubsidyPresets())
+    scheduleLockCleanup()
     if (cleanedLocks.changed) {
       await store.writeLocks(lockDataFromState(locks))
     }
   }
 
   async function shutdown() {
+    if (lockCleanupTimer) {
+      clearTimeout(lockCleanupTimer)
+      lockCleanupTimer = null
+    }
     await stateQueue
     await flushData()
     await flushLocks()
@@ -547,14 +638,31 @@ export function createRuntimeState({
     }
   }
 
+  function getChangesJson({ dataVersion: sinceDataVersion, lockVersion: sinceLockVersion } = {}) {
+    const dataChanged = sinceDataVersion !== dataVersion
+    const lockChanged = sinceLockVersion !== lockVersion
+    return [
+      `{"ok":true,"dataVersion":${dataVersion},"lockVersion":${lockVersion}`,
+      `,"dataChanged":${dataChanged},"lockChanged":${lockChanged}`,
+      dataChanged ? `,"data":${publicDataJson()}` : '',
+      lockChanged ? `,"locks":${publicLocksJson()}` : '',
+      '}',
+    ].join('')
+  }
+
   return {
     init,
     shutdown,
     subscribe,
     getVersion,
+    getVersionJson,
     getChanges,
+    getChangesJson,
     getPublicData: publicData,
+    getPublicDataJson: publicDataJson,
     getPublicLocks: publicLocks,
+    getPublicLocksJson: publicLocksJson,
+    getLockCounts,
     getSubsidyPresets: () => clone(subsidyPresets),
     replaceData,
     mutate,

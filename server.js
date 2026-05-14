@@ -140,13 +140,13 @@ app.use(express.json({ limit: '10mb' }))
 const api = express.Router()
 
 api.get('/version', (_req, res) => {
-  res.json(runtime.getVersion())
+  res.type('application/json').send(runtime.getVersionJson())
 })
 
 api.get('/changes', (req, res) => {
   const dataVersion = Number(req.query.dataVersion)
   const lockVersion = Number(req.query.lockVersion)
-  res.json(runtime.getChanges({
+  res.type('application/json').send(runtime.getChangesJson({
     dataVersion: Number.isFinite(dataVersion) ? dataVersion : undefined,
     lockVersion: Number.isFinite(lockVersion) ? lockVersion : undefined,
   }))
@@ -175,7 +175,7 @@ api.get('/events', (req, res) => {
 
 api.get('/data', async (_req, res) => {
   try {
-    res.json(runtime.getPublicData())
+    res.type('application/json').send(runtime.getPublicDataJson())
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Load failed' })
   }
@@ -314,9 +314,11 @@ api.post('/mutate', async (req, res) => {
 // Dedicated locks endpoint (responds within 1s polling)
 api.get('/locks', async (_req, res) => {
   try {
-    const locks = runtime.getPublicLocks()
-    if (LOCK_LOG) console.log(`[lock] GET /locks → ${locks.slots.length} slots, ${locks.teams.length} teams`)
-    res.json(locks)
+    if (LOCK_LOG) {
+      const counts = runtime.getLockCounts()
+      console.log(`[lock] GET /locks → ${counts.slots} slots, ${counts.teams} teams`)
+    }
+    res.type('application/json').send(runtime.getPublicLocksJson())
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Load failed' })
   }

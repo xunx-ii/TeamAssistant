@@ -90,6 +90,33 @@ function createRuntime(store) {
   })
 }
 
+function withMockedTimers(run) {
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  let id = 0
+  const timers = []
+  globalThis.setTimeout = (callback, delay) => {
+    const timer = {
+      id: ++id,
+      callback,
+      delay,
+      cleared: false,
+      unref() {},
+    }
+    timers.push(timer)
+    return timer
+  }
+  globalThis.clearTimeout = (timer) => {
+    if (timer) timer.cleared = true
+  }
+  return Promise.resolve()
+    .then(() => run(timers))
+    .finally(() => {
+      globalThis.setTimeout = originalSetTimeout
+      globalThis.clearTimeout = originalClearTimeout
+    })
+}
+
 test('runtime state serves public reads from memory after init', async () => {
   const { store, calls } = createStore()
   const runtime = createRuntime(store)
@@ -105,6 +132,39 @@ test('runtime state serves public reads from memory after init', async () => {
   assert.equal(second.teams[0].id, 'team-1')
   assert.equal(calls.readData, 1)
   assert.equal(calls.readLocks, 1)
+})
+
+test('runtime caches serialized public data and invalidates it on version changes', async () => {
+  const { store } = createStore()
+  const runtime = createRuntime(store)
+  await runtime.init()
+
+  const firstJson = runtime.getPublicDataJson()
+  const secondJson = runtime.getPublicDataJson()
+  assert.equal(firstJson, secondJson)
+  assert.equal(JSON.parse(firstJson).teams[0].name, '一团')
+
+  await runtime.mutate({
+    type: 'renameTeam',
+    teamId: 'team-1',
+    name: '缓存团',
+  })
+
+  const nextJson = runtime.getPublicDataJson()
+  assert.notEqual(nextJson, firstJson)
+  assert.equal(JSON.parse(nextJson).teams[0].name, '缓存团')
+})
+
+test('runtime public snapshots are cloned while serialized cache stays stable', async () => {
+  const { store } = createStore()
+  const runtime = createRuntime(store)
+  await runtime.init()
+
+  const snapshot = runtime.getPublicData()
+  snapshot.teams[0].name = '外部修改'
+
+  assert.equal(runtime.getPublicData().teams[0].name, '一团')
+  assert.equal(JSON.parse(runtime.getPublicDataJson()).teams[0].name, '一团')
 })
 
 test('runtime lock operations update memory before debounced persistence', async () => {
@@ -219,4 +279,49 @@ test('runtime subscriptions receive version changes', async () => {
   assert.equal(events[0].type, 'locks')
   assert.equal(events[1].type, 'data')
   assert.equal(events[1].dataVersion, runtime.getVersion().dataVersion)
+})
+
+test('runtime changes json omits unchanged payloads', async () => {
+  const { store } = createStore()
+  const runtime = createRuntime(store)
+  await runtime.init()
+  const before = runtime.getVersion()
+
+  const unchanged = JSON.parse(runtime.getChangesJson(before))
+  assert.equal(unchanged.dataChanged, false)
+  assert.equal(unchanged.lockChanged, false)
+  assert.equal('data' in unchanged, false)
+  assert.equal('locks' in unchanged, false)
+
+  runtime.acquireLock({ teamId: 'team-1', slotIndex: 0, qq: '10001' })
+  const changed = JSON.parse(runtime.getChangesJson(before))
+  assert.equal(changed.dataChanged, false)
+  assert.equal(changed.lockChanged, true)
+  assert.equal(changed.locks.slots[0].qq, '10001')
+})
+
+test('runtime schedules stale lock cleanup and emits lock change', async () => {
+  await withMockedTimers(async (timers) => {
+    const { store } = createStore()
+    const runtime = createRuntime(store)
+    const originalNow = Date.now
+    const events = []
+    Date.now = () => 1_000
+    try {
+      await runtime.init()
+      runtime.subscribe(event => events.push(event))
+      runtime.acquireLock({ teamId: 'team-1', slotIndex: 0, qq: '10001' })
+
+      const cleanup = timers.find(timer => !timer.cleared && timer.delay === 30_001)
+      assert.ok(cleanup)
+      Date.now = () => 31_001
+      cleanup.callback()
+
+      assert.equal(runtime.getPublicLocks().slots.length, 0)
+      assert.equal(events.at(-1).type, 'locks')
+    } finally {
+      Date.now = originalNow
+      await runtime.shutdown()
+    }
+  })
 })
