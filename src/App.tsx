@@ -12,7 +12,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLockStateOrNull, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
+import { fetchData, fetchLockStateOrNull, fetchServerVersion, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -107,6 +107,8 @@ function App() {
   const [mutationError, setMutationError] = useState('')
   const [confirmOptions, setConfirmOptions] = useState<AppConfirmOptions | null>(null)
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
+  const dataVersionRef = useRef<number | null>(null)
+  const lockVersionRef = useRef<number | null>(null)
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeamExists = teams.some(t => t.id === activeTeamId)
@@ -145,6 +147,19 @@ function App() {
     saveSubsidyPresets(presets)
   }, [])
 
+  const syncServerData = useCallback((data: ServerData) => {
+    const snapshot = normalizeServerData(data)
+    if (Array.isArray(data.subsidyPresets)) {
+      syncSubsidyPresets(data.subsidyPresets)
+    }
+    if (snapshot.teams.length === 0) return false
+    if (data.locks) setLocks(data.locks)
+    if (typeof data.dataVersion === 'number') dataVersionRef.current = data.dataVersion
+    if (typeof data.lockVersion === 'number') lockVersionRef.current = data.lockVersion
+    syncSnapshot(snapshot)
+    return true
+  }, [syncSnapshot, syncSubsidyPresets])
+
   useEffect(() => {
     let active = true
     const initialize = async () => {
@@ -159,9 +174,7 @@ function App() {
         if (!active) return
         const loadedData = await fetchData()
         if (!active) return
-        if (Array.isArray(loadedData?.subsidyPresets)) {
-          syncSubsidyPresets(loadedData.subsidyPresets)
-        }
+        if (loadedData) syncServerData(loadedData)
         if (loadResult === 'loaded') {
           const loadedTeams = loadTeams()
           const loadedCancellations = loadCancellations()
@@ -193,7 +206,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [syncSnapshot, syncSubsidyPresets])
+  }, [syncSnapshot, syncServerData])
 
   useEffect(() => { initTheme() }, [])
 
@@ -205,6 +218,7 @@ function App() {
       const { slots, teams } = lockState
       setLocks(slots)
       setTeamLocks(teams)
+      if (typeof lockState.lockVersion === 'number') lockVersionRef.current = lockState.lockVersion
       return true
     }
     const controller = startAdaptivePoll(poll, {
@@ -217,22 +231,15 @@ function App() {
 
   useEffect(() => {
     if (!serverMode) return
-    let lastSnapshotJson = ''
     const poll = async () => {
+      const version = await fetchServerVersion()
+      if (version && dataVersionRef.current === version.dataVersion) {
+        lockVersionRef.current = version.lockVersion
+        return true
+      }
       const data = await fetchData()
       if (!data) return false
-      const snapshot = normalizeServerData(data)
-      if (Array.isArray(data.subsidyPresets)) {
-        syncSubsidyPresets(data.subsidyPresets)
-      }
-      if (snapshot.teams.length === 0) return true
-      if (data.locks) setLocks(data.locks)
-      const snapshotJson = JSON.stringify(snapshot)
-      if (snapshotJson !== lastSnapshotJson) {
-        lastSnapshotJson = snapshotJson
-        syncSnapshot(snapshot)
-      }
-      return true
+      return syncServerData(data)
     }
     const controller = startAdaptivePoll(poll, {
       baseDelayMs: 3_000,
@@ -240,7 +247,7 @@ function App() {
       maxDelayMs: 20_000,
     })
     return () => controller.stop()
-  }, [serverMode, syncSnapshot, syncSubsidyPresets])
+  }, [serverMode, syncServerData])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)

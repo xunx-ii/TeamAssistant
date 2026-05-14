@@ -99,10 +99,44 @@ test('fetchLockState returns slot and team locks from one request', async () => 
     assert.equal(result.slots[0].qq, '10001')
     assert.equal(result.teams.length, 1)
     assert.equal(result.teams[0].teamId, 'team-2')
+    assert.equal(result.lockVersion, undefined)
   })
 
   assert.equal(calls.length, 1)
   assert.equal(calls[0].input, '/api/locks')
+})
+
+test('fetchLockState preserves lock version when provided', async () => {
+  await withMockedFetch(async () => createJsonResponse({
+    slots: [],
+    teams: [],
+    lockVersion: 9,
+  }), async () => {
+    const { fetchLockState } = await import(`../src/api.ts?case=${Date.now()}-lock-version`)
+    const result = await fetchLockState()
+
+    assert.equal(result.lockVersion, 9)
+  })
+})
+
+test('fetchServerVersion reads the lightweight version endpoint', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      dataVersion: 3,
+      lockVersion: 7,
+    })
+  }, async () => {
+    const { fetchServerVersion } = await import(`../src/api.ts?case=${Date.now()}-version`)
+    const result = await fetchServerVersion()
+    assert.equal(result.dataVersion, 3)
+    assert.equal(result.lockVersion, 7)
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].input, '/api/version')
 })
 
 test('backup API helpers use the backup endpoints', async () => {

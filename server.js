@@ -3,30 +3,16 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import {
-  applyMutation,
   normalizeHydratableData,
   normalizeData,
-  validateDataReplacement,
-  validateExpectedSlotMember,
   validateSnapshotData,
-  validateSlotMutationLock,
 } from './server/data-store.js'
 import {
-  acquireSlotLock,
-  buildSlotLockMap,
-  buildTeamLockMap,
-  cleanExpiredLocks,
-  getPublicLocks,
-  getTeamLockTimestamp,
   normalizeLockData,
-  removeLocksForTeam,
-  releaseSlotLock,
-  removeTeamLock,
-  setTeamLock,
 } from './server/lock-store.js'
 import { withFileLock } from './server/shared-file-lock.js'
 import { createLevelStore } from './server/level-store.js'
-import { createReadCache } from './server/read-cache.js'
+import { createRuntimeState } from './server/runtime-state.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -43,8 +29,6 @@ const BACKUP_HISTORY_LIMIT = 48
 const STORAGE_LOCK_STALE_MS = 15_000
 const STORAGE_LOCK_TIMEOUT_MS = 10_000
 const LOCK_LOG = process.env.DEBUG === '1'
-const READ_CACHE_TTL_MS = 500
-const LOCK_READ_CACHE_TTL_MS = 300
 
 const DEFAULT_SUBSIDY_PRESETS = [
   {
@@ -111,13 +95,6 @@ function isAdminQq(qq) {
   return typeof qq === 'string' && ADMIN_QQS.has(qq)
 }
 
-function createHttpError(message, status = 400, details) {
-  const error = new Error(message)
-  error.status = status
-  if (details) error.details = details
-  return error
-}
-
 const store = createLevelStore({
   dbPath: LEVEL_DB_DIR,
   legacyDataFile: DATA_FILE,
@@ -132,6 +109,13 @@ const store = createLevelStore({
   validateData: validateSnapshotData,
 })
 
+const runtime = createRuntimeState({
+  store,
+  normalizeSubsidyPresets,
+  isAdminQq,
+  lockTimeout: LOCK_TIMEOUT,
+})
+
 async function withSharedStorage(callback) {
   return withFileLock(STORAGE_LOCK_FILE, callback, {
     staleMs: STORAGE_LOCK_STALE_MS,
@@ -139,29 +123,9 @@ async function withSharedStorage(callback) {
   })
 }
 
-async function loadLocks() {
-  const cleaned = cleanExpiredLocks(await store.readLocks(), LOCK_TIMEOUT)
-  if (cleaned.changed) {
-    await store.writeLocks(cleaned.lockData)
-  }
-  return cleaned.lockData
-}
-
-async function readLocksForPublic() {
-  return cleanExpiredLocks(await store.readLocks(), LOCK_TIMEOUT).lockData
-}
-
-async function loadData() {
-  return normalizeHydratableData(await store.readData())
-}
-
-async function saveData(data) {
-  await store.writeData(normalizeData(data))
-}
-
 function scheduleBackups() {
   const interval = setInterval(() => {
-    void withSharedStorage(() => store.backupNow())
+    void runtime.backupNow()
       .catch(error => {
         console.error('[backup] failed:', error instanceof Error ? error.message : error)
       })
@@ -170,28 +134,18 @@ function scheduleBackups() {
   return interval
 }
 
-const readPublicLocksCached = createReadCache(LOCK_READ_CACHE_TTL_MS, async () => (
-  withSharedStorage(async () => getPublicLocks(await readLocksForPublic()))
-))
-
-const readPublicDataCached = createReadCache(READ_CACHE_TTL_MS, async () => (
-  withSharedStorage(async () => {
-    const current = await loadData()
-    current.locks = getPublicLocks(await readLocksForPublic()).slots
-    current.subsidyPresets = normalizeSubsidyPresets(await store.readSubsidyPresets())
-    return current
-  })
-))
-
 app.use(express.json({ limit: '10mb' }))
 
 // API router - mounted before static, ensures API routes take priority
 const api = express.Router()
 
+api.get('/version', (_req, res) => {
+  res.json(runtime.getVersion())
+})
+
 api.get('/data', async (_req, res) => {
   try {
-    const data = await readPublicDataCached()
-    res.json(data)
+    res.json(runtime.getPublicData())
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Load failed' })
   }
@@ -200,18 +154,9 @@ api.get('/data', async (_req, res) => {
 api.post('/data', async (req, res) => {
   try {
     await withSharedStorage(async () => {
-      const validation = validateDataReplacement(await loadData(), req.body, {
+      await runtime.replaceData(req.body, {
         allowReplace: req.get('x-teamassistant-replace') === '1',
       })
-      if (!validation.ok) {
-        const error = new Error(validation.error)
-        error.status = validation.status
-        throw error
-      }
-      if (validation.shouldBackup) {
-        await store.backupNow()
-      }
-      await saveData(validation.data)
     })
     res.json({ ok: true })
   } catch (error) {
@@ -222,8 +167,7 @@ api.post('/data', async (req, res) => {
 
 api.get('/subsidy-presets', async (_req, res) => {
   try {
-    const presets = await withSharedStorage(() => store.readSubsidyPresets())
-    res.json({ ok: true, presets: normalizeSubsidyPresets(presets) })
+    res.json({ ok: true, presets: runtime.getSubsidyPresets() })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Load subsidy presets failed' })
   }
@@ -231,7 +175,7 @@ api.get('/subsidy-presets', async (_req, res) => {
 
 api.post('/subsidy-presets', async (req, res) => {
   try {
-    await withSharedStorage(() => store.writeSubsidyPresets(normalizeSubsidyPresets(req.body?.presets)))
+    await withSharedStorage(() => runtime.updateSubsidyPresets(req.body?.presets))
     res.json({ ok: true })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Save subsidy presets failed' })
@@ -250,7 +194,7 @@ api.get('/backups', async (_req, res) => {
 api.post('/backups', async (_req, res) => {
   try {
     const result = await withSharedStorage(async () => {
-      const name = await store.backupNow()
+      const name = await runtime.backupNow()
       const backups = await store.listBackups()
       return { name, backups }
     })
@@ -266,7 +210,7 @@ api.post('/backups/restore', async (req, res) => {
     if (typeof name !== 'string') {
       return res.status(400).json({ ok: false, error: 'Missing backup name' })
     }
-    const result = await withSharedStorage(() => store.restoreBackup(name))
+    const result = await withSharedStorage(() => runtime.restoreBackup(name))
     res.json({
       ok: true,
       data: {
@@ -303,7 +247,7 @@ api.post(
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
         return res.status(400).json({ ok: false, error: 'Missing backup file' })
       }
-      const result = await withSharedStorage(() => store.importBackup(req.body))
+      const result = await withSharedStorage(() => runtime.importBackup(req.body))
       res.json({
         ok: true,
         name: result.name,
@@ -325,61 +269,7 @@ api.post('/mutate', async (req, res) => {
   }
 
   try {
-    const data = await withSharedStorage(async () => {
-      let lockState = await loadLocks()
-      const actorQq = mutation.actorQq ?? mutation.member?.qq ?? mutation.cancelledBy
-      if (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') {
-        const lockResult = validateSlotMutationLock({
-          slotLocks: buildSlotLockMap(lockState),
-          teamLocks: buildTeamLockMap(lockState),
-          teamId: mutation.teamId,
-          slotIndex: mutation.slotIndex,
-          qq: actorQq,
-          lockTimestamp: mutation.lockTimestamp,
-          lockTimeout: LOCK_TIMEOUT,
-          ignoreTeamLock: isAdminQq(actorQq),
-        })
-        if (!lockResult.ok) {
-          throw createHttpError(lockResult.reason, 409, lockResult)
-        }
-      }
-
-      const current = await loadData()
-      if (mutation.type === 'setTeamLockState') {
-        const updatedLockState = mutation.locked
-          ? setTeamLock(lockState, {
-              teamId: mutation.teamId,
-              timestamp: getTeamLockTimestamp(lockState, mutation.teamId) ?? Date.now(),
-            })
-          : removeTeamLock(lockState, { teamId: mutation.teamId })
-        lockState = updatedLockState.lockData
-        await store.writeLocks(lockState)
-      }
-      if (mutation.type === 'archiveTeam') {
-        const updatedLockState = removeLocksForTeam(lockState, { teamId: mutation.teamId })
-        if (updatedLockState.changed) {
-          lockState = updatedLockState.lockData
-          await store.writeLocks(lockState)
-        }
-      }
-      if (
-        (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') &&
-        Object.prototype.hasOwnProperty.call(mutation, 'expectedMemberQq')
-      ) {
-        const expected = validateExpectedSlotMember(current, mutation.teamId, mutation.slotIndex, mutation.expectedMemberQq)
-        if (!expected.ok) {
-          throw createHttpError(expected.reason, 409, expected)
-        }
-      }
-
-      const mutated = normalizeData(applyMutation(current, mutation))
-      if (!validateSnapshotData(mutated)) {
-        throw createHttpError('Invalid mutation snapshot', 400)
-      }
-      const next = normalizeHydratableData(mutated)
-      await store.writeData(next)
-      return next
-    })
+    const data = await withSharedStorage(() => runtime.mutate(mutation))
     res.json({ ok: true, data })
   } catch (error) {
     const details = error && typeof error === 'object' && 'details' in error ? error.details : undefined
@@ -394,7 +284,7 @@ api.post('/mutate', async (req, res) => {
 // Dedicated locks endpoint (responds within 1s polling)
 api.get('/locks', async (_req, res) => {
   try {
-    const locks = await readPublicLocksCached()
+    const locks = runtime.getPublicLocks()
     if (LOCK_LOG) console.log(`[lock] GET /locks → ${locks.slots.length} slots, ${locks.teams.length} teams`)
     res.json(locks)
   } catch (error) {
@@ -409,20 +299,7 @@ api.post('/lock', async (req, res) => {
   }
 
   try {
-    const result = await withSharedStorage(async () => {
-      const current = await loadLocks()
-      const updated = acquireSlotLock(current, {
-        teamId,
-        slotIndex,
-        qq,
-        lockTimeout: LOCK_TIMEOUT,
-        ignoreTeamLock: isAdminQq(qq),
-      })
-      if (updated.changed) {
-        await store.writeLocks(updated.lockData)
-      }
-      return updated.result
-    })
+    const result = runtime.acquireLock({ teamId, slotIndex, qq })
     if (!result.ok && result.lockedBy && LOCK_LOG) {
       console.log(`[lock] CONFLICT: ${teamId}:${slotIndex} locked by ${result.lockedBy} at ${result.lockedAt}`)
     }
@@ -443,14 +320,8 @@ api.delete('/lock', async (req, res) => {
   }
 
   try {
-    await withSharedStorage(async () => {
-      const current = await loadLocks()
-      const updated = releaseSlotLock(current, { teamId, slotIndex, qq, lockTimestamp })
-      if (updated.changed) {
-        await store.writeLocks(updated.lockData)
-        if (LOCK_LOG) console.log(`[lock] RELEASED: ${teamId}:${slotIndex}`)
-      }
-    })
+    runtime.releaseLock({ teamId, slotIndex, qq, lockTimestamp })
+    if (LOCK_LOG) console.log(`[lock] RELEASED: ${teamId}:${slotIndex}`)
     res.json({ ok: true })
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Release failed' })
@@ -462,11 +333,7 @@ api.post('/team-lock', async (req, res) => {
   const { teamId } = req.body
   if (!teamId) return res.status(400).json({ ok: false })
   try {
-    const result = await withSharedStorage(async () => {
-      const updated = setTeamLock(await loadLocks(), { teamId })
-      await store.writeLocks(updated.lockData)
-      return updated
-    })
+    const result = runtime.setTeamLock({ teamId })
     if (LOCK_LOG) console.log(`[lock] TEAM LOCKED: ${teamId} at ${result.timestamp}`)
     res.json({ ok: true, timestamp: result.timestamp })
   } catch (error) {
@@ -478,12 +345,7 @@ api.delete('/team-lock', async (req, res) => {
   const { teamId } = req.body
   if (!teamId) return res.status(400).json({ ok: false })
   try {
-    await withSharedStorage(async () => {
-      const updated = removeTeamLock(await loadLocks(), { teamId })
-      if (updated.changed) {
-        await store.writeLocks(updated.lockData)
-      }
-    })
+    runtime.removeTeamLock({ teamId })
     if (LOCK_LOG) console.log(`[lock] TEAM UNLOCKED: ${teamId}`)
     res.json({ ok: true })
   } catch (error) {
@@ -499,19 +361,7 @@ api.post('/validate-lock', async (req, res) => {
   }
 
   try {
-    const result = await withSharedStorage(async () => {
-      const lockState = await loadLocks()
-      return validateSlotMutationLock({
-        slotLocks: buildSlotLockMap(lockState),
-        teamLocks: buildTeamLockMap(lockState),
-        teamId,
-        slotIndex,
-        qq,
-        lockTimestamp,
-        lockTimeout: LOCK_TIMEOUT,
-        ignoreTeamLock: isAdminQq(qq),
-      })
-    })
+    const result = runtime.validateLock({ teamId, slotIndex, qq, lockTimestamp })
     if (result.ok) {
       return res.json({ ok: true })
     }
@@ -536,6 +386,7 @@ app.get('/{*splat}', (_req, res) => {
 })
 
 await store.init()
+await runtime.init()
 scheduleBackups()
 
 const server = app.listen(PORT, () => {
@@ -545,6 +396,7 @@ const server = app.listen(PORT, () => {
 
 async function shutdown() {
   server.close()
+  await runtime.shutdown()
   await store.close()
 }
 

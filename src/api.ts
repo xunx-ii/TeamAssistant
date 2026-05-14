@@ -16,6 +16,8 @@ export interface ServerData {
   userProfiles: UserProfiles
   subsidyPresets?: SubsidyType[]
   locks?: SlotLock[]
+  dataVersion?: number
+  lockVersion?: number
 }
 
 export interface SlotLock {
@@ -33,6 +35,13 @@ export interface TeamLockInfo {
 export interface LockState {
   slots: SlotLock[]
   teams: TeamLockInfo[]
+  lockVersion?: number
+}
+
+export interface ServerVersion {
+  ok: boolean
+  dataVersion: number
+  lockVersion: number
 }
 
 export interface AcquireResult {
@@ -156,6 +165,23 @@ export async function fetchData(): Promise<ServerData | null> {
   return isServerData(data) ? data : null
 }
 
+export async function fetchServerVersion(): Promise<ServerVersion | null> {
+  const data = await requestData<unknown>(`${API}/version`, noCache)
+  if (
+    data &&
+    typeof data === 'object' &&
+    typeof (data as Partial<ServerVersion>).dataVersion === 'number' &&
+    typeof (data as Partial<ServerVersion>).lockVersion === 'number'
+  ) {
+    return {
+      ok: (data as Partial<ServerVersion>).ok !== false,
+      dataVersion: (data as ServerVersion).dataVersion,
+      lockVersion: (data as ServerVersion).lockVersion,
+    }
+  }
+  return null
+}
+
 export async function pushData(data: Partial<ServerData>): Promise<boolean> {
   const result = await requestResult<{ ok: boolean }>(`${API}/data`, {
     method: 'POST',
@@ -203,11 +229,12 @@ export async function fetchLockState(): Promise<LockState> {
 }
 
 export async function fetchLockStateOrNull(): Promise<LockState | null> {
-  const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[] }>(`${API}/locks`, noCache)
+  const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[], lockVersion?: number }>(`${API}/locks`, noCache)
   if (!data) return null
   return {
     slots: Array.isArray(data?.slots) ? data.slots : [],
     teams: Array.isArray(data?.teams) ? data.teams : [],
+    lockVersion: typeof data.lockVersion === 'number' ? data.lockVersion : undefined,
   }
 }
 
