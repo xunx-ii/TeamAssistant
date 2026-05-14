@@ -559,11 +559,16 @@ export function createRuntimeState({
       await flushData()
       await flushLocks()
       const result = await store.restoreBackup(name)
+      const cleanedLocks = cleanExpiredLockState(createLockState(result.locks), lockTimeout)
       data = normalizeHydratableData(result.data)
-      locks = createLockState(result.locks)
+      locks = cloneLockState(cleanedLocks.lockState)
       subsidyPresets = normalizeSubsidyPresets(result.subsidyPresets)
       bumpDataVersion()
       bumpLockVersion()
+      scheduleLockCleanup()
+      if (cleanedLocks.changed) {
+        await store.writeLocks(lockDataFromState(locks))
+      }
       emitChange('data')
       return {
         ...result,
@@ -577,11 +582,16 @@ export function createRuntimeState({
       await flushData()
       await flushLocks()
       const result = await store.importBackup(buffer)
+      const cleanedLocks = cleanExpiredLockState(createLockState(result.locks), lockTimeout)
       data = normalizeHydratableData(result.data)
-      locks = createLockState(result.locks)
+      locks = cloneLockState(cleanedLocks.lockState)
       subsidyPresets = normalizeSubsidyPresets(result.subsidyPresets)
       bumpDataVersion()
       bumpLockVersion()
+      scheduleLockCleanup()
+      if (cleanedLocks.changed) {
+        await store.writeLocks(lockDataFromState(locks))
+      }
       emitChange('data')
       return {
         ...result,

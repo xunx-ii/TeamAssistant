@@ -45,6 +45,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const dropdownRef = useRef<HTMLDivElement>(null)
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(false)
+  const savingRef = useRef(false)
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
   const shouldLock = requireLock && !readOnly
@@ -109,6 +110,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       }
       setLockTimestamp(0)
       setError('')
+      savingRef.current = false
       setSaving(false)
     }
   }, [open, teamId, slotIndex, lockQq, qq, shouldLock])
@@ -124,7 +126,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (saving) return
+    if (savingRef.current) return
     const textMartialArt = sanitizeIntegerInput(martialArt, 3)
     const textGearScore = sanitizeIntegerInput(gearScore, TEXT_INPUT_LIMITS.gearScore)
     const fallbackCharacterId = normalizeTextInput(nickname, { maxLength: TEXT_INPUT_LIMITS.characterId })
@@ -151,12 +153,18 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       setError('正在锁定该位置，请稍后再提交')
       return
     }
+
+    savingRef.current = true
+    setSaving(true)
+
     if (teamId && slotInfo != null && shouldLock) {
       const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)
       if (!validation.ok) {
         if (validation.reason === 'teamLocked') setError('表格已被管理员锁定，无法保存')
         else if (validation.reason === 'network' || validation.error) setError(validation.error || '无法连接到报名服务，请稍后重试')
         else setError('该位置已被其他人抢占，请重新选择')
+        savingRef.current = false
+        if (mountedRef.current) setSaving(false)
         return
       }
     }
@@ -165,13 +173,15 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing && !isBossSlot) {
       if (takenMartialArts.includes(maIdx)) {
         setError(`${ma.school}·${ma.name} 已有他人报名`)
+        savingRef.current = false
+        if (mountedRef.current) setSaving(false)
         return
       }
     }
-    setSaving(true)
     try {
       await onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockTimestamp)
     } finally {
+      savingRef.current = false
       if (mountedRef.current) {
         setSaving(false)
       }

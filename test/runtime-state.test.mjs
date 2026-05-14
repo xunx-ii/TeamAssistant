@@ -42,6 +42,7 @@ function createStore() {
   let data = createSnapshot()
   let locks = { slots: [], teams: [] }
   let subsidyPresets = []
+  let backupResult = null
 
   return {
     calls,
@@ -74,8 +75,28 @@ function createStore() {
         calls.backupNow += 1
         return `backup-${calls.backupNow}.json.gz`
       },
+      async restoreBackup() {
+        const result = backupResult ?? {
+          data: createSnapshot(),
+          locks,
+          subsidyPresets,
+        }
+        data = normalizeData(result.data)
+        locks = normalizeLockData(result.locks)
+        subsidyPresets = structuredClone(result.subsidyPresets)
+        return structuredClone(result)
+      },
+      async importBackup() {
+        return this.restoreBackup()
+      },
       getData() {
         return structuredClone(data)
+      },
+      getLocks() {
+        return structuredClone(locks)
+      },
+      setBackupResult(nextResult) {
+        backupResult = structuredClone(nextResult)
       },
     },
   }
@@ -384,4 +405,66 @@ test('runtime schedules stale lock cleanup and emits lock change', async () => {
       await runtime.shutdown()
     }
   })
+})
+
+test('runtime restore backup cleans expired locks and persists cleaned state', async () => {
+  const { store, calls } = createStore()
+  const runtime = createRuntime(store)
+  const originalNow = Date.now
+  Date.now = () => 100_000
+  try {
+    store.setBackupResult({
+      data: createSnapshot(),
+      locks: {
+        slots: [
+          { teamId: 'team-1', slotIndex: 0, qq: 'old', timestamp: 1_000 },
+          { teamId: 'team-1', slotIndex: 1, qq: 'fresh', timestamp: 90_000 },
+        ],
+        teams: [{ teamId: 'team-1', timestamp: 2_000 }],
+      },
+      subsidyPresets: [],
+    })
+    await runtime.init()
+
+    await runtime.restoreBackup('backup-test.json.gz')
+
+    assert.deepEqual(runtime.getPublicLocks().slots, [
+      { teamId: 'team-1', slotIndex: 1, qq: 'fresh', timestamp: 90_000 },
+    ])
+    assert.deepEqual(store.getLocks().slots, [
+      { teamId: 'team-1', slotIndex: 1, qq: 'fresh', timestamp: 90_000 },
+    ])
+    assert.equal(calls.writeLocks, 1)
+  } finally {
+    Date.now = originalNow
+    await runtime.shutdown()
+  }
+})
+
+test('runtime import backup cleans expired locks', async () => {
+  const { store } = createStore()
+  const runtime = createRuntime(store)
+  const originalNow = Date.now
+  Date.now = () => 100_000
+  try {
+    store.setBackupResult({
+      data: createSnapshot(),
+      locks: {
+        slots: [
+          { teamId: 'team-1', slotIndex: 0, qq: 'old', timestamp: 1_000 },
+        ],
+        teams: [],
+      },
+      subsidyPresets: [],
+    })
+    await runtime.init()
+
+    await runtime.importBackup(Buffer.from('{}'))
+
+    assert.equal(runtime.getPublicLocks().slots.length, 0)
+    assert.equal(store.getLocks().slots.length, 0)
+  } finally {
+    Date.now = originalNow
+    await runtime.shutdown()
+  }
 })
