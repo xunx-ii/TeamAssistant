@@ -8,19 +8,10 @@ import {
   validateSlotMutationLock,
 } from './data-store.js'
 import {
-  acquireSlotLock,
-  buildSlotLockMap,
-  buildTeamLockMap,
-  cleanExpiredLocks,
-  getPublicLocks,
-  getTeamLockTimestamp,
   normalizeLockData,
-  removeLocksForTeam,
-  releaseSlotLock,
-  removeTeamLock,
-  setTeamLock,
 } from './lock-store.js'
 
+const DATA_PERSIST_DEBOUNCE_MS = 250
 const LOCK_PERSIST_DEBOUNCE_MS = 2_000
 
 function clone(value) {
@@ -34,6 +25,124 @@ function createHttpError(message, status = 400, details) {
   return error
 }
 
+function slotLockKey(teamId, slotIndex) {
+  return `${teamId}:${slotIndex}`
+}
+
+function createLockState(lockData) {
+  const normalized = normalizeLockData(lockData)
+  const slotLocks = new Map()
+  const teamLocks = new Map()
+  for (const lock of normalized.slots) {
+    slotLocks.set(slotLockKey(lock.teamId, lock.slotIndex), { ...lock })
+  }
+  for (const lock of normalized.teams) {
+    teamLocks.set(lock.teamId, lock.timestamp)
+  }
+  return { slotLocks, teamLocks }
+}
+
+function cloneLockState(lockState) {
+  return {
+    slotLocks: new Map([...lockState.slotLocks].map(([key, lock]) => [key, { ...lock }])),
+    teamLocks: new Map(lockState.teamLocks),
+  }
+}
+
+function lockDataFromState(lockState) {
+  return {
+    slots: [...lockState.slotLocks.values()].map(lock => ({ ...lock })),
+    teams: [...lockState.teamLocks].map(([teamId, timestamp]) => ({ teamId, timestamp })),
+  }
+}
+
+function cleanExpiredLockState(lockState, lockTimeout, now = Date.now()) {
+  const nextSlotLocks = new Map()
+  let changed = false
+  for (const [key, lock] of lockState.slotLocks) {
+    if (now - lock.timestamp <= lockTimeout) {
+      nextSlotLocks.set(key, { ...lock })
+    } else {
+      changed = true
+    }
+  }
+  return {
+    changed,
+    lockState: {
+      slotLocks: nextSlotLocks,
+      teamLocks: new Map(lockState.teamLocks),
+    },
+  }
+}
+
+function acquireSlotLockFromState(lockState, { teamId, slotIndex, qq, lockTimeout, ignoreTeamLock = false, now = Date.now() }) {
+  const teamLockTimestamp = lockState.teamLocks.get(teamId)
+  if (!ignoreTeamLock && teamLockTimestamp) {
+    return {
+      changed: false,
+      lockState,
+      result: { ok: false, reason: 'teamLocked', lockedAt: teamLockTimestamp },
+    }
+  }
+
+  const key = slotLockKey(teamId, slotIndex)
+  const existing = lockState.slotLocks.get(key)
+  if (existing && existing.qq !== qq && now - existing.timestamp < lockTimeout) {
+    return {
+      changed: false,
+      lockState,
+      result: { ok: false, lockedBy: existing.qq, lockedAt: existing.timestamp },
+    }
+  }
+
+  const nextLockState = cloneLockState(lockState)
+  nextLockState.slotLocks.set(key, { teamId, slotIndex, qq, timestamp: now })
+  return {
+    changed: true,
+    lockState: nextLockState,
+    result: { ok: true, timestamp: now },
+  }
+}
+
+function releaseSlotLockFromState(lockState, { teamId, slotIndex, qq, lockTimestamp }) {
+  const key = slotLockKey(teamId, slotIndex)
+  const existing = lockState.slotLocks.get(key)
+  if (!existing || existing.qq !== qq || (lockTimestamp && existing.timestamp !== lockTimestamp)) {
+    return { changed: false, lockState }
+  }
+
+  const nextLockState = cloneLockState(lockState)
+  nextLockState.slotLocks.delete(key)
+  return { changed: true, lockState: nextLockState }
+}
+
+function setTeamLockInState(lockState, { teamId, timestamp = Date.now() }) {
+  const nextLockState = cloneLockState(lockState)
+  nextLockState.teamLocks.set(teamId, timestamp)
+  return { changed: true, lockState: nextLockState, timestamp }
+}
+
+function removeTeamLockFromState(lockState, { teamId }) {
+  if (!lockState.teamLocks.has(teamId)) {
+    return { changed: false, lockState }
+  }
+  const nextLockState = cloneLockState(lockState)
+  nextLockState.teamLocks.delete(teamId)
+  return { changed: true, lockState: nextLockState }
+}
+
+function removeLocksForTeamFromState(lockState, { teamId }) {
+  const nextLockState = cloneLockState(lockState)
+  let changed = nextLockState.teamLocks.delete(teamId)
+  for (const [key, lock] of nextLockState.slotLocks) {
+    if (lock.teamId === teamId) {
+      nextLockState.slotLocks.delete(key)
+      changed = true
+    }
+  }
+  return { changed, lockState: nextLockState }
+}
+
 export function createRuntimeState({
   store,
   normalizeSubsidyPresets,
@@ -41,14 +150,18 @@ export function createRuntimeState({
   lockTimeout,
 }) {
   let data = normalizeHydratableData({})
-  let locks = normalizeLockData({})
+  let locks = createLockState({})
   let subsidyPresets = normalizeSubsidyPresets([])
   let dataVersion = 1
   let lockVersion = 1
   let stateQueue = Promise.resolve()
+  let dataPersistTimer = null
+  let dataPersistPromise = Promise.resolve()
+  let dataPersistDirty = false
   let lockPersistTimer = null
   let lockPersistPromise = Promise.resolve()
   let lockPersistDirty = false
+  const listeners = new Set()
 
   function getVersion() {
     return {
@@ -58,10 +171,37 @@ export function createRuntimeState({
     }
   }
 
+  function emitChange(type) {
+    const event = {
+      ok: true,
+      type,
+      dataVersion,
+      lockVersion,
+    }
+    for (const listener of listeners) {
+      try {
+        listener(event)
+      } catch (error) {
+        console.error('[events] listener failed:', error instanceof Error ? error.message : error)
+      }
+    }
+  }
+
+  function subscribe(listener) {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+
+  function publicLockState() {
+    return lockDataFromState(locks)
+  }
+
   function publicData() {
+    const publicLocks = publicLockState()
     return {
       ...clone(data),
-      locks: getPublicLocks(locks).slots,
+      locks: publicLocks.slots,
+      teamLocks: publicLocks.teams,
       subsidyPresets: clone(subsidyPresets),
       dataVersion,
       lockVersion,
@@ -69,9 +209,8 @@ export function createRuntimeState({
   }
 
   function publicLocks() {
-    const publicState = getPublicLocks(locks)
     return {
-      ...clone(publicState),
+      ...publicLockState(),
       lockVersion,
     }
   }
@@ -90,8 +229,41 @@ export function createRuntimeState({
     return run
   }
 
+  async function persistDataNow() {
+    await store.writeData(normalizeData(clone(data)))
+  }
+
+  function scheduleDataPersist() {
+    dataPersistDirty = true
+    if (dataPersistTimer) return
+    dataPersistTimer = setTimeout(() => {
+      dataPersistTimer = null
+      if (!dataPersistDirty) return
+      dataPersistDirty = false
+      dataPersistPromise = dataPersistPromise
+        .then(() => persistDataNow())
+        .catch(error => {
+          dataPersistDirty = true
+          console.error('[data] persist failed:', error instanceof Error ? error.message : error)
+        })
+    }, DATA_PERSIST_DEBOUNCE_MS)
+    dataPersistTimer.unref?.()
+  }
+
+  async function flushData() {
+    if (dataPersistTimer) {
+      clearTimeout(dataPersistTimer)
+      dataPersistTimer = null
+    }
+    if (dataPersistDirty) {
+      dataPersistDirty = false
+      dataPersistPromise = dataPersistPromise.then(() => persistDataNow())
+    }
+    await dataPersistPromise
+  }
+
   async function persistLocksNow() {
-    const nextLocks = normalizeLockData(locks)
+    const nextLocks = normalizeLockData(lockDataFromState(locks))
     await store.writeLocks(nextLocks)
   }
 
@@ -124,36 +296,39 @@ export function createRuntimeState({
     await lockPersistPromise
   }
 
-  function replaceLocks(nextLocks, { persist = true } = {}) {
-    locks = normalizeLockData(nextLocks)
+  function replaceLocks(nextLocks, { persist = true, notify = true } = {}) {
+    locks = nextLocks?.slotLocks instanceof Map ? cloneLockState(nextLocks) : createLockState(nextLocks)
     bumpLockVersion()
     if (persist) scheduleLockPersist()
+    if (notify) emitChange('locks')
   }
 
-  function cleanRuntimeLocks({ persist = true } = {}) {
-    const cleaned = cleanExpiredLocks(locks, lockTimeout)
+  function cleanRuntimeLocks({ persist = true, notify = true } = {}) {
+    const cleaned = cleanExpiredLockState(locks, lockTimeout)
     if (cleaned.changed) {
-      replaceLocks(cleaned.lockData, { persist })
+      replaceLocks(cleaned.lockState, { persist, notify })
     }
     return locks
   }
 
   async function init() {
     data = normalizeHydratableData(await store.readData())
-    const cleanedLocks = cleanExpiredLocks(await store.readLocks(), lockTimeout)
-    locks = normalizeLockData(cleanedLocks.lockData)
+    const cleanedLocks = cleanExpiredLockState(createLockState(await store.readLocks()), lockTimeout)
+    locks = cloneLockState(cleanedLocks.lockState)
     subsidyPresets = normalizeSubsidyPresets(await store.readSubsidyPresets())
     if (cleanedLocks.changed) {
-      await store.writeLocks(locks)
+      await store.writeLocks(lockDataFromState(locks))
     }
   }
 
   async function shutdown() {
     await stateQueue
+    await flushData()
     await flushLocks()
   }
 
   async function writeBackupNow() {
+    await flushData()
     await flushLocks()
     return store.backupNow()
   }
@@ -165,6 +340,7 @@ export function createRuntimeState({
 
   async function replaceData(body, { allowReplace }) {
     return enqueueStateWrite(async () => {
+      await flushData()
       const validation = validateDataReplacement(data, body, { allowReplace })
       if (!validation.ok) {
         throw createHttpError(validation.error, validation.status)
@@ -176,6 +352,7 @@ export function createRuntimeState({
       await store.writeData(normalizeData(nextData))
       data = nextData
       bumpDataVersion()
+      emitChange('data')
       return publicData()
     })
   }
@@ -188,8 +365,8 @@ export function createRuntimeState({
 
       if (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') {
         const lockResult = validateSlotMutationLock({
-          slotLocks: buildSlotLockMap(locks),
-          teamLocks: buildTeamLockMap(locks),
+          slotLocks: locks.slotLocks,
+          teamLocks: locks.teamLocks,
           teamId: mutation.teamId,
           slotIndex: mutation.slotIndex,
           qq: actorQq,
@@ -205,16 +382,16 @@ export function createRuntimeState({
       if (mutation.type === 'setTeamLockState') {
         lockUpdates.push(currentLocks => (
           mutation.locked
-            ? setTeamLock(currentLocks, {
+            ? setTeamLockInState(currentLocks, {
                 teamId: mutation.teamId,
-                timestamp: getTeamLockTimestamp(currentLocks, mutation.teamId) ?? Date.now(),
+                timestamp: currentLocks.teamLocks.get(mutation.teamId) ?? Date.now(),
               })
-            : removeTeamLock(currentLocks, { teamId: mutation.teamId })
+            : removeTeamLockFromState(currentLocks, { teamId: mutation.teamId })
         ))
       }
 
       if (mutation.type === 'archiveTeam') {
-        lockUpdates.push(currentLocks => removeLocksForTeam(currentLocks, { teamId: mutation.teamId }))
+        lockUpdates.push(currentLocks => removeLocksForTeamFromState(currentLocks, { teamId: mutation.teamId }))
       }
 
       if (
@@ -233,23 +410,24 @@ export function createRuntimeState({
       }
 
       const nextData = normalizeHydratableData(mutated)
-      await store.writeData(nextData)
       data = nextData
       bumpDataVersion()
+      scheduleDataPersist()
 
+      let locksChanged = false
       if (lockUpdates.length > 0) {
         let nextLocks = locks
-        let locksChanged = false
         for (const updateLocks of lockUpdates) {
           const updatedLockState = updateLocks(nextLocks)
-          nextLocks = updatedLockState.lockData
+          nextLocks = updatedLockState.lockState
           locksChanged = locksChanged || updatedLockState.changed !== false
         }
         if (locksChanged) {
-          replaceLocks(nextLocks)
+          replaceLocks(nextLocks, { notify: false })
         }
       }
 
+      emitChange(locksChanged ? 'data' : 'data')
       return publicData()
     })
   }
@@ -260,19 +438,22 @@ export function createRuntimeState({
       await store.writeSubsidyPresets(nextPresets)
       subsidyPresets = nextPresets
       bumpDataVersion()
+      emitChange('data')
       return clone(subsidyPresets)
     })
   }
 
   async function restoreBackup(name) {
     return enqueueStateWrite(async () => {
+      await flushData()
       await flushLocks()
       const result = await store.restoreBackup(name)
       data = normalizeHydratableData(result.data)
-      locks = normalizeLockData(result.locks)
+      locks = createLockState(result.locks)
       subsidyPresets = normalizeSubsidyPresets(result.subsidyPresets)
       bumpDataVersion()
       bumpLockVersion()
+      emitChange('data')
       return {
         ...result,
         data: publicData(),
@@ -282,13 +463,15 @@ export function createRuntimeState({
 
   async function importBackup(buffer) {
     return enqueueStateWrite(async () => {
+      await flushData()
       await flushLocks()
       const result = await store.importBackup(buffer)
       data = normalizeHydratableData(result.data)
-      locks = normalizeLockData(result.locks)
+      locks = createLockState(result.locks)
       subsidyPresets = normalizeSubsidyPresets(result.subsidyPresets)
       bumpDataVersion()
       bumpLockVersion()
+      emitChange('data')
       return {
         ...result,
         data: publicData(),
@@ -298,7 +481,7 @@ export function createRuntimeState({
 
   function acquireLock({ teamId, slotIndex, qq }) {
     cleanRuntimeLocks()
-    const updated = acquireSlotLock(locks, {
+    const updated = acquireSlotLockFromState(locks, {
       teamId,
       slotIndex,
       qq,
@@ -306,32 +489,32 @@ export function createRuntimeState({
       ignoreTeamLock: isAdminQq(qq),
     })
     if (updated.changed) {
-      replaceLocks(updated.lockData)
+      replaceLocks(updated.lockState)
     }
     return updated.result
   }
 
   function releaseLock({ teamId, slotIndex, qq, lockTimestamp }) {
     cleanRuntimeLocks()
-    const updated = releaseSlotLock(locks, { teamId, slotIndex, qq, lockTimestamp })
+    const updated = releaseSlotLockFromState(locks, { teamId, slotIndex, qq, lockTimestamp })
     if (updated.changed) {
-      replaceLocks(updated.lockData)
+      replaceLocks(updated.lockState)
     }
     return { ok: true }
   }
 
   function setTeamRuntimeLock({ teamId }) {
     cleanRuntimeLocks()
-    const updated = setTeamLock(locks, { teamId })
-    replaceLocks(updated.lockData)
+    const updated = setTeamLockInState(locks, { teamId })
+    replaceLocks(updated.lockState)
     return { ok: true, timestamp: updated.timestamp }
   }
 
   function removeTeamRuntimeLock({ teamId }) {
     cleanRuntimeLocks()
-    const updated = removeTeamLock(locks, { teamId })
+    const updated = removeTeamLockFromState(locks, { teamId })
     if (updated.changed) {
-      replaceLocks(updated.lockData)
+      replaceLocks(updated.lockState)
     }
     return { ok: true }
   }
@@ -339,8 +522,8 @@ export function createRuntimeState({
   function validateLock({ teamId, slotIndex, qq, lockTimestamp }) {
     cleanRuntimeLocks()
     return validateSlotMutationLock({
-      slotLocks: buildSlotLockMap(locks),
-      teamLocks: buildTeamLockMap(locks),
+      slotLocks: locks.slotLocks,
+      teamLocks: locks.teamLocks,
       teamId,
       slotIndex,
       qq,
@@ -350,10 +533,26 @@ export function createRuntimeState({
     })
   }
 
+  function getChanges({ dataVersion: sinceDataVersion, lockVersion: sinceLockVersion } = {}) {
+    const dataChanged = sinceDataVersion !== dataVersion
+    const lockChanged = sinceLockVersion !== lockVersion
+    return {
+      ok: true,
+      dataVersion,
+      lockVersion,
+      dataChanged,
+      lockChanged,
+      ...(dataChanged ? { data: publicData() } : {}),
+      ...(lockChanged ? { locks: publicLocks() } : {}),
+    }
+  }
+
   return {
     init,
     shutdown,
+    subscribe,
     getVersion,
+    getChanges,
     getPublicData: publicData,
     getPublicLocks: publicLocks,
     getSubsidyPresets: () => clone(subsidyPresets),
@@ -368,6 +567,7 @@ export function createRuntimeState({
     setTeamLock: setTeamRuntimeLock,
     removeTeamLock: removeTeamRuntimeLock,
     validateLock,
+    flushData,
     flushLocks,
   }
 }

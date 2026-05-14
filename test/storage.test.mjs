@@ -10,6 +10,21 @@ function createJsonResponse(body) {
   })
 }
 
+function createVersionResponse() {
+  return createJsonResponse({ ok: true, dataVersion: 1, lockVersion: 1 })
+}
+
+function createChangesResponse(data) {
+  return createJsonResponse({
+    ok: true,
+    dataVersion: 1,
+    lockVersion: 1,
+    dataChanged: true,
+    lockChanged: false,
+    data,
+  })
+}
+
 function installLocalStorage() {
   const values = new Map()
   const original = globalThis.localStorage
@@ -83,13 +98,18 @@ test('loadTeams hydrates malformed local storage snapshots', async () => {
 
 test('loadFromServer reports empty server snapshots without hydrating local data', async () => {
   const storage = installLocalStorage()
+  let calls = 0
   try {
-    await withMockedFetch(async () => createJsonResponse({
-      teams: [],
-      cancellations: [],
-      archivedTeams: [],
-      logs: [],
-    }), async () => {
+    await withMockedFetch(async () => {
+      calls += 1
+      if (calls === 1) return createVersionResponse()
+      return createChangesResponse({
+        teams: [],
+        cancellations: [],
+        archivedTeams: [],
+        logs: [],
+      })
+    }, async () => {
       const mod = await import(`../src/storage.ts?case=${Date.now()}-empty`)
       assert.equal(await mod.initServerMode(), true)
       assert.equal(await mod.loadFromServer(), 'empty')
@@ -107,12 +127,7 @@ test('loadFromServer reports unavailable when a later fetch fails', async () => 
     await withMockedFetch(async () => {
       calls += 1
       if (calls === 1) {
-        return createJsonResponse({
-          teams: [{ id: 'team-1', name: '一团', note: '', config: { reservedSlots: [], locked: false }, slots: [] }],
-          cancellations: [],
-          archivedTeams: [],
-          logs: [],
-        })
+        return createVersionResponse()
       }
       throw new TypeError('fetch failed')
     }, async () => {
@@ -128,16 +143,22 @@ test('loadFromServer reports unavailable when a later fetch fails', async () => 
 
 test('loadFromServer hydrates local data only for active team snapshots', async () => {
   const storage = installLocalStorage()
+  let calls = 0
   try {
-    await withMockedFetch(async () => createJsonResponse({
-      teams: [{ id: 'team-1', name: '一团 🌸', note: '', config: { reservedSlots: [], locked: false }, slots: [] }],
-      cancellations: [],
-      archivedTeams: [],
-      logs: [],
-    }), async () => {
+    await withMockedFetch(async () => {
+      calls += 1
+      if (calls === 1) return createVersionResponse()
+      return createChangesResponse({
+        teams: [{ id: 'team-1', name: '一团 🌸', note: '', config: { reservedSlots: [], locked: false }, slots: [] }],
+        cancellations: [],
+        archivedTeams: [],
+        logs: [],
+      })
+    }, async () => {
       const mod = await import(`../src/storage.ts?case=${Date.now()}-loaded`)
       assert.equal(await mod.initServerMode(), true)
       assert.equal(await mod.loadFromServer(), 'loaded')
+      assert.equal(calls, 2)
       const storedTeams = JSON.parse(storage.values.get('team_teams_v3'))
       assert.equal(storedTeams[0].slots.length, 25)
       assert.equal(storedTeams[0].config.locked, false)

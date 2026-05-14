@@ -27,7 +27,7 @@ async function withMockedFetch(mock, run) {
   }
 }
 
-test('checkServer returns false when /api/data responds with html', async () => {
+test('checkServer returns false when /api/version responds with html', async () => {
   await withMockedFetch(async () => createHtmlResponse(), async () => {
     const { checkServer } = await import(`../src/api.ts?case=${Date.now()}-html-check`)
     const ok = await checkServer()
@@ -81,6 +81,20 @@ test('validateLock returns explicit network reason when request fails', async ()
     assert.equal(result.reason, 'network')
     assert.equal(result.error, '无法连接到报名服务，请确认后端已启动')
   })
+})
+
+test('checkServer uses the lightweight version endpoint', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({ ok: true, dataVersion: 1, lockVersion: 1 })
+  }, async () => {
+    const { checkServer } = await import(`../src/api.ts?case=${Date.now()}-version-check`)
+    assert.equal(await checkServer(), true)
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].input, '/api/version')
 })
 
 test('fetchLockState returns slot and team locks from one request', async () => {
@@ -137,6 +151,75 @@ test('fetchServerVersion reads the lightweight version endpoint', async () => {
 
   assert.equal(calls.length, 1)
   assert.equal(calls[0].input, '/api/version')
+})
+
+test('fetchServerChanges requests only version deltas and parses changed payloads', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      dataVersion: 4,
+      lockVersion: 8,
+      dataChanged: false,
+      lockChanged: true,
+      locks: {
+        slots: [{ teamId: 'team-1', slotIndex: 0, qq: '10001', timestamp: 123 }],
+        teams: [],
+        lockVersion: 8,
+      },
+    })
+  }, async () => {
+    const { fetchServerChanges } = await import(`../src/api.ts?case=${Date.now()}-changes`)
+    const result = await fetchServerChanges(3, 7)
+
+    assert.equal(result.dataChanged, false)
+    assert.equal(result.lockChanged, true)
+    assert.equal(result.locks.slots[0].qq, '10001')
+    assert.equal(result.locks.lockVersion, 8)
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].input, '/api/changes?dataVersion=3&lockVersion=7')
+})
+
+test('subscribeServerEvents parses server sent version events', async () => {
+  const originalEventSource = globalThis.EventSource
+  const instances = []
+  class MockEventSource {
+    constructor(url) {
+      this.url = url
+      this.listeners = {}
+      this.closed = false
+      instances.push(this)
+    }
+    addEventListener(type, listener) {
+      this.listeners[type] = listener
+    }
+    close() {
+      this.closed = true
+    }
+    emit(type, data) {
+      this.listeners[type]?.({ data: JSON.stringify(data) })
+    }
+  }
+  globalThis.EventSource = MockEventSource
+  try {
+    const events = []
+    const { subscribeServerEvents } = await import(`../src/api.ts?case=${Date.now()}-events`)
+    const unsubscribe = subscribeServerEvents(event => events.push(event))
+
+    assert.equal(instances[0].url, '/api/events')
+    instances[0].emit('version', { ok: true, type: 'data', dataVersion: 5, lockVersion: 9 })
+    assert.equal(events.length, 1)
+    assert.equal(events[0].dataVersion, 5)
+    assert.equal(events[0].lockVersion, 9)
+
+    unsubscribe()
+    assert.equal(instances[0].closed, true)
+  } finally {
+    globalThis.EventSource = originalEventSource
+  }
 })
 
 test('backup API helpers use the backup endpoints', async () => {

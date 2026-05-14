@@ -143,6 +143,36 @@ api.get('/version', (_req, res) => {
   res.json(runtime.getVersion())
 })
 
+api.get('/changes', (req, res) => {
+  const dataVersion = Number(req.query.dataVersion)
+  const lockVersion = Number(req.query.lockVersion)
+  res.json(runtime.getChanges({
+    dataVersion: Number.isFinite(dataVersion) ? dataVersion : undefined,
+    lockVersion: Number.isFinite(lockVersion) ? lockVersion : undefined,
+  }))
+})
+
+api.get('/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  res.write(`event: hello\ndata: ${JSON.stringify(runtime.getVersion())}\n\n`)
+  const heartbeat = setInterval(() => {
+    res.write(': keepalive\n\n')
+  }, 25_000)
+  heartbeat.unref?.()
+  const unsubscribe = runtime.subscribe(event => {
+    res.write(`event: version\ndata: ${JSON.stringify(event)}\n\n`)
+  })
+  req.on('close', () => {
+    clearInterval(heartbeat)
+    unsubscribe()
+  })
+})
+
 api.get('/data', async (_req, res) => {
   try {
     res.json(runtime.getPublicData())

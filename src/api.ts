@@ -16,6 +16,7 @@ export interface ServerData {
   userProfiles: UserProfiles
   subsidyPresets?: SubsidyType[]
   locks?: SlotLock[]
+  teamLocks?: TeamLockInfo[]
   dataVersion?: number
   lockVersion?: number
 }
@@ -40,6 +41,23 @@ export interface LockState {
 
 export interface ServerVersion {
   ok: boolean
+  dataVersion: number
+  lockVersion: number
+}
+
+export interface ServerChanges {
+  ok: boolean
+  dataVersion: number
+  lockVersion: number
+  dataChanged: boolean
+  lockChanged: boolean
+  data?: ServerData
+  locks?: LockState
+}
+
+export interface ServerEvent {
+  ok?: boolean
+  type?: string
   dataVersion: number
   lockVersion: number
 }
@@ -156,8 +174,8 @@ async function requestResult<T extends { ok: boolean }>(input: RequestInfo | URL
 }
 
 export async function checkServer(): Promise<boolean> {
-  const data = await requestData<unknown>(`${API}/data`, noCache)
-  return isServerData(data)
+  const version = await fetchServerVersion()
+  return Boolean(version)
 }
 
 export async function fetchData(): Promise<ServerData | null> {
@@ -180,6 +198,68 @@ export async function fetchServerVersion(): Promise<ServerVersion | null> {
     }
   }
   return null
+}
+
+export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null): Promise<ServerChanges | null> {
+  const params = new URLSearchParams()
+  if (typeof dataVersion === 'number') params.set('dataVersion', String(dataVersion))
+  if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
+  const suffix = params.toString() ? `?${params}` : ''
+  const data = await requestData<unknown>(`${API}/changes${suffix}`, noCache)
+  if (
+    data &&
+    typeof data === 'object' &&
+    typeof (data as Partial<ServerChanges>).dataVersion === 'number' &&
+    typeof (data as Partial<ServerChanges>).lockVersion === 'number'
+  ) {
+    const payload = data as Partial<ServerChanges>
+    const nextDataVersion = payload.dataVersion
+    const nextLockVersion = payload.lockVersion
+    if (typeof nextDataVersion !== 'number' || typeof nextLockVersion !== 'number') return null
+    const locks = payload.locks
+    return {
+      ok: payload.ok !== false,
+      dataVersion: nextDataVersion,
+      lockVersion: nextLockVersion,
+      dataChanged: Boolean(payload.dataChanged),
+      lockChanged: Boolean(payload.lockChanged),
+      data: isServerData(payload.data) ? payload.data : undefined,
+      locks: locks && typeof locks === 'object'
+        ? {
+            slots: Array.isArray(locks.slots) ? locks.slots : [],
+            teams: Array.isArray(locks.teams) ? locks.teams : [],
+            lockVersion: typeof locks.lockVersion === 'number' ? locks.lockVersion : undefined,
+          }
+        : undefined,
+    }
+  }
+  return null
+}
+
+export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): (() => void) | null {
+  if (typeof EventSource === 'undefined') return null
+  const source = new EventSource(`${API}/events`)
+  const handleMessage = (message: MessageEvent) => {
+    try {
+      const parsed = JSON.parse(message.data) as Partial<ServerEvent>
+      if (typeof parsed.dataVersion === 'number' && typeof parsed.lockVersion === 'number') {
+        onEvent({
+          ok: parsed.ok,
+          type: parsed.type,
+          dataVersion: parsed.dataVersion,
+          lockVersion: parsed.lockVersion,
+        })
+      }
+    } catch {
+      // Ignore malformed event payloads; polling remains as fallback.
+    }
+  }
+  source.addEventListener('hello', handleMessage)
+  source.addEventListener('version', handleMessage)
+  source.onerror = () => {
+    // EventSource reconnects automatically; adaptive polling is the safety net.
+  }
+  return () => source.close()
 }
 
 export async function pushData(data: Partial<ServerData>): Promise<boolean> {

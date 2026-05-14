@@ -8,11 +8,11 @@ import {
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
   loadUserProfiles, setUserProfilesLocal,
-  initServerMode, loadFromServer, normalizeServerData,
+  initServerMode, normalizeServerData,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLockStateOrNull, fetchServerVersion, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
+import { fetchServerChanges, fetchServerVersion, mutateData, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -109,6 +109,8 @@ function App() {
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const dataVersionRef = useRef<number | null>(null)
   const lockVersionRef = useRef<number | null>(null)
+  const syncingChangesRef = useRef(false)
+  const pendingServerEventRef = useRef<ServerEvent | null>(null)
 
   const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeamExists = teams.some(t => t.id === activeTeamId)
@@ -154,11 +156,65 @@ function App() {
     }
     if (snapshot.teams.length === 0) return false
     if (data.locks) setLocks(data.locks)
+    if (data.teamLocks) setTeamLocks(data.teamLocks)
     if (typeof data.dataVersion === 'number') dataVersionRef.current = data.dataVersion
     if (typeof data.lockVersion === 'number') lockVersionRef.current = data.lockVersion
     syncSnapshot(snapshot)
     return true
   }, [syncSnapshot, syncSubsidyPresets])
+
+  const syncLockState = useCallback((state: LockState) => {
+    setLocks(state.slots)
+    setTeamLocks(state.teams)
+    if (typeof state.lockVersion === 'number') lockVersionRef.current = state.lockVersion
+  }, [])
+
+  const syncServerChanges = useCallback(async (event?: ServerEvent | null) => {
+    if (syncingChangesRef.current) {
+      if (event) pendingServerEventRef.current = event
+      return true
+    }
+    syncingChangesRef.current = true
+    try {
+      let nextEvent = event ?? pendingServerEventRef.current
+      pendingServerEventRef.current = null
+
+      do {
+        if (
+          nextEvent &&
+          dataVersionRef.current === nextEvent.dataVersion &&
+          lockVersionRef.current === nextEvent.lockVersion
+        ) {
+          nextEvent = pendingServerEventRef.current
+          pendingServerEventRef.current = null
+          continue
+        }
+
+        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current)
+        if (!changes) return false
+
+        let synced = true
+        if (changes.data) {
+          synced = syncServerData(changes.data)
+        } else {
+          dataVersionRef.current = changes.dataVersion
+        }
+        if (changes.locks) {
+          syncLockState(changes.locks)
+        } else {
+          lockVersionRef.current = changes.lockVersion
+        }
+        if (!synced) return false
+
+        nextEvent = pendingServerEventRef.current
+        pendingServerEventRef.current = null
+      } while (nextEvent)
+
+      return true
+    } finally {
+      syncingChangesRef.current = false
+    }
+  }, [syncLockState, syncServerData])
 
   useEffect(() => {
     let active = true
@@ -170,12 +226,10 @@ function App() {
       if (!active) return
       setAdminQQs(admins)
       if (sm) {
-        const loadResult = await loadFromServer()
+        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current)
         if (!active) return
-        const loadedData = await fetchData()
-        if (!active) return
-        if (loadedData) syncServerData(loadedData)
-        if (loadResult === 'loaded') {
+        const loadedData = changes?.data ?? null
+        if (loadedData && syncServerData(loadedData)) {
           const loadedTeams = loadTeams()
           const loadedCancellations = loadCancellations()
           const loadedArchivedTeams = loadArchivedTeams()
@@ -190,7 +244,7 @@ function App() {
           if (loadedTeams.length > 0) {
             setActiveTeamId(loadedTeams[0].id)
           }
-        } else if (loadResult === 'empty') {
+        } else if (loadedData && normalizeServerData(loadedData).teams.length === 0) {
           await saveTeams(loadTeams())
         }
       }
@@ -212,42 +266,34 @@ function App() {
 
   useEffect(() => {
     if (!serverMode) return
-    const poll = async () => {
-      const lockState = await fetchLockStateOrNull()
-      if (!lockState) return false
-      const { slots, teams } = lockState
-      setLocks(slots)
-      setTeamLocks(teams)
-      if (typeof lockState.lockVersion === 'number') lockVersionRef.current = lockState.lockVersion
-      return true
-    }
-    const controller = startAdaptivePoll(poll, {
-      baseDelayMs: 1_500,
-      hiddenDelayMs: 8_000,
-      maxDelayMs: 10_000,
+    const unsubscribe = subscribeServerEvents(event => {
+      pendingServerEventRef.current = event
+      void syncServerChanges(event)
     })
-    return () => controller.stop()
-  }, [serverMode])
-
-  useEffect(() => {
-    if (!serverMode) return
     const poll = async () => {
+      if (pendingServerEventRef.current) {
+        return syncServerChanges()
+      }
       const version = await fetchServerVersion()
-      if (version && dataVersionRef.current === version.dataVersion) {
-        lockVersionRef.current = version.lockVersion
+      if (!version) return false
+      if (
+        dataVersionRef.current === version.dataVersion &&
+        lockVersionRef.current === version.lockVersion
+      ) {
         return true
       }
-      const data = await fetchData()
-      if (!data) return false
-      return syncServerData(data)
+      return syncServerChanges(version)
     }
     const controller = startAdaptivePoll(poll, {
-      baseDelayMs: 3_000,
-      hiddenDelayMs: 12_000,
+      baseDelayMs: unsubscribe ? 10_000 : 2_000,
+      hiddenDelayMs: 15_000,
       maxDelayMs: 20_000,
     })
-    return () => controller.stop()
-  }, [serverMode, syncServerData])
+    return () => {
+      unsubscribe?.()
+      controller.stop()
+    }
+  }, [serverMode, syncServerChanges])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
@@ -268,13 +314,7 @@ function App() {
 
     const result = await mutateData(mutation)
     if (result.ok && result.data) {
-      syncSnapshot({
-        teams: result.data.teams,
-        cancellations: result.data.cancellations,
-        archivedTeams: result.data.archivedTeams ?? [],
-        logs: result.data.logs ?? [],
-        userProfiles: result.data.userProfiles ?? {},
-      })
+      syncServerData(result.data)
       return result
     }
 
@@ -293,7 +333,7 @@ function App() {
     }
 
     return result
-  }, [applyLocalMutation, serverMode, syncSnapshot])
+  }, [applyLocalMutation, serverMode, syncServerData])
 
   const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
   const handleBackupRestored = (data: ServerData) => {

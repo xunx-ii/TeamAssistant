@@ -1,5 +1,5 @@
 import type { ArchivedTeam, Cancellation, OperationLog, Team, UserProfiles } from './types'
-import { checkServer, fetchData, pushData, type ServerData } from './api'
+import { checkServer, fetchServerChanges, pushData, type ServerData } from './api'
 import { normalizeHydratableData, normalizeHydratableTeams } from './dataHydration'
 
 const KEYS = {
@@ -161,7 +161,8 @@ export function removeStoredQQ() {
 export async function loadFromServer(): Promise<LoadFromServerResult> {
   if (!serverMode) return 'unavailable'
   try {
-    const data = await fetchData()
+    const changes = await fetchServerChanges()
+    const data = changes?.data ?? null
     if (!data) return 'unavailable'
     const snapshot = normalizeServerData(data)
     if (snapshot.teams.length === 0) return 'empty'
