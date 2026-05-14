@@ -8,6 +8,7 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { useImeSafeInputHandlers } from './ui/imeInput'
 import { Label } from './ui/label'
+import { startAdaptivePoll } from '../polling'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
@@ -39,7 +40,6 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const [error, setError] = useState('')
   const [maSearch, setMaSearch] = useState('')
   const [showMaDropdown, setShowMaDropdown] = useState(false)
-  const heartbeatRef = useRef<number>(0)
   const lockTimestampRef = useRef(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const gearScoreRef = useRef<HTMLInputElement>(null)
@@ -69,12 +69,13 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
         if (result.ok && result.timestamp) {
           void releaseSlotLock(teamId, slotIndex, lockQq, result.timestamp)
         }
-        return
+        return true
       }
       if (result.ok && result.timestamp) {
         lockTimestampRef.current = result.timestamp
         setLockTimestamp(result.timestamp)
         setError('')
+        return true
       } else if (result.reason === 'teamLocked') {
         setError('表格已被管理员锁定')
       } else if (result.lockedBy && result.lockedBy !== lockQq) {
@@ -82,12 +83,16 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       } else {
         setError(result.error || '无法锁定该位置，请稍后重试')
       }
+      return false
     }
-    void lock()
-    heartbeatRef.current = setInterval(lock, 15000)
+    const controller = startAdaptivePoll(lock, {
+      baseDelayMs: 15_000,
+      hiddenDelayMs: 20_000,
+      maxDelayMs: 30_000,
+    })
     return () => {
       active = false
-      clearInterval(heartbeatRef.current)
+      controller.stop()
       const currentLockTimestamp = lockTimestampRef.current
       lockTimestampRef.current = 0
       if (currentLockTimestamp > 0) {

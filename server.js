@@ -26,6 +26,7 @@ import {
 } from './server/lock-store.js'
 import { withFileLock } from './server/shared-file-lock.js'
 import { createLevelStore } from './server/level-store.js'
+import { createReadCache } from './server/read-cache.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -42,6 +43,8 @@ const BACKUP_HISTORY_LIMIT = 48
 const STORAGE_LOCK_STALE_MS = 15_000
 const STORAGE_LOCK_TIMEOUT_MS = 10_000
 const LOCK_LOG = process.env.DEBUG === '1'
+const READ_CACHE_TTL_MS = 500
+const LOCK_READ_CACHE_TTL_MS = 300
 
 const DEFAULT_SUBSIDY_PRESETS = [
   {
@@ -144,6 +147,10 @@ async function loadLocks() {
   return cleaned.lockData
 }
 
+async function readLocksForPublic() {
+  return cleanExpiredLocks(await store.readLocks(), LOCK_TIMEOUT).lockData
+}
+
 async function loadData() {
   return normalizeHydratableData(await store.readData())
 }
@@ -163,6 +170,19 @@ function scheduleBackups() {
   return interval
 }
 
+const readPublicLocksCached = createReadCache(LOCK_READ_CACHE_TTL_MS, async () => (
+  withSharedStorage(async () => getPublicLocks(await readLocksForPublic()))
+))
+
+const readPublicDataCached = createReadCache(READ_CACHE_TTL_MS, async () => (
+  withSharedStorage(async () => {
+    const current = await loadData()
+    current.locks = getPublicLocks(await readLocksForPublic()).slots
+    current.subsidyPresets = normalizeSubsidyPresets(await store.readSubsidyPresets())
+    return current
+  })
+))
+
 app.use(express.json({ limit: '10mb' }))
 
 // API router - mounted before static, ensures API routes take priority
@@ -170,12 +190,7 @@ const api = express.Router()
 
 api.get('/data', async (_req, res) => {
   try {
-    const data = await withSharedStorage(async () => {
-      const current = await loadData()
-      current.locks = getPublicLocks(await loadLocks()).slots
-      current.subsidyPresets = normalizeSubsidyPresets(await store.readSubsidyPresets())
-      return current
-    })
+    const data = await readPublicDataCached()
     res.json(data)
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'Load failed' })
@@ -379,7 +394,7 @@ api.post('/mutate', async (req, res) => {
 // Dedicated locks endpoint (responds within 1s polling)
 api.get('/locks', async (_req, res) => {
   try {
-    const locks = await withSharedStorage(async () => getPublicLocks(await loadLocks()))
+    const locks = await readPublicLocksCached()
     if (LOCK_LOG) console.log(`[lock] GET /locks → ${locks.slots.length} slots, ${locks.teams.length} teams`)
     res.json(locks)
   } catch (error) {

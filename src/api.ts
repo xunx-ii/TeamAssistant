@@ -199,7 +199,12 @@ export async function fetchTeamLocks(): Promise<TeamLockInfo[]> {
 }
 
 export async function fetchLockState(): Promise<LockState> {
+  return (await fetchLockStateOrNull()) ?? { slots: [], teams: [] }
+}
+
+export async function fetchLockStateOrNull(): Promise<LockState | null> {
   const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[] }>(`${API}/locks`, noCache)
+  if (!data) return null
   return {
     slots: Array.isArray(data?.slots) ? data.slots : [],
     teams: Array.isArray(data?.teams) ? data.teams : [],

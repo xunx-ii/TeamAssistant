@@ -12,7 +12,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLockState, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
+import { fetchData, fetchLockStateOrNull, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -20,6 +20,7 @@ import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
 import { loadSubsidyPresets, saveSubsidyPresets } from './subsidyPresets'
 import { createDefaultTeam, createTeamFromGuide, type CreateTeamGuideValues } from './teamCreation'
 import { getCurrentWeekStartKey } from './week'
+import { startAdaptivePoll } from './polling'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SubsidyConfigDialog } from './components/SubsidyConfig'
@@ -199,13 +200,19 @@ function App() {
   useEffect(() => {
     if (!serverMode) return
     const poll = async () => {
-      const { slots, teams } = await fetchLockState()
+      const lockState = await fetchLockStateOrNull()
+      if (!lockState) return false
+      const { slots, teams } = lockState
       setLocks(slots)
       setTeamLocks(teams)
+      return true
     }
-    poll()
-    const interval = setInterval(poll, 1000)
-    return () => clearInterval(interval)
+    const controller = startAdaptivePoll(poll, {
+      baseDelayMs: 1_500,
+      hiddenDelayMs: 8_000,
+      maxDelayMs: 10_000,
+    })
+    return () => controller.stop()
   }, [serverMode])
 
   useEffect(() => {
@@ -213,22 +220,26 @@ function App() {
     let lastSnapshotJson = ''
     const poll = async () => {
       const data = await fetchData()
-      if (!data) return
+      if (!data) return false
       const snapshot = normalizeServerData(data)
       if (Array.isArray(data.subsidyPresets)) {
         syncSubsidyPresets(data.subsidyPresets)
       }
-      if (snapshot.teams.length === 0) return
+      if (snapshot.teams.length === 0) return true
       if (data.locks) setLocks(data.locks)
       const snapshotJson = JSON.stringify(snapshot)
       if (snapshotJson !== lastSnapshotJson) {
         lastSnapshotJson = snapshotJson
         syncSnapshot(snapshot)
       }
+      return true
     }
-    poll()
-    const interval = setInterval(poll, 2000)
-    return () => clearInterval(interval)
+    const controller = startAdaptivePoll(poll, {
+      baseDelayMs: 3_000,
+      hiddenDelayMs: 12_000,
+      maxDelayMs: 20_000,
+    })
+    return () => controller.stop()
   }, [serverMode, syncSnapshot, syncSubsidyPresets])
 
   const clearModals = () => {
