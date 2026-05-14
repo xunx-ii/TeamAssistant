@@ -12,18 +12,20 @@ interface Props {
   qq: string | null
   teamId?: string
   slotIndex: number | null
+  requireLock?: boolean
   onConfirm: (reason: string, lockTimestamp?: number) => void
   onClose: () => void
 }
 
-export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm, onClose }: Props) {
+export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLock = false, onConfirm, onClose }: Props) {
   const [reason, setReason] = useState('')
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [error, setError] = useState('')
   const lockTimestampRef = useRef(0)
+  const shouldLock = requireLock
 
   useEffect(() => {
-    if (!open || !qq || !teamId || slotIndex == null) return
+    if (!open || !qq || !teamId || slotIndex == null || !shouldLock) return
     let active = true
     const acquire = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, qq)
@@ -53,12 +55,16 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
       setError('')
       setReason('')
     }
-  }, [open, qq, teamId, slotIndex])
+  }, [open, qq, teamId, slotIndex, shouldLock])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const textReason = normalizeTextInput(reason, { maxLength: TEXT_INPUT_LIMITS.cancelReason, multiline: true })
     if (!textReason || error) return
+    if (shouldLock && lockTimestamp <= 0) {
+      setError('正在锁定该位置，请稍后再提交')
+      return
+    }
     setReason(textReason)
     onConfirm(textReason, lockTimestamp)
   }
@@ -86,7 +92,7 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, onConfirm
               rows={3}
             />
           </div>
-          <Button type="submit" variant="destructive" className="w-full">确认取消</Button>
+          <Button type="submit" variant="destructive" className="w-full" disabled={shouldLock && lockTimestamp <= 0}>确认取消</Button>
         </form>
       </DialogContent>
     </Dialog>

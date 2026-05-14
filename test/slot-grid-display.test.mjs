@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  canInteractWithSlotLock,
   getAvailableSlotLabel,
   getFixedSlotLabel,
   getOccupiedSlotDisplay,
@@ -41,6 +42,13 @@ test('fixed slots show a readable availability hint when not locked', () => {
     getFixedSlotLabel({ fixedRole: 'DPS', fixedMartialArtIndex: null }, true),
     '⏳ 报名中',
   )
+})
+
+test('users can reopen a slot that is locked by their own QQ', () => {
+  assert.equal(canInteractWithSlotLock(false, '10001', '10001'), true)
+  assert.equal(canInteractWithSlotLock(false, '10001', '20002'), false)
+  assert.equal(canInteractWithSlotLock(true, '10001', '20002'), true)
+  assert.equal(canInteractWithSlotLock(false, '10001', undefined), true)
 })
 
 test('occupied own slots receive the theme border class', () => {

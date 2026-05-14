@@ -110,6 +110,17 @@ async function writeServerData(data) {
   }
 }
 
+async function writeLockState(lockState) {
+  const response = await fetch(`${apiBaseUrl}/api/lock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(lockState),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to write lock state: ${response.status}`)
+  }
+}
+
 async function waitForHttp(process, url, label) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     if (process.exitCode !== null) {
@@ -140,6 +151,10 @@ async function waitForText(locator, expected, page) {
   const text = await locator.textContent().catch(() => '')
   const storage = page ? await page.evaluate(() => localStorage.getItem('team_teams_v3')).catch(() => '') : ''
   assert.fail(`Timed out waiting for ${expected}. Current text: ${text ?? ''}. Storage: ${storage}`)
+}
+
+async function assertButtonEnabled(locator) {
+  assert.equal(await locator.isEnabled(), true)
 }
 
 async function beginTextComposition(locator, value) {
@@ -215,6 +230,7 @@ try {
   await waitForHttp(apiServer, `${apiBaseUrl}/api/data`, 'backend server')
 
   await writeServerData(createServerData(createTeam()))
+  await writeLockState({ teamId: `team-${runId}`, slotIndex: 3, qq: '10001' })
   importBackupPath = resolve(tmpdir(), `teamassistant-import-${runId}.json.gz`)
   await writeFile(importBackupPath, gzipSync(Buffer.from(JSON.stringify({
     version: 1,
@@ -282,6 +298,25 @@ try {
   await reservedDialog.waitFor()
   await assertCellContains(reservedDialog, /报名/)
   await assertCellContains(reservedDialog, /此位置为老板位/)
+  await page.getByRole('button', { name: 'Close' }).click()
+  await reservedDialog.waitFor({ state: 'detached' })
+
+  const signupCell = page.locator('[data-slot-index="3"]')
+  await waitForText(signupCell, /10001 编辑中/, page)
+  await signupCell.click()
+  const signupDialog = page.locator('[role="dialog"]')
+  await signupDialog.waitFor()
+  await signupDialog.getByPlaceholder('搜索心法').fill('云裳')
+  await signupDialog.getByRole('button', { name: /云裳心经/ }).click()
+  await signupDialog.getByPlaceholder('层数').fill('8')
+  await signupDialog.getByPlaceholder('角色ID').fill('报名测试')
+  const confirmSignupButton = signupDialog.getByRole('button', { name: '确认报名' })
+  await confirmSignupButton.waitFor({ state: 'visible' })
+  await assertButtonEnabled(confirmSignupButton)
+  await confirmSignupButton.click()
+  await signupDialog.waitFor({ state: 'detached' })
+  await waitForText(signupCell, /报名测试/, page)
+
   await page.close()
 
   await writeServerData({

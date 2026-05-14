@@ -83,6 +83,28 @@ test('validateLock returns explicit network reason when request fails', async ()
   })
 })
 
+test('fetchLockState returns slot and team locks from one request', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      slots: [{ teamId: 'team-1', slotIndex: 0, qq: '10001', timestamp: 123 }],
+      teams: [{ teamId: 'team-2', timestamp: 456 }],
+    })
+  }, async () => {
+    const { fetchLockState } = await import(`../src/api.ts?case=${Date.now()}-lock-state`)
+    const result = await fetchLockState()
+
+    assert.equal(result.slots.length, 1)
+    assert.equal(result.slots[0].qq, '10001')
+    assert.equal(result.teams.length, 1)
+    assert.equal(result.teams[0].teamId, 'team-2')
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].input, '/api/locks')
+})
+
 test('backup API helpers use the backup endpoints', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {

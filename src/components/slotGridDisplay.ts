@@ -16,6 +16,10 @@ export function shouldShowAvailableMarker(slot: Pick<Slot, 'status'>, isLocked: 
   return slotAcceptsSignup(slot) && !isLocked
 }
 
+export function canInteractWithSlotLock(isAdmin: boolean, currentQQ: string, lockedBy?: string): boolean {
+  return isAdmin || !lockedBy || lockedBy === currentQQ
+}
+
 export function getAvailableSlotLabel(isLocked: boolean): string {
   return isLocked ? '⏳ 报名中' : '可选'
 }

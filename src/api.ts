@@ -29,6 +29,11 @@ export interface TeamLockInfo {
   timestamp: number
 }
 
+export interface LockState {
+  slots: SlotLock[]
+  teams: TeamLockInfo[]
+}
+
 export interface AcquireResult {
   ok: boolean
   lockedBy?: string
@@ -185,13 +190,19 @@ export async function releaseSlotLock(teamId: string, slotIndex: number, qq: str
 }
 
 export async function fetchLocks(): Promise<SlotLock[]> {
-  const data = await requestData<{ slots?: SlotLock[] }>(`${API}/locks`, noCache)
-  return Array.isArray(data?.slots) ? data.slots : []
+  return (await fetchLockState()).slots
 }
 
 export async function fetchTeamLocks(): Promise<TeamLockInfo[]> {
-  const data = await requestData<{ teams?: TeamLockInfo[] }>(`${API}/locks`, noCache)
-  return Array.isArray(data?.teams) ? data.teams : []
+  return (await fetchLockState()).teams
+}
+
+export async function fetchLockState(): Promise<LockState> {
+  const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[] }>(`${API}/locks`, noCache)
+  return {
+    slots: Array.isArray(data?.slots) ? data.slots : [],
+    teams: Array.isArray(data?.teams) ? data.teams : [],
+  }
 }
 
 export async function lockTeam(teamId: string): Promise<boolean> {

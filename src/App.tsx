@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchData, fetchLocks, fetchTeamLocks, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
+import { fetchData, fetchLockState, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -155,7 +155,7 @@ function App() {
   useEffect(() => {
     if (!serverMode) return
     const poll = async () => {
-      const [slots, teams] = await Promise.all([fetchLocks(), fetchTeamLocks()])
+      const { slots, teams } = await fetchLockState()
       setLocks(slots)
       setTeamLocks(teams)
     }
@@ -650,6 +650,7 @@ function App() {
         qq={qq}
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
         teamId={activeTeam?.id}
+        requireLock={serverMode}
         isAdminEditing={false}
         isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
         takenMartialArts={getTakenMartialArts()}
@@ -671,6 +672,7 @@ function App() {
             existing={existingMember}
             slotInfo={activeTeam.slots[editSlot]}
             teamId={activeTeam.id}
+            requireLock={serverMode}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
             readOnly={isViewOnly}
@@ -689,6 +691,7 @@ function App() {
         qq={qq}
         teamId={activeTeam?.id}
         slotIndex={cancelSlot}
+        requireLock={serverMode}
         onConfirm={(reason, lockTimestamp) => { void handleCancelConfirm(reason, lockTimestamp) }}
         onClose={() => setCancelSlot(null)}
       />

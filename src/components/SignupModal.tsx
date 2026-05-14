@@ -19,6 +19,7 @@ interface Props {
   slotInfo?: Slot | null
   isBossSlot?: boolean
   teamId?: string
+  requireLock?: boolean
   takenMartialArts: number[]
   readOnly?: boolean
   onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void
@@ -27,7 +28,7 @@ interface Props {
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
@@ -43,6 +44,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
+  const shouldLock = requireLock && !readOnly
   const maSearchInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value: martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch,
     onChange: e => {
@@ -58,7 +60,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
 
   // Lock management
   useEffect(() => {
-    if (!open || !teamId || slotIndex == null || readOnly) return
+    if (!open || !teamId || slotIndex == null || !shouldLock) return
     let active = true
     const lock = async () => {
       const result = await acquireSlotLock(teamId, slotIndex, lockQq)
@@ -76,6 +78,8 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
         setError('表格已被管理员锁定')
       } else if (result.lockedBy && result.lockedBy !== lockQq) {
         setError(`该位置已被 ${result.lockedBy} 先点击`)
+      } else {
+        setError(result.error || '无法锁定该位置，请稍后重试')
       }
     }
     void lock()
@@ -91,7 +95,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
       setLockTimestamp(0)
       setError('')
     }
-  }, [open, teamId, slotIndex, lockQq, qq, readOnly])
+  }, [open, teamId, slotIndex, lockQq, qq, shouldLock])
 
   const handleClose = () => {
     const currentLockTimestamp = lockTimestampRef.current
@@ -115,10 +119,15 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
     if (!textMartialArt || !textCharacterId) return
     if (isDPS && !textGearScore) return
     setError('')
-    if (teamId && slotInfo != null && lockTimestamp > 0) {
+    if (shouldLock && lockTimestamp <= 0) {
+      setError('正在锁定该位置，请稍后再提交')
+      return
+    }
+    if (teamId && slotInfo != null && shouldLock) {
       const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)
       if (!validation.ok) {
         if (validation.reason === 'teamLocked') setError('表格已被管理员锁定，无法保存')
+        else if (validation.reason === 'network' || validation.error) setError(validation.error || '无法连接到报名服务，请稍后重试')
         else setError('该位置已被其他人抢占，请重新选择')
         return
       }
@@ -351,7 +360,7 @@ export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, s
           </div>
           {showActions && (
             <div className="flex gap-2 pt-1">
-              <Button type="submit" className="flex-1">{existing ? '保存修改' : '确认报名'}</Button>
+              <Button type="submit" className="flex-1" disabled={shouldLock && lockTimestamp <= 0}>{existing ? '保存修改' : '确认报名'}</Button>
               {onLeave && (
                 <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => onLeave(lockTimestamp)}>
                   退出报名

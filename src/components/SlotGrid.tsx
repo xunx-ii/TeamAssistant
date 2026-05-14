@@ -4,6 +4,7 @@ import type { Slot, TeamConfig } from '../types'
 import type { SlotLock } from '../api'
 import { PixelStar } from './PixelRabbit'
 import {
+  canInteractWithSlotLock,
   getAvailableSlotLabel,
   getFixedSlotLabel,
   getOccupiedSlotDisplay,
@@ -91,7 +92,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
       onSetRole(slot.index)
       return
     }
-    if (!isAdmin && lockMap.has(slot.index)) {
+    if (!canInteractWithSlotLock(isAdmin, currentQQ, lockMap.get(slot.index))) {
       return
     }
     if (slot.status === 'empty' || slot.status === 'fixed' || slot.status === 'reserved') {
