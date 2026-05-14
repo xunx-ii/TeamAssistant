@@ -24,7 +24,7 @@ interface Props {
   requireLock?: boolean
   takenMartialArts: number[]
   readOnly?: boolean
-  onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void
+  onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void | Promise<void>
   onClose: () => void
   onLeave?: (lockTimestamp?: number) => void
   onCancelMember?: () => void
@@ -40,9 +40,11 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const [error, setError] = useState('')
   const [maSearch, setMaSearch] = useState('')
   const [showMaDropdown, setShowMaDropdown] = useState(false)
+  const [saving, setSaving] = useState(false)
   const lockTimestampRef = useRef(0)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const gearScoreRef = useRef<HTMLInputElement>(null)
+  const mountedRef = useRef(false)
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
   const shouldLock = requireLock && !readOnly
@@ -58,6 +60,13 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
 
   const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
   const isDPS = selectedMa?.role === 'DPS'
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // Lock management
   useEffect(() => {
@@ -100,6 +109,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       }
       setLockTimestamp(0)
       setError('')
+      setSaving(false)
     }
   }, [open, teamId, slotIndex, lockQq, qq, shouldLock])
 
@@ -114,6 +124,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (saving) return
     const textMartialArt = sanitizeIntegerInput(martialArt, 3)
     const textGearScore = sanitizeIntegerInput(gearScore, TEXT_INPUT_LIMITS.gearScore)
     const fallbackCharacterId = normalizeTextInput(nickname, { maxLength: TEXT_INPUT_LIMITS.characterId })
@@ -157,7 +168,14 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
         return
       }
     }
-    onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockTimestamp)
+    setSaving(true)
+    try {
+      await onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockTimestamp)
+    } finally {
+      if (mountedRef.current) {
+        setSaving(false)
+      }
+    }
   }
 
   // Filter martial arts by search
@@ -381,14 +399,16 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
           </div>
           {showActions && (
             <div className="flex gap-2 pt-1">
-              <Button type="submit" className="flex-1" disabled={shouldLock && lockTimestamp <= 0}>{existing ? '保存修改' : '确认报名'}</Button>
+              <Button type="submit" className="flex-1" disabled={saving || (shouldLock && lockTimestamp <= 0)}>
+                {saving ? '保存中' : existing ? '保存修改' : shouldLock && lockTimestamp <= 0 ? '锁定中' : '确认报名'}
+              </Button>
               {onLeave && (
-                <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => onLeave(lockTimestamp)}>
+                <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" disabled={saving} onClick={() => onLeave(lockTimestamp)}>
                   退出报名
                 </Button>
               )}
               {onCancelMember && (
-                <Button type="button" variant="destructive" className="flex-1" onClick={onCancelMember}>
+                <Button type="button" variant="destructive" className="flex-1" disabled={saving} onClick={onCancelMember}>
                   取消该成员
                 </Button>
               )}

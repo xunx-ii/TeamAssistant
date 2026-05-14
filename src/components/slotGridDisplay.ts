@@ -1,5 +1,5 @@
 import { getMartialArtLabel, martialArts } from '../data/martialArts'
-import type { Slot, TeamConfig } from '../types'
+import type { Slot, TeamConfig, UserProfiles } from '../types'
 
 export interface OccupiedSlotDisplay {
   isMine: boolean
@@ -18,6 +18,27 @@ export function shouldShowAvailableMarker(slot: Pick<Slot, 'status'>, isLocked: 
 
 export function canInteractWithSlotLock(isAdmin: boolean, currentQQ: string, lockedBy?: string): boolean {
   return isAdmin || !lockedBy || lockedBy === currentQQ
+}
+
+export function getUserDisplayName(qq: string | undefined, userProfiles: UserProfiles): string {
+  if (!qq) return ''
+  const nickname = userProfiles[qq]?.nickname?.trim()
+  return nickname || qq
+}
+
+export function getSlotLockOwnerLabel(lockedBy: string | undefined, userProfiles: UserProfiles): string {
+  const name = getUserDisplayName(lockedBy, userProfiles)
+  return name ? `${name} 编辑中` : '编辑中'
+}
+
+export function isAssignedReservationSlot(slot: Slot): boolean {
+  if (slot.status !== 'occupied' || !slot.member) return false
+  return !slot.member.characterId.trim() && !slot.member.gearScore.trim()
+}
+
+export function getAssignedReservationLabel(slot: Slot, userProfiles: UserProfiles): string | null {
+  if (!isAssignedReservationSlot(slot)) return null
+  return `位置预留给了${getUserDisplayName(slot.member?.qq, userProfiles)}`
 }
 
 export function getAvailableSlotLabel(isLocked: boolean): string {

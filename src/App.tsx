@@ -787,6 +787,7 @@ function App() {
                 slots={activeTeam.slots}
                 config={activeTeam.config}
                 currentQQ={qq}
+                userProfiles={userProfiles}
                 isAdmin={isAdmin}
                 locks={locks.filter(l => l.teamId === activeTeam.id)}
                 teamLocked={teamLocks.some(t => t.teamId === activeTeam.id)}
@@ -825,7 +826,7 @@ function App() {
         isAdminEditing={false}
         isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
         takenMartialArts={getTakenMartialArts()}
-        onConfirm={(data, lockTimestamp) => { void handleSignupConfirm(data, lockTimestamp) }}
+        onConfirm={handleSignupConfirm}
         onClose={() => setSignupSlot(null)}
       />
 
@@ -850,7 +851,7 @@ function App() {
             isAdminEditing={isAdminEdit}
             readOnly={isViewOnly}
             takenMartialArts={getTakenMartialArts(editSlot)}
-            onConfirm={(data, lockTimestamp) => { void handleSignupConfirm(data, lockTimestamp) }}
+            onConfirm={handleSignupConfirm}
             onClose={() => setEditSlot(null)}
             onLeave={!isAdminEdit ? (lockTimestamp) => { void handleLeave(editSlot, lockTimestamp) } : undefined}
             onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlot); setEditSlot(null) } : undefined}

@@ -1,14 +1,16 @@
 import { useMemo, useCallback, memo, type ReactNode } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
-import type { Slot, TeamConfig } from '../types'
+import type { Slot, TeamConfig, UserProfiles } from '../types'
 import type { SlotLock } from '../api'
 import { PixelStar } from './PixelRabbit'
 import {
   canInteractWithSlotLock,
+  getAssignedReservationLabel,
   getAvailableSlotLabel,
   getFixedSlotLabel,
   getOccupiedSlotDisplay,
   getReservedSlotLabel,
+  getSlotLockOwnerLabel,
   shouldShowAvailableMarker,
 } from './slotGridDisplay'
 
@@ -16,6 +18,7 @@ interface Props {
   slots: Slot[]
   config: TeamConfig
   currentQQ: string
+  userProfiles: UserProfiles
   isAdmin: boolean
   locks: SlotLock[]
   teamLocked: boolean
@@ -55,7 +58,7 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   return counts
 }
 
-export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole, onView }: Props) {
+export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userProfiles, isAdmin, locks, teamLocked, onSignup, onEdit, onSetRole, onView }: Props) {
   const counts = getRoleCounts(slots, config.reservedSlots)
 
   const lockMap = useMemo(() => {
@@ -182,6 +185,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
             const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300' :
                               ma?.role === '治疗' ? 'text-pink-600 bg-pink-100 border-pink-300' :
                               'text-blue-600 bg-blue-100 border-blue-300'
+            const assignedReservationLabel = getAssignedReservationLabel(slot, userProfiles)
             content = (
               <>
                 <span className="absolute top-1 left-1 z-[1] text-[10px] text-muted-foreground font-mono sm:left-2">#{slot.index + 1}</span>
@@ -200,17 +204,25 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
                       {ma ? getMartialArtLabel(ma) : '心法占位'}
                     </span>
                   </span>
-                  <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
-                    <span className="sm:hidden">{ma?.role === 'DPS' ? m.gearScore : `${m.gearScore}层`}</span>
-                    <span className="hidden sm:inline sm:truncate">{ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}</span>
-                  </div>
-                  <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
-                    <span className="sm:hidden">{m.characterId}</span>
-                    <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>
-                  </div>
-                  <div className={`w-full text-[9px] leading-3 text-muted-foreground italic sm:text-[10px] sm:leading-4 ${m.note ? '' : 'opacity-0'}`}>
-                    {m.note || '备注占位'}
-                  </div>
+                  {assignedReservationLabel ? (
+                    <div className="mt-1 w-full px-1 text-[10px] font-medium leading-4 text-purple-600 sm:text-[11px]">
+                      <span className="block whitespace-normal break-words">{assignedReservationLabel}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
+                        <span className="sm:hidden">{ma?.role === 'DPS' ? m.gearScore : `${m.gearScore}层`}</span>
+                        <span className="hidden sm:inline sm:truncate">{ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}</span>
+                      </div>
+                      <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
+                        <span className="sm:hidden">{m.characterId}</span>
+                        <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>
+                      </div>
+                      <div className={`w-full text-[9px] leading-3 text-muted-foreground italic sm:text-[10px] sm:leading-4 ${m.note ? '' : 'opacity-0'}`}>
+                        {m.note || '备注占位'}
+                      </div>
+                    </>
+                  )}
                 </div>
               </>
             )
@@ -238,7 +250,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, isAdm
               {content}
               {isSlotLocked && (
                 <div className="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-orange-600 text-white py-0.5 font-medium z-10">
-                  {lockMap.get(slot.index)} 编辑中
+                  {getSlotLockOwnerLabel(lockMap.get(slot.index), userProfiles)}
                 </div>
               )}
             </div>

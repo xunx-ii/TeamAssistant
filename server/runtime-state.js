@@ -143,6 +143,18 @@ function removeLocksForTeamFromState(lockState, { teamId }) {
   return { changed, lockState: nextLockState }
 }
 
+function releaseMutationSlotLockFromState(lockState, { teamId, slotIndex, qq }) {
+  const key = slotLockKey(teamId, slotIndex)
+  const existing = lockState.slotLocks.get(key)
+  if (!existing || existing.qq !== qq) {
+    return { changed: false, lockState }
+  }
+
+  const nextLockState = cloneLockState(lockState)
+  nextLockState.slotLocks.delete(key)
+  return { changed: true, lockState: nextLockState }
+}
+
 export function createRuntimeState({
   store,
   normalizeSubsidyPresets,
@@ -479,6 +491,14 @@ export function createRuntimeState({
               })
             : removeTeamLockFromState(currentLocks, { teamId: mutation.teamId })
         ))
+      }
+
+      if (mutation.type === 'signupSlot' || mutation.type === 'leaveSlot' || mutation.type === 'cancelSlot') {
+        lockUpdates.push(currentLocks => releaseMutationSlotLockFromState(currentLocks, {
+          teamId: mutation.teamId,
+          slotIndex: mutation.slotIndex,
+          qq: actorQq,
+        }))
       }
 
       if (mutation.type === 'archiveTeam') {

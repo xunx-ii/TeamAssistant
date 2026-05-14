@@ -259,6 +259,66 @@ test('runtime lock changes use in-memory state and incremental versions', async 
   assert.equal(calls.writeLocks, 1)
 })
 
+test('runtime releases slot lock after successful member mutation', async () => {
+  const { store } = createStore()
+  const runtime = createRuntime(store)
+  await runtime.init()
+
+  const lock = runtime.acquireLock({ teamId: 'team-1', slotIndex: 0, qq: '10001' })
+  assert.equal(lock.ok, true)
+
+  const before = runtime.getVersion()
+  await runtime.mutate({
+    type: 'signupSlot',
+    teamId: 'team-1',
+    slotIndex: 0,
+    actorQq: '10001',
+    lockTimestamp: lock.timestamp,
+    expectedMemberQq: null,
+    member: {
+      qq: '10001',
+      martialArtIndex: '0',
+      gearScore: '1200',
+      characterId: '报名测试',
+      note: '',
+    },
+  })
+
+  assert.equal(runtime.getPublicLocks().slots.length, 0)
+  const changes = runtime.getChanges(before)
+  assert.equal(changes.dataChanged, true)
+  assert.equal(changes.lockChanged, true)
+  assert.equal(changes.locks.slots.length, 0)
+})
+
+test('runtime keeps slot lock when member mutation is rejected', async () => {
+  const { store } = createStore()
+  const runtime = createRuntime(store)
+  await runtime.init()
+
+  const lock = runtime.acquireLock({ teamId: 'team-1', slotIndex: 0, qq: '10001' })
+  assert.equal(lock.ok, true)
+
+  await assert.rejects(() => runtime.mutate({
+    type: 'signupSlot',
+    teamId: 'team-1',
+    slotIndex: 0,
+    actorQq: '10001',
+    lockTimestamp: lock.timestamp,
+    expectedMemberQq: 'other',
+    member: {
+      qq: '10001',
+      martialArtIndex: '0',
+      gearScore: '1200',
+      characterId: '报名测试',
+      note: '',
+    },
+  }))
+
+  assert.equal(runtime.getPublicLocks().slots.length, 1)
+  assert.equal(runtime.getPublicLocks().slots[0].qq, '10001')
+})
+
 test('runtime subscriptions receive version changes', async () => {
   const { store } = createStore()
   const runtime = createRuntime(store)

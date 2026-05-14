@@ -247,6 +247,7 @@ try {
     createdAt: new Date().toISOString(),
     data: createServerData(createEmptyTeam('导入备份团', `team-import-${runId}`), {
       89906502: { nickname: '兔扇GM' },
+      10001: { nickname: '兔扇测试' },
     }),
     locks: { slots: [], teams: [] },
   }))))
@@ -315,7 +316,7 @@ try {
   await reservedDialog.waitFor({ state: 'detached' })
 
   const signupCell = page.locator('[data-slot-index="3"]')
-  await waitForText(signupCell, /10001 编辑中/, page)
+  await waitForText(signupCell, /兔扇测试 编辑中/, page)
   await signupCell.click()
   const signupDialog = page.locator('[role="dialog"]')
   await signupDialog.waitFor()
@@ -597,6 +598,16 @@ try {
   await adminPage.getByRole('button', { name: 'Close' }).click()
   await importDialog.waitFor({ state: 'detached' })
   await waitForText(adminPage.locator('h2'), /导入备份团/, adminPage)
+
+  const assignedReserveCell = adminPage.locator('[data-slot-index="4"]')
+  await assignedReserveCell.click()
+  const assignDialog = adminPage.getByRole('dialog').filter({ hasText: '位置 #5' })
+  await assignDialog.waitFor()
+  await assignDialog.getByRole('button', { name: '指定心法...' }).click()
+  await assignDialog.getByPlaceholder('输入QQ号直接占位').fill('10001')
+  await assignDialog.getByRole('button', { name: /云裳心经/ }).click()
+  await assignDialog.waitFor({ state: 'detached' })
+  await waitForText(assignedReserveCell, /位置预留给了兔扇测试/, adminPage)
 
   const reserveInputs = adminPage.locator('input[type="number"]')
   const reserveButtons = adminPage.getByRole('button', { name: '预留' })

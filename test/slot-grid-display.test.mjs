@@ -3,10 +3,14 @@ import assert from 'node:assert/strict'
 
 import {
   canInteractWithSlotLock,
+  getAssignedReservationLabel,
   getAvailableSlotLabel,
   getFixedSlotLabel,
   getOccupiedSlotDisplay,
   getReservedSlotLabel,
+  getSlotLockOwnerLabel,
+  getUserDisplayName,
+  isAssignedReservationSlot,
   shouldShowAvailableMarker,
   slotAcceptsSignup,
 } from '../src/components/slotGridDisplay.ts'
@@ -49,6 +53,51 @@ test('users can reopen a slot that is locked by their own QQ', () => {
   assert.equal(canInteractWithSlotLock(false, '10001', '20002'), false)
   assert.equal(canInteractWithSlotLock(true, '10001', '20002'), true)
   assert.equal(canInteractWithSlotLock(false, '10001', undefined), true)
+})
+
+test('slot lock labels prefer nickname and fall back to QQ', () => {
+  const userProfiles = { 10001: { nickname: '兔扇' } }
+
+  assert.equal(getUserDisplayName('10001', userProfiles), '兔扇')
+  assert.equal(getUserDisplayName('20002', userProfiles), '20002')
+  assert.equal(getSlotLockOwnerLabel('10001', userProfiles), '兔扇 编辑中')
+  assert.equal(getSlotLockOwnerLabel(undefined, userProfiles), '编辑中')
+})
+
+test('assigned reservation slots show the reserved QQ nickname', () => {
+  const slot = {
+    index: 4,
+    status: 'occupied',
+    member: {
+      qq: '20002',
+      martialArtIndex: '4',
+      gearScore: '',
+      characterId: '',
+      note: '',
+    },
+    fixedRole: null,
+    fixedMartialArtIndex: null,
+  }
+
+  assert.equal(isAssignedReservationSlot(slot), true)
+  assert.equal(getAssignedReservationLabel(slot, { 20002: { nickname: '小明' } }), '位置预留给了小明')
+  assert.equal(getAssignedReservationLabel(slot, {}), '位置预留给了20002')
+})
+
+test('filled occupied slots are not treated as assigned reservations', () => {
+  assert.equal(isAssignedReservationSlot({
+    index: 5,
+    status: 'occupied',
+    member: {
+      qq: '20002',
+      martialArtIndex: '4',
+      gearScore: '8',
+      characterId: '小明角色',
+      note: '',
+    },
+    fixedRole: null,
+    fixedMartialArtIndex: null,
+  }), false)
 })
 
 test('occupied own slots receive the theme border class', () => {
