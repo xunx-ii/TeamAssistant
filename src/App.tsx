@@ -7,9 +7,10 @@ import {
   loadCancellations, setCancellationsLocal,
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
+  loadUserProfiles, setUserProfilesLocal,
   initServerMode, loadFromServer, normalizeServerData,
 } from './storage'
-import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget } from './types'
+import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchData, fetchLockState, mutateData, type MutationResult, type ServerData, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, type Mutation, type Snapshot } from './dataStore'
@@ -34,6 +35,7 @@ import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { ArchiveDialog } from './components/ArchiveDialog'
 import { OperationLogDialog } from './components/OperationLogDialog'
+import { NicknameDialog } from './components/NicknameDialog'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { useImeSafeInputHandlers } from './components/ui/imeInput'
@@ -52,6 +54,18 @@ interface AppConfirmOptions {
   destructive?: boolean
 }
 
+const LOADING_MESSAGES = [
+  '正在猛猛敲门...',
+  '别急，团长还在找钥匙开门...',
+  '门好像卡住了，正在用力推...',
+  '门坏了！正在砸门...',
+  '快开门！你们在里面干嘛！！！',
+]
+
+function pickLoadingMessage() {
+  return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)] ?? LOADING_MESSAGES[0]
+}
+
 function App() {
   const [qq, setQq] = useState<string | null>(getStoredQQ)
   const [teams, setTeams] = useState<Team[]>(() => {
@@ -65,6 +79,7 @@ function App() {
   const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
   const [archivedTeams, setArchivedTeams] = useState<ArchivedTeam[]>(loadArchivedTeams)
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>(loadOperationLogs)
+  const [userProfiles, setUserProfiles] = useState<UserProfiles>(loadUserProfiles)
   const [adminQQs, setAdminQQs] = useState<string[]>([])
   const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
 
@@ -80,7 +95,12 @@ function App() {
   const [showSubsidyStats, setShowSubsidyStats] = useState(false)
   const [showSubsidyPreset, setShowSubsidyPreset] = useState(false)
   const [showBackupSettings, setShowBackupSettings] = useState(false)
+  const [showNicknameDialog, setShowNicknameDialog] = useState(false)
+  const [nicknameError, setNicknameError] = useState('')
   const [serverMode, setServerMode] = useState(false)
+  const [initializing, setInitializing] = useState(true)
+  const [showLoadingTransition, setShowLoadingTransition] = useState(true)
+  const [loadingMessage] = useState(pickLoadingMessage)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
   const [mutationError, setMutationError] = useState('')
@@ -93,6 +113,8 @@ function App() {
   const activeTeam = teams.find(t => t.id === resolvedActiveTeamId) ?? teams[0]
   const notice = findPendingNotice(qq, cancellations)
   const currentWeekStart = getCurrentWeekStartKey()
+  const currentNickname = qq ? (userProfiles[qq]?.nickname ?? '') : ''
+  const requiresNickname = Boolean(qq) && !currentNickname
   const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
   const subsidyRegistrationTargets = useMemo(
     () => getSubsidyRegistrationTargets(subsidyTargets, currentWeekStart),
@@ -104,14 +126,17 @@ function App() {
     const nextCancellations = snapshot.cancellations ?? []
     const nextArchivedTeams = snapshot.archivedTeams ?? []
     const nextLogs = snapshot.logs ?? []
+    const nextUserProfiles = snapshot.userProfiles ?? {}
     setTeams(nextTeams)
     setCancellations(nextCancellations)
     setArchivedTeams(nextArchivedTeams)
     setOperationLogs(nextLogs)
+    setUserProfiles(nextUserProfiles)
     setTeamsLocal(nextTeams)
     setCancellationsLocal(nextCancellations)
     setArchivedTeamsLocal(nextArchivedTeams)
     setOperationLogsLocal(nextLogs)
+    setUserProfilesLocal(nextUserProfiles)
   }, [])
 
   const syncSubsidyPresets = useCallback((presets: SubsidyType[]) => {
@@ -120,10 +145,19 @@ function App() {
   }, [])
 
   useEffect(() => {
-    initServerMode().then(async (sm) => {
+    let active = true
+    const initialize = async () => {
+      const [sm, admins] = await Promise.all([
+        initServerMode(),
+        loadAdminQQs(),
+      ])
+      if (!active) return
+      setAdminQQs(admins)
       if (sm) {
         const loadResult = await loadFromServer()
+        if (!active) return
         const loadedData = await fetchData()
+        if (!active) return
         if (Array.isArray(loadedData?.subsidyPresets)) {
           syncSubsidyPresets(loadedData.subsidyPresets)
         }
@@ -137,6 +171,7 @@ function App() {
             cancellations: loadedCancellations,
             archivedTeams: loadedArchivedTeams,
             logs: loadedLogs,
+            userProfiles: loadUserProfiles(),
           })
           if (loadedTeams.length > 0) {
             setActiveTeamId(loadedTeams[0].id)
@@ -145,11 +180,20 @@ function App() {
           await saveTeams(loadTeams())
         }
       }
+      if (!active) return
       setServerMode(sm)
+      setInitializing(false)
+    }
+    initialize().catch(() => {
+      if (!active) return
+      setServerMode(false)
+      setInitializing(false)
     })
+    return () => {
+      active = false
+    }
   }, [syncSnapshot, syncSubsidyPresets])
 
-  useEffect(() => { loadAdminQQs().then(setAdminQQs) }, [])
   useEffect(() => { initTheme() }, [])
 
   useEffect(() => {
@@ -192,10 +236,10 @@ function App() {
   }
 
   const applyLocalMutation = useCallback((mutation: Mutation) => {
-    const next = applyMutation({ teams, cancellations, archivedTeams, logs: operationLogs }, mutation)
+    const next = applyMutation({ teams, cancellations, archivedTeams, logs: operationLogs, userProfiles }, mutation)
     syncSnapshot(next)
     return next
-  }, [teams, cancellations, archivedTeams, operationLogs, syncSnapshot])
+  }, [teams, cancellations, archivedTeams, operationLogs, userProfiles, syncSnapshot])
 
   const runMutation = useCallback(async (mutation: Mutation): Promise<MutationResult> => {
     setMutationError('')
@@ -211,6 +255,7 @@ function App() {
         cancellations: result.data.cancellations,
         archivedTeams: result.data.archivedTeams ?? [],
         logs: result.data.logs ?? [],
+        userProfiles: result.data.userProfiles ?? {},
       })
       return result
     }
@@ -258,7 +303,22 @@ function App() {
   }, [])
 
   const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
-  const handleLogout = () => { removeStoredQQ(); setQq(null); setMutationError(''); clearModals() }
+  const handleLogout = () => { removeStoredQQ(); setQq(null); setShowNicknameDialog(false); setNicknameError(''); setMutationError(''); clearModals() }
+
+  const handleSaveNickname = async (nickname: string) => {
+    if (!qq) return
+    setNicknameError('')
+    if (currentNickname === nickname) {
+      setShowNicknameDialog(false)
+      return
+    }
+    const result = await runMutation({ type: 'updateNickname', qq, nickname })
+    if (result.ok) {
+      setShowNicknameDialog(false)
+      return
+    }
+    setNicknameError(result.error || '昵称保存失败，请稍后再试')
+  }
 
   const dismissNotice = async () => {
     if (notice) {
@@ -423,15 +483,17 @@ function App() {
     if (slotIndex === null || !qq || !activeTeam) return
     const originalQq = editSlot !== null ? activeTeam.slots[editSlot]?.member?.qq : null
     if (originalQq && originalQq !== qq && !isAdmin) return
+    const memberQq = originalQq || qq
+    const fallbackNickname = normalizeTextInput(userProfiles[memberQq]?.nickname ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId })
     const memberData: Omit<Member, 'qq'> = {
       martialArtIndex: sanitizeIntegerInput(data.martialArtIndex, 3),
       gearScore: sanitizeIntegerInput(data.gearScore, TEXT_INPUT_LIMITS.gearScore),
-      characterId: normalizeTextInput(data.characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }),
+      characterId: normalizeTextInput(data.characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }) || fallbackNickname,
       note: normalizeTextInput(data.note, { maxLength: TEXT_INPUT_LIMITS.note }),
       hasOrangeWeapon: data.hasOrangeWeapon,
     }
-    if (!memberData.martialArtIndex || !memberData.characterId) return
-    const member: Member = { qq: originalQq || qq, ...memberData }
+    if (!memberData.martialArtIndex || !memberData.gearScore || !memberData.characterId) return
+    const member: Member = { qq: memberQq, ...memberData }
     const result = await runMutation({
       type: 'signupSlot',
       teamId: activeTeam.id,
@@ -501,8 +563,48 @@ function App() {
     return indices
   }
 
+  const loadingOverlay = showLoadingTransition ? (
+    <div
+      className={`loading-transition ${initializing ? '' : 'loading-transition-exit'}`}
+      onAnimationEnd={(event) => {
+        if (!initializing && event.currentTarget === event.target) {
+          setShowLoadingTransition(false)
+        }
+      }}
+    >
+      <div className="loading-backdrop" />
+      <div className="loading-pixel-gate loading-pixel-gate-left" />
+      <div className="loading-pixel-gate loading-pixel-gate-right" />
+      <div className="loading-scanline" />
+      <div className="loading-core">
+        <div className="loading-stars" aria-hidden="true">
+          <PixelStar size={14} />
+          <PixelHeart size={16} />
+          <PixelStar size={14} />
+        </div>
+        <div className="loading-rabbit" aria-hidden="true">
+          <PixelCarrot size={34} />
+        </div>
+        <div className="pixel-card loading-card">
+          {loadingMessage}
+        </div>
+      </div>
+    </div>
+  ) : null
+
+  if (initializing) {
+    return <>{loadingOverlay}</>
+  }
+
   if (!qq) {
-    return <LoginPage onLogin={handleLogin} />
+    return (
+      <>
+        <div className="app-enter">
+          <LoginPage onLogin={handleLogin} />
+        </div>
+        {loadingOverlay}
+      </>
+    )
   }
 
   return (
@@ -510,7 +612,7 @@ function App() {
       {notice && (
         <CancellationNotice open={!!notice} notice={notice} onDismiss={() => { void dismissNotice() }} />
       )}
-      <div className="min-h-screen bg-background pixel-bg-pattern">
+      <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
         {/* Decorative floating elements */}
         <div className="fixed top-20 left-4 opacity-20 pointer-events-none pixel-carrot-float hidden lg:block">
           <PixelCarrot size={32} />
@@ -562,7 +664,17 @@ function App() {
                     SYNC
                   </span>
                 )}
-                <span className="text-sm text-muted-foreground font-mono">{qq}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="pixel-btn max-w-[160px] truncate text-xs"
+                  onClick={() => {
+                    setNicknameError('')
+                    setShowNicknameDialog(true)
+                  }}
+                >
+                  {currentNickname || '设置昵称'}
+                </Button>
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
               </div>
             </div>
@@ -648,6 +760,7 @@ function App() {
         key={`signup-${activeTeam?.id ?? 'none'}-${signupSlot ?? 'none'}`}
         open={signupSlot !== null}
         qq={qq}
+        nickname={currentNickname}
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
         teamId={activeTeam?.id}
         requireLock={serverMode}
@@ -663,11 +776,13 @@ function App() {
         const isOwnSlot = existingMember?.qq === qq
         const isAdminEdit = isAdmin && !isOwnSlot
         const isViewOnly = !!existingMember && !isOwnSlot && !isAdmin
+        const modalQq = isViewOnly ? (existingMember?.qq ?? qq) : (isAdminEdit ? (existingMember?.qq ?? qq) : qq)
         return (
           <SignupModal
             key={`edit-${activeTeam.id}-${editSlot}-${existingMember?.qq ?? 'empty'}-${existingMember?.martialArtIndex ?? 'none'}`}
             open={true}
-            qq={isViewOnly ? (existingMember?.qq ?? qq) : (isAdminEdit ? (existingMember?.qq ?? qq) : qq)}
+            qq={modalQq}
+            nickname={userProfiles[modalQq]?.nickname}
             lockOwnerQq={isAdminEdit ? qq : undefined}
             existing={existingMember}
             slotInfo={activeTeam.slots[editSlot]}
@@ -720,7 +835,7 @@ function App() {
       <OperationLogDialog
         open={showLogs}
         teamName={activeTeam?.name ?? ''}
-        logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id) : []}
+        logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
         onClose={() => setShowLogs(false)}
       />
       <ArchiveDialog
@@ -752,7 +867,21 @@ function App() {
         key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
         open={showSubsidyStats}
         targets={subsidyTargets}
+        userProfiles={userProfiles}
         onClose={() => setShowSubsidyStats(false)}
+      />
+      <NicknameDialog
+        open={showNicknameDialog || requiresNickname}
+        qq={qq}
+        nickname={currentNickname}
+        required={requiresNickname}
+        errorMessage={nicknameError}
+        onConfirm={(nickname) => { void handleSaveNickname(nickname) }}
+        onClose={() => {
+          setNicknameError('')
+          setShowNicknameDialog(false)
+        }}
+        onLogout={handleLogout}
       />
       <PresetSubsidyDialog
         open={showSubsidyPreset}
@@ -794,6 +923,7 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {loadingOverlay}
     </>
   )
 }

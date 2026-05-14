@@ -64,6 +64,7 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
     cancellations: [],
     archivedTeams: [],
     logs: [],
+    userProfiles: {},
   }
   const reserveMutations = [
     { reserveType: 'T' as const, count: normalizeCreateTeamReserveCount(values.reserveT) },

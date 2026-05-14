@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { SubsidyTarget } from '../types'
+import type { SubsidyTarget, UserProfiles } from '../types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Button } from './ui/button'
@@ -11,16 +11,48 @@ const PAGE_SIZE = 8
 interface Props {
   open: boolean
   targets: SubsidyTarget[]
+  userProfiles: UserProfiles
   onClose: () => void
 }
 
-interface StatRow {
+export interface StatRow {
   qq: string
   details: string[]
   gold: number
 }
 
-export function SubsidyStats({ open, targets, onClose }: Props) {
+export function createSubsidyStatRows(targets: SubsidyTarget[], resolvedWeekStart: string): StatRow[] {
+  if (!resolvedWeekStart) return []
+  const result = new Map<string, StatRow>()
+  for (const target of targets) {
+    const typeMap = new Map(target.subsidyTypes.map(t => [t.id, t]))
+    for (const [qq, selections] of Object.entries(target.memberSubsidies)) {
+      for (const selection of selections) {
+        const selectionWeekStart = resolveSubsidySelectionWeekStart(selection, target.weekStart)
+        if (selectionWeekStart !== resolvedWeekStart) continue
+        const subsidyType = typeMap.get(selection.typeId)
+        if (!subsidyType) continue
+        const level = subsidyType.levels.find(item => item.name === selection.levelName)
+        if (!level) continue
+        const gold = Number(level.gold) || 0
+        const current = result.get(qq) ?? { qq, details: [], gold: 0 }
+        current.gold += gold
+        const detail = `${target.name}：${subsidyType.name}${selection.levelName}(${gold}金)`
+        current.details.push(detail)
+        result.set(qq, current)
+      }
+    }
+  }
+  return [...result.values()]
+    .filter(row => row.gold > 0)
+    .sort((a, b) => b.gold - a.gold || a.qq.localeCompare(b.qq))
+}
+
+export function getSubsidyStatUserLines(row: Pick<StatRow, 'qq'>, userProfiles: UserProfiles): [string, string] {
+  return [row.qq, userProfiles[row.qq]?.nickname || '未设置']
+}
+
+export function SubsidyStats({ open, targets, userProfiles, onClose }: Props) {
   const [selectedWeekStart, setSelectedWeekStart] = useState('')
   const [page, setPage] = useState(0)
   const availableWeeks = useMemo(() => getSubsidyWeekOptions(targets), [targets])
@@ -28,32 +60,7 @@ export function SubsidyStats({ open, targets, onClose }: Props) {
     ? selectedWeekStart
     : (availableWeeks[0] ?? '')
 
-  const rows = useMemo<StatRow[]>(() => {
-    if (!resolvedWeekStart) return []
-    const result = new Map<string, StatRow>()
-    for (const target of targets) {
-      const typeMap = new Map(target.subsidyTypes.map(t => [t.id, t]))
-      for (const [qq, selections] of Object.entries(target.memberSubsidies)) {
-        for (const selection of selections) {
-          const selectionWeekStart = resolveSubsidySelectionWeekStart(selection, target.weekStart)
-          if (selectionWeekStart !== resolvedWeekStart) continue
-          const subsidyType = typeMap.get(selection.typeId)
-          if (!subsidyType) continue
-          const level = subsidyType.levels.find(item => item.name === selection.levelName)
-          if (!level) continue
-          const gold = Number(level.gold) || 0
-          const current = result.get(qq) ?? { qq, details: [], gold: 0 }
-          current.gold += gold
-          const detail = `${target.name}：${subsidyType.name}${selection.levelName}(${gold}金)`
-          current.details.push(detail)
-          result.set(qq, current)
-        }
-      }
-    }
-    return [...result.values()]
-      .filter(row => row.gold > 0)
-      .sort((a, b) => b.gold - a.gold || a.qq.localeCompare(b.qq))
-  }, [resolvedWeekStart, targets])
+  const rows = useMemo<StatRow[]>(() => createSubsidyStatRows(targets, resolvedWeekStart), [resolvedWeekStart, targets])
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
   const resolvedPage = Math.min(page, pageCount - 1)
   const pagedRows = rows.slice(resolvedPage * PAGE_SIZE, (resolvedPage + 1) * PAGE_SIZE)
@@ -95,7 +102,17 @@ export function SubsidyStats({ open, targets, onClose }: Props) {
               <tbody>
                 {pagedRows.map(row => (
                   <tr key={row.qq} className="border-b border-border last:border-0">
-                    <td className="py-2 font-mono text-foreground">{row.qq}</td>
+                    <td className="py-2 text-foreground">
+                      {(() => {
+                        const [rowQq, rowNickname] = getSubsidyStatUserLines(row, userProfiles)
+                        return (
+                          <>
+                            <div className="font-mono">{rowQq}</div>
+                            <div className="mt-0.5 break-words text-muted-foreground">{rowNickname}</div>
+                          </>
+                        )
+                      })()}
+                    </td>
                     <td className="py-2 text-foreground">
                       <div className="space-y-1">
                         {row.details.map((detail, index) => (
