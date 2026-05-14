@@ -74,12 +74,13 @@ function createEmptyTeam(name = '管理测试团', id = `team-admin-${runId}`) {
   }
 }
 
-function createServerData(team) {
+function createServerData(team, userProfiles = {}) {
   return {
     teams: [team],
     cancellations: [],
     archivedTeams: [],
     logs: [],
+    userProfiles,
   }
 }
 
@@ -89,6 +90,7 @@ function toPersistentData(data) {
     cancellations: Array.isArray(data?.cancellations) ? data.cancellations : [],
     archivedTeams: Array.isArray(data?.archivedTeams) ? data.archivedTeams : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
+    userProfiles: data?.userProfiles && typeof data.userProfiles === 'object' ? data.userProfiles : {},
   }
 }
 
@@ -155,6 +157,14 @@ async function waitForText(locator, expected, page) {
 
 async function assertButtonEnabled(locator) {
   assert.equal(await locator.isEnabled(), true)
+}
+
+async function setRequiredNickname(page, nickname) {
+  const nicknameDialog = page.getByRole('dialog').filter({ hasText: '设置昵称' })
+  await nicknameDialog.waitFor()
+  await nicknameDialog.locator('input').nth(1).fill(nickname)
+  await nicknameDialog.getByRole('button', { name: '保存' }).click()
+  await nicknameDialog.waitFor({ state: 'detached' })
 }
 
 async function beginTextComposition(locator, value) {
@@ -235,7 +245,9 @@ try {
   await writeFile(importBackupPath, gzipSync(Buffer.from(JSON.stringify({
     version: 1,
     createdAt: new Date().toISOString(),
-    data: createServerData(createEmptyTeam('导入备份团', `team-import-${runId}`)),
+    data: createServerData(createEmptyTeam('导入备份团', `team-import-${runId}`), {
+      89906502: { nickname: '兔扇GM' },
+    }),
     locks: { slots: [], teams: [] },
   }))))
 
@@ -263,6 +275,7 @@ try {
   }, createTeam())
 
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+  await setRequiredNickname(page, '兔扇测试')
 
   const ownCell = page.locator('[data-slot-index="0"]')
   await ownCell.waitFor()
@@ -327,6 +340,9 @@ try {
     cancellations: [],
     archivedTeams: [],
     logs: [],
+    userProfiles: {
+      89906502: { nickname: '兔扇GM' },
+    },
   })
 
   const adminPage = await browser.newPage({ viewport: { width: 960, height: 900 } })

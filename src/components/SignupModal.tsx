@@ -29,8 +29,7 @@ interface Props {
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
-export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
