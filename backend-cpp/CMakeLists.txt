@@ -50,6 +50,10 @@ add_executable(teamassistant_backend
   src/main.cpp
 )
 
+add_executable(teamassistant_concurrency_bench
+  tests/concurrency_bench.cpp
+)
+
 if (SQLite3_INCLUDE_DIRS)
   target_include_directories(teamassistant_backend PRIVATE
     ${SQLite3_INCLUDE_DIRS}
@@ -62,6 +66,10 @@ target_link_libraries(teamassistant_backend PRIVATE
   ZLIB::ZLIB
 )
 
+target_link_libraries(teamassistant_concurrency_bench PRIVATE
+  Drogon::Drogon
+)
+
 if (MSVC)
   target_compile_options(teamassistant_backend PRIVATE /W4 /utf-8)
   target_compile_definitions(teamassistant_backend PRIVATE
@@ -69,6 +77,13 @@ if (MSVC)
     WIN32_LEAN_AND_MEAN
     _CRT_SECURE_NO_WARNINGS
   )
+  target_compile_options(teamassistant_concurrency_bench PRIVATE /W4 /utf-8)
+  target_compile_definitions(teamassistant_concurrency_bench PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
 else()
   target_compile_options(teamassistant_backend PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(teamassistant_concurrency_bench PRIVATE -Wall -Wextra -Wpedantic)
 endif()

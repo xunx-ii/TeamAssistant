@@ -57,6 +57,12 @@ struct BackupEntry {
     std::uintmax_t size = 0;
 };
 
+struct RuntimeLockState {
+    long long version = 1;
+    std::unordered_map<std::string, SlotLockRecord> slots;
+    std::unordered_map<std::string, long long> teams;
+};
+
 class VersionEventHub {
 public:
     int subscribe(drogon::ResponseStreamPtr stream, const Value &initialVersion) {
@@ -211,53 +217,53 @@ public:
         } else {
             json["dataVersion"] = 1;
         }
-        json["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
+        json["lockVersion"] = static_cast<Json::Int64>(runtimeLockVersion());
         sqlite3_finalize(stmt);
         return json;
     }
 
     Value replaceData(const Value &data) {
-        std::lock_guard lock(mutex_);
-        ensureSchema();
-        exec("BEGIN IMMEDIATE;");
-        try {
-            replaceDataUnlocked(data);
-            slotLocks_.clear();
-            teamLocks_.clear();
-            bumpDataVersionUnlocked();
-            bumpLockVersionUnlocked();
-            exec("COMMIT;");
-        } catch (...) {
-            exec("ROLLBACK;");
-            throw;
+        Value snapshot;
+        {
+            std::lock_guard lock(mutex_);
+            ensureSchema();
+            exec("BEGIN IMMEDIATE;");
+            try {
+                replaceDataUnlocked(data);
+                bumpDataVersionUnlocked();
+                exec("COMMIT;");
+            } catch (...) {
+                exec("ROLLBACK;");
+                throw;
+            }
         }
-        Value snapshot = bootstrapUnlocked();
+        clearRuntimeLocks();
+        {
+            std::lock_guard lock(mutex_);
+            snapshot = bootstrapUnlocked();
+        }
         snapshot["ok"] = true;
         return snapshot;
     }
 
     Value publicLocks() {
-        std::lock_guard lock(mutex_);
-        cleanExpiredLocksUnlocked();
-        return publicLocksUnlocked();
+        cleanExpiredLocks();
+        return publicLocksSnapshot();
     }
 
     bool expireRuntimeLocks() {
-        std::lock_guard lock(mutex_);
-        return cleanExpiredLocksUnlocked();
+        return cleanExpiredLocks();
     }
 
     Value bootstrap() {
         std::lock_guard lock(mutex_);
         ensureSchema();
-        cleanExpiredLocksUnlocked();
         return bootstrapUnlocked();
     }
 
     Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion) {
         std::lock_guard lock(mutex_);
         ensureSchema();
-        cleanExpiredLocksUnlocked();
         Value current = versionsUnlocked();
         const auto currentData = current["dataVersion"].asInt64();
         const auto currentLocks = current["lockVersion"].asInt64();
@@ -271,26 +277,26 @@ public:
             json["data"] = data;
         }
         if (lockChanged) {
-            json["locks"] = publicLocksUnlocked();
+            json["locks"] = publicLocksSnapshot();
         }
         return json;
     }
 
     Value acquireSlotLock(const std::string &teamId, int slotIndex, const std::string &qq) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(runtimeMutex_);
         const auto now = nowMs();
-        cleanExpiredLocksUnlocked(now);
+        cleanExpiredLocksLocked(now);
 
-        const auto teamLock = teamLocks_.find(teamId);
-        if (teamLock != teamLocks_.end()) {
+        const auto teamLock = runtimeLocks_.teams.find(teamId);
+        if (teamLock != runtimeLocks_.teams.end()) {
             Value conflict = conflictJson("teamLocked");
             conflict["lockedAt"] = static_cast<Json::Int64>(teamLock->second);
             return conflict;
         }
 
         const std::string key = slotLockKey(teamId, slotIndex);
-        const auto existing = slotLocks_.find(key);
-        if (existing != slotLocks_.end() && existing->second.qq != qq && now - existing->second.timestamp < lockTimeoutMs_) {
+        const auto existing = runtimeLocks_.slots.find(key);
+        if (existing != runtimeLocks_.slots.end() && existing->second.qq != qq && now - existing->second.timestamp < lockTimeoutMs_) {
             Value conflict;
             conflict["ok"] = false;
             conflict["lockedBy"] = existing->second.qq;
@@ -298,20 +304,20 @@ public:
             return conflict;
         }
 
-        slotLocks_[key] = SlotLockRecord{teamId, slotIndex, qq, now};
-        bumpLockVersionUnlocked();
+        runtimeLocks_.slots[key] = SlotLockRecord{teamId, slotIndex, qq, now};
+        bumpLockVersionLocked();
 
         Value ok;
         ok["ok"] = true;
         ok["timestamp"] = static_cast<Json::Int64>(now);
         ok["lockToken"] = static_cast<Json::Int64>(now);
-        ok["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
+        ok["lockVersion"] = static_cast<Json::Int64>(runtimeLocks_.version);
         return ok;
     }
 
     Value validateSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, long long lockToken) {
-        std::lock_guard lock(mutex_);
-        return validateSlotMutationLockUnlocked(teamId, slotIndex, qq, lockToken);
+        std::lock_guard lock(runtimeMutex_);
+        return validateSlotMutationLockLocked(teamId, slotIndex, qq, lockToken);
     }
 
     Value saveSlotMember(
@@ -326,9 +332,10 @@ public:
         ensureSchema();
         const auto now = nowMs();
         Value result;
+        bool shouldReleaseLock = false;
         exec("BEGIN IMMEDIATE;");
         try {
-            Value lockCheck = validateSlotMutationLockUnlocked(teamId, slotIndex, actorQq, lockToken);
+            Value lockCheck = validateMutationSlotLock(teamId, slotIndex, actorQq, lockToken);
             if (!lockCheck["ok"].asBool()) {
                 exec("ROLLBACK;");
                 return lockCheck;
@@ -365,15 +372,17 @@ public:
             const std::string action = currentMemberQq.has_value()
                 ? "修改 #" + std::to_string(slotIndex + 1) + " 报名：" + normalizedMember["characterId"].asString()
                 : "报名 #" + std::to_string(slotIndex + 1) + "：" + normalizedMember["characterId"].asString();
-            insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
-            releaseMutationSlotLockUnlocked(teamId, slotIndex, actorQq);
             bumpDataVersionUnlocked();
-            bumpLockVersionUnlocked();
+            insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
             result = mutationOkUnlocked("signupSlot", teamId, slotIndex, normalizedMember);
             exec("COMMIT;");
+            shouldReleaseLock = true;
         } catch (...) {
             exec("ROLLBACK;");
             throw;
+        }
+        if (shouldReleaseLock) {
+            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq));
         }
         return result;
     }
@@ -389,9 +398,10 @@ public:
         ensureSchema();
         const auto now = nowMs();
         Value result;
+        bool shouldReleaseLock = false;
         exec("BEGIN IMMEDIATE;");
         try {
-            Value lockCheck = validateSlotMutationLockUnlocked(teamId, slotIndex, actorQq, lockToken);
+            Value lockCheck = validateMutationSlotLock(teamId, slotIndex, actorQq, lockToken);
             if (!lockCheck["ok"].asBool()) {
                 exec("ROLLBACK;");
                 return lockCheck;
@@ -420,14 +430,16 @@ public:
                 action += "：" + characterId;
             }
             insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
-            releaseMutationSlotLockUnlocked(teamId, slotIndex, actorQq);
             bumpDataVersionUnlocked();
-            bumpLockVersionUnlocked();
             result = mutationOkUnlocked("leaveSlot", teamId, slotIndex, resetStatus, Value(Json::nullValue));
             exec("COMMIT;");
+            shouldReleaseLock = true;
         } catch (...) {
             exec("ROLLBACK;");
             throw;
+        }
+        if (shouldReleaseLock) {
+            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq));
         }
         return result;
     }
@@ -445,9 +457,10 @@ public:
         ensureSchema();
         const auto now = nowMs();
         Value result;
+        bool shouldReleaseLock = false;
         exec("BEGIN IMMEDIATE;");
         try {
-            Value lockCheck = validateSlotMutationLockUnlocked(teamId, slotIndex, actorQq, lockToken);
+            Value lockCheck = validateMutationSlotLock(teamId, slotIndex, actorQq, lockToken);
             if (!lockCheck["ok"].asBool()) {
                 exec("ROLLBACK;");
                 return lockCheck;
@@ -489,52 +502,54 @@ public:
             const std::string reset = computeResetStatus(slot, slotIndex);
             updateSlotStatusUnlocked(teamId, slotIndex, reset);
             insertLogUnlocked(teamId, slot.teamName, now, cancelledBy, "取消 #" + std::to_string(slotIndex + 1) + " 报名：" + characterId);
-            releaseMutationSlotLockUnlocked(teamId, slotIndex, actorQq);
             bumpDataVersionUnlocked();
-            bumpLockVersionUnlocked();
             result = mutationOkUnlocked("cancelSlot", teamId, slotIndex, reset, Value(Json::nullValue));
             exec("COMMIT;");
+            shouldReleaseLock = true;
         } catch (...) {
             exec("ROLLBACK;");
             throw;
+        }
+        if (shouldReleaseLock) {
+            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq));
         }
         return result;
     }
 
     void releaseSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, std::optional<long long> lockToken) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(runtimeMutex_);
         const std::string key = slotLockKey(teamId, slotIndex);
-        const auto existing = slotLocks_.find(key);
+        const auto existing = runtimeLocks_.slots.find(key);
         if (
-            existing != slotLocks_.end() &&
+            existing != runtimeLocks_.slots.end() &&
             existing->second.qq == qq &&
             (!lockToken.has_value() || existing->second.timestamp == *lockToken)
         ) {
-            slotLocks_.erase(existing);
-            bumpLockVersionUnlocked();
+            runtimeLocks_.slots.erase(existing);
+            bumpLockVersionLocked();
         }
     }
 
     Value setTeamLock(const std::string &teamId) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(runtimeMutex_);
         const auto now = nowMs();
-        teamLocks_[teamId] = now;
-        bumpLockVersionUnlocked();
+        runtimeLocks_.teams[teamId] = now;
+        bumpLockVersionLocked();
         Value result;
         result["ok"] = true;
-        result["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
+        result["lockVersion"] = static_cast<Json::Int64>(runtimeLocks_.version);
         result["timestamp"] = static_cast<Json::Int64>(now);
         return result;
     }
 
     Value removeTeamLock(const std::string &teamId) {
-        std::lock_guard lock(mutex_);
-        if (teamLocks_.erase(teamId) > 0) {
-            bumpLockVersionUnlocked();
+        std::lock_guard lock(runtimeMutex_);
+        if (runtimeLocks_.teams.erase(teamId) > 0) {
+            bumpLockVersionLocked();
         }
         Value result;
         result["ok"] = true;
-        result["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
+        result["lockVersion"] = static_cast<Json::Int64>(runtimeLocks_.version);
         return result;
     }
 
@@ -655,7 +670,6 @@ public:
             if (teamCountUnlocked() == 0 && fallbackTeam.isObject()) {
                 insertTeamUnlocked(normalizeTeam(fallbackTeam, "默认团队"), 0);
             }
-            clearRuntimeLocksForTeamUnlocked(teamId);
             bumpDataVersionUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
@@ -663,6 +677,7 @@ public:
             exec("ROLLBACK;");
             throw;
         }
+        clearRuntimeLocksForTeam(teamId);
         return result;
     }
 
@@ -702,7 +717,6 @@ public:
             if (teamCountUnlocked() == 0 && fallbackTeam.isObject()) {
                 insertTeamUnlocked(normalizeTeam(fallbackTeam, "默认团队"), 0);
             }
-            clearRuntimeLocksForTeamUnlocked(teamId);
             bumpDataVersionUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
@@ -710,6 +724,7 @@ public:
             exec("ROLLBACK;");
             throw;
         }
+        clearRuntimeLocksForTeam(teamId);
         return result;
     }
 
@@ -1162,38 +1177,41 @@ public:
     }
 
     Value restoreBackup(const std::string &name) {
-        std::lock_guard lock(mutex_);
-        ensureSchema();
-        const auto path = resolveBackupPath(name);
-        if (!std::filesystem::exists(path)) {
-            return conflictJson("notFound");
-        }
-        Value payload = parseJson(readMaybeGzipFile(path), Value(Json::objectValue));
-        Value data = backupDataFromPayload(payload);
-        if (!data.isObject()) {
-            return errorJson("Invalid backup");
-        }
-
-        exec("BEGIN IMMEDIATE;");
-        try {
-            replaceDataUnlocked(data);
-            slotLocks_.clear();
-            teamLocks_.clear();
-            bumpDataVersionUnlocked();
-            bumpLockVersionUnlocked();
-            exec("COMMIT;");
-        } catch (...) {
-            exec("ROLLBACK;");
-            throw;
-        }
-
-        Value snapshot = bootstrapUnlocked();
-        snapshot["ok"] = true;
         Value result;
-        result["ok"] = true;
-        result["name"] = name;
-        result["data"] = snapshot;
-        result["backups"] = backupEntriesJson(listBackupsUnlocked());
+        {
+            std::lock_guard lock(mutex_);
+            ensureSchema();
+            const auto path = resolveBackupPath(name);
+            if (!std::filesystem::exists(path)) {
+                return conflictJson("notFound");
+            }
+            Value payload = parseJson(readMaybeGzipFile(path), Value(Json::objectValue));
+            Value data = backupDataFromPayload(payload);
+            if (!data.isObject()) {
+                return errorJson("Invalid backup");
+            }
+
+            exec("BEGIN IMMEDIATE;");
+            try {
+                replaceDataUnlocked(data);
+                bumpDataVersionUnlocked();
+                exec("COMMIT;");
+            } catch (...) {
+                exec("ROLLBACK;");
+                throw;
+            }
+
+            result["ok"] = true;
+            result["name"] = name;
+            result["backups"] = backupEntriesJson(listBackupsUnlocked());
+        }
+        clearRuntimeLocks();
+        {
+            std::lock_guard lock(mutex_);
+            Value snapshot = bootstrapUnlocked();
+            snapshot["ok"] = true;
+            result["data"] = snapshot;
+        }
         return result;
     }
 
@@ -1219,48 +1237,50 @@ public:
     }
 
     Value importBackup(const std::string &body) {
-        std::lock_guard lock(mutex_);
-        ensureSchema();
-        Value payload = parseJson(gzipInflate(body).value_or(body), Value(Json::objectValue));
-        Value data = backupDataFromPayload(payload);
-        if (!data.isObject()) {
-            return errorJson("Invalid backup");
-        }
-
-        exec("BEGIN IMMEDIATE;");
-        try {
-            replaceDataUnlocked(data);
-            slotLocks_.clear();
-            teamLocks_.clear();
-            bumpDataVersionUnlocked();
-            bumpLockVersionUnlocked();
-            exec("COMMIT;");
-        } catch (...) {
-            exec("ROLLBACK;");
-            throw;
-        }
-
-        Value snapshot = bootstrapUnlocked();
-        snapshot["ok"] = true;
         Value result;
-        result["ok"] = true;
-        result["name"] = Value(Json::nullValue);
-        result["data"] = snapshot;
-        result["backups"] = backupEntriesJson(listBackupsUnlocked());
+        {
+            std::lock_guard lock(mutex_);
+            ensureSchema();
+            Value payload = parseJson(gzipInflate(body).value_or(body), Value(Json::objectValue));
+            Value data = backupDataFromPayload(payload);
+            if (!data.isObject()) {
+                return errorJson("Invalid backup");
+            }
+
+            exec("BEGIN IMMEDIATE;");
+            try {
+                replaceDataUnlocked(data);
+                bumpDataVersionUnlocked();
+                exec("COMMIT;");
+            } catch (...) {
+                exec("ROLLBACK;");
+                throw;
+            }
+
+            result["ok"] = true;
+            result["name"] = Value(Json::nullValue);
+            result["backups"] = backupEntriesJson(listBackupsUnlocked());
+        }
+        clearRuntimeLocks();
+        {
+            std::lock_guard lock(mutex_);
+            Value snapshot = bootstrapUnlocked();
+            snapshot["ok"] = true;
+            result["data"] = snapshot;
+        }
         return result;
     }
 
 private:
     sqlite3 *db_ = nullptr;
     std::mutex mutex_;
+    std::mutex runtimeMutex_;
     std::filesystem::path dbPath_;
     std::filesystem::path dataDir_;
     std::filesystem::path backupDir_;
     bool schemaReady_ = false;
     const long long lockTimeoutMs_ = 30'000;
-    long long lockVersion_ = 1;
-    std::unordered_map<std::string, SlotLockRecord> slotLocks_;
-    std::unordered_map<std::string, long long> teamLocks_;
+    RuntimeLockState runtimeLocks_;
 
     static long long nowMs() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1631,18 +1651,23 @@ private:
         return false;
     }
 
-    bool cleanExpiredLocksUnlocked(long long now = nowMs()) {
+    bool cleanExpiredLocks() {
+        std::lock_guard lock(runtimeMutex_);
+        return cleanExpiredLocksLocked(nowMs());
+    }
+
+    bool cleanExpiredLocksLocked(long long now) {
         bool changed = false;
-        for (auto iterator = slotLocks_.begin(); iterator != slotLocks_.end();) {
+        for (auto iterator = runtimeLocks_.slots.begin(); iterator != runtimeLocks_.slots.end();) {
             if (now - iterator->second.timestamp > lockTimeoutMs_) {
-                iterator = slotLocks_.erase(iterator);
+                iterator = runtimeLocks_.slots.erase(iterator);
                 changed = true;
             } else {
                 ++iterator;
             }
         }
         if (changed) {
-            bumpLockVersionUnlocked();
+            bumpLockVersionLocked();
         }
         return changed;
     }
@@ -1774,18 +1799,29 @@ private:
         insertTeamUnlocked(normalizeTeam(team, team["name"].isString() ? team["name"].asString() : "默认团队"), sortOrder);
     }
 
-    void clearRuntimeLocksForTeamUnlocked(const std::string &teamId) {
-        bool changed = teamLocks_.erase(teamId) > 0;
-        for (auto iterator = slotLocks_.begin(); iterator != slotLocks_.end();) {
+    void clearRuntimeLocks() {
+        std::lock_guard lock(runtimeMutex_);
+        if (runtimeLocks_.slots.empty() && runtimeLocks_.teams.empty()) {
+            return;
+        }
+        runtimeLocks_.slots.clear();
+        runtimeLocks_.teams.clear();
+        bumpLockVersionLocked();
+    }
+
+    void clearRuntimeLocksForTeam(const std::string &teamId) {
+        std::lock_guard lock(runtimeMutex_);
+        bool changed = runtimeLocks_.teams.erase(teamId) > 0;
+        for (auto iterator = runtimeLocks_.slots.begin(); iterator != runtimeLocks_.slots.end();) {
             if (iterator->second.teamId == teamId) {
-                iterator = slotLocks_.erase(iterator);
+                iterator = runtimeLocks_.slots.erase(iterator);
                 changed = true;
             } else {
                 ++iterator;
             }
         }
         if (changed) {
-            bumpLockVersionUnlocked();
+            bumpLockVersionLocked();
         }
     }
 
@@ -1795,21 +1831,21 @@ private:
         return result;
     }
 
-    Value validateSlotMutationLockUnlocked(const std::string &teamId, int slotIndex, const std::string &qq, long long lockToken) {
+    Value validateSlotMutationLockLocked(const std::string &teamId, int slotIndex, const std::string &qq, long long lockToken) {
         if (teamId.empty() || slotIndex < 0 || qq.empty() || lockToken <= 0) {
             return conflictJson("missingFields");
         }
-        cleanExpiredLocksUnlocked();
+        cleanExpiredLocksLocked(nowMs());
 
-        const auto teamLock = teamLocks_.find(teamId);
-        if (teamLock != teamLocks_.end() && teamLock->second > lockToken) {
+        const auto teamLock = runtimeLocks_.teams.find(teamId);
+        if (teamLock != runtimeLocks_.teams.end() && teamLock->second > lockToken) {
             Value conflict = conflictJson("teamLocked");
             conflict["lockedAt"] = static_cast<Json::Int64>(teamLock->second);
             return conflict;
         }
 
-        const auto existing = slotLocks_.find(slotLockKey(teamId, slotIndex));
-        if (existing == slotLocks_.end() || existing->second.qq != qq) {
+        const auto existing = runtimeLocks_.slots.find(slotLockKey(teamId, slotIndex));
+        if (existing == runtimeLocks_.slots.end() || existing->second.qq != qq) {
             return conflictJson("expired");
         }
 
@@ -1822,6 +1858,30 @@ private:
         return ok;
     }
 
+    Value validateMutationSlotLock(
+        const std::string &teamId,
+        int slotIndex,
+        const std::string &qq,
+        long long lockToken
+    ) {
+        std::lock_guard lock(runtimeMutex_);
+        return validateSlotMutationLockLocked(teamId, slotIndex, qq, lockToken);
+    }
+
+    long long releaseMutationSlotLock(
+        const std::string &teamId,
+        int slotIndex,
+        const std::string &qq
+    ) {
+        std::lock_guard lock(runtimeMutex_);
+        const auto existing = runtimeLocks_.slots.find(slotLockKey(teamId, slotIndex));
+        if (existing != runtimeLocks_.slots.end() && existing->second.qq == qq) {
+            runtimeLocks_.slots.erase(existing);
+            bumpLockVersionLocked();
+        }
+        return runtimeLocks_.version;
+    }
+
     void updateSlotStatusUnlocked(const std::string &teamId, int slotIndex, const std::string &status) {
         sqlite3_stmt *stmt = nullptr;
         prepare("UPDATE slots SET status = ?, member_json = NULL WHERE team_id = ? AND slot_index = ?", &stmt);
@@ -1830,13 +1890,6 @@ private:
         sqlite3_bind_int(stmt, 3, slotIndex);
         stepDone(stmt);
         sqlite3_finalize(stmt);
-    }
-
-    void releaseMutationSlotLockUnlocked(const std::string &teamId, int slotIndex, const std::string &qq) {
-        const auto existing = slotLocks_.find(slotLockKey(teamId, slotIndex));
-        if (existing != slotLocks_.end() && existing->second.qq == qq) {
-            slotLocks_.erase(existing);
-        }
     }
 
     void insertLogUnlocked(
@@ -1890,8 +1943,13 @@ private:
         exec("UPDATE meta_versions SET data_version = data_version + 1 WHERE id = 1;");
     }
 
-    void bumpLockVersionUnlocked() {
-        lockVersion_ += 1;
+    long long runtimeLockVersion() {
+        std::lock_guard lock(runtimeMutex_);
+        return runtimeLocks_.version;
+    }
+
+    void bumpLockVersionLocked() {
+        runtimeLocks_.version += 1;
     }
 
     void replaceSubsidyPresetsUnlocked(const Value &presets) {
@@ -2301,32 +2359,33 @@ private:
         } else {
             json["dataVersion"] = 1;
         }
-        json["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
+        json["lockVersion"] = static_cast<Json::Int64>(runtimeLockVersion());
         sqlite3_finalize(stmt);
         return json;
     }
 
-    Value publicLocksUnlocked() {
+    Value publicLocksSnapshot() {
+        std::lock_guard runtimeLock(runtimeMutex_);
         Value json;
         json["slots"] = Value(Json::arrayValue);
         json["teams"] = Value(Json::arrayValue);
-        for (const auto &entry : slotLocks_) {
-            const auto &lock = entry.second;
+        for (const auto &entry : runtimeLocks_.slots) {
+            const auto &slotLock = entry.second;
             Value item;
-            item["teamId"] = lock.teamId;
-            item["slotIndex"] = lock.slotIndex;
-            item["qq"] = lock.qq;
-            item["timestamp"] = static_cast<Json::Int64>(lock.timestamp);
+            item["teamId"] = slotLock.teamId;
+            item["slotIndex"] = slotLock.slotIndex;
+            item["qq"] = slotLock.qq;
+            item["timestamp"] = static_cast<Json::Int64>(slotLock.timestamp);
             json["slots"].append(item);
         }
 
-        for (const auto &[teamId, timestamp] : teamLocks_) {
+        for (const auto &[teamId, timestamp] : runtimeLocks_.teams) {
             Value item;
             item["teamId"] = teamId;
             item["timestamp"] = static_cast<Json::Int64>(timestamp);
             json["teams"].append(item);
         }
-        json["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
+        json["lockVersion"] = static_cast<Json::Int64>(runtimeLocks_.version);
         return json;
     }
 
@@ -2472,7 +2531,7 @@ private:
         }
         sqlite3_finalize(stmt);
 
-        Value locks = publicLocksUnlocked();
+        Value locks = publicLocksSnapshot();
         json["locks"] = locks["slots"];
         json["teamLocks"] = locks["teams"];
         return json;
