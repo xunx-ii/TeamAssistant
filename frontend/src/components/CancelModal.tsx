@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { acquireSlotLock, releaseSlotLock } from '../api'
+import type { LockToken } from '../dataStore'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Label } from './ui/label'
@@ -13,7 +14,7 @@ interface Props {
   teamId?: string
   slotIndex: number | null
   requireLock?: boolean
-  onConfirm: (reason: string, lockTimestamp?: number) => void
+  onConfirm: (reason: string, lockTimestamp?: LockToken) => void
   onClose: () => void
   onLockAcquired?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp: number; lockVersion?: number }) => void
   onLockReleased?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => void
@@ -22,8 +23,10 @@ interface Props {
 export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLock = false, onConfirm, onClose, onLockAcquired, onLockReleased }: Props) {
   const [reason, setReason] = useState('')
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
+  const [lockToken, setLockToken] = useState<LockToken | undefined>(undefined)
   const [error, setError] = useState('')
   const lockTimestampRef = useRef(0)
+  const lockTokenRef = useRef<LockToken | undefined>(undefined)
   const shouldLock = requireLock
 
   useEffect(() => {
@@ -33,8 +36,11 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
       const result = await acquireSlotLock(teamId, slotIndex, qq)
       if (!active) return
       if (result.ok && result.timestamp) {
+        const token = result.lockToken ?? result.timestamp
         lockTimestampRef.current = result.timestamp
+        lockTokenRef.current = token
         setLockTimestamp(result.timestamp)
+        setLockToken(token)
         onLockAcquired?.({ teamId, slotIndex, qq, timestamp: result.timestamp, lockVersion: result.lockVersion })
         setError('')
       } else if (result.reason === 'teamLocked') {
@@ -50,12 +56,15 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
     return () => {
       active = false
       const currentLockTimestamp = lockTimestampRef.current
+      const currentLockToken = lockTokenRef.current
       lockTimestampRef.current = 0
+      lockTokenRef.current = undefined
       if (currentLockTimestamp > 0) {
         onLockReleased?.({ teamId, slotIndex, qq, timestamp: currentLockTimestamp })
-        void releaseSlotLock(teamId, slotIndex, qq, currentLockTimestamp)
+        void releaseSlotLock(teamId, slotIndex, qq, currentLockToken ?? currentLockTimestamp)
       }
       setLockTimestamp(0)
+      setLockToken(undefined)
       setError('')
       setReason('')
     }
@@ -70,7 +79,7 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
       return
     }
     setReason(textReason)
-    onConfirm(textReason, lockTimestamp)
+    onConfirm(textReason, lockToken ?? lockTimestamp)
   }
 
   return (

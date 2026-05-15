@@ -57,8 +57,8 @@ export async function syncSubsidyPresetsFromServer(): Promise<SubsidyType[] | nu
   return presets
 }
 
-export async function saveSubsidyPresetsRemote(presets: SubsidyType[]): Promise<boolean> {
-  const saved = await pushSubsidyPresets(presets)
+export async function saveSubsidyPresetsRemote(presets: SubsidyType[], actorQq?: string | null): Promise<boolean> {
+  const saved = await pushSubsidyPresets(presets, actorQq)
   if (saved) saveSubsidyPresets(presets)
   return saved
 }

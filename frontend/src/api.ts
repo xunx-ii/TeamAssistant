@@ -1,5 +1,5 @@
 import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team, UserProfiles } from './types'
-import type { Mutation } from './dataStore'
+import type { LockToken, Mutation } from './dataStore'
 
 const API = '/api/v2'
 const DIRECT_API_PORT = '23219'
@@ -16,6 +16,7 @@ export interface ServerData {
   archivedTeams: ArchivedTeam[]
   logs: OperationLog[]
   userProfiles: UserProfiles
+  isAdmin?: boolean
   subsidyPresets?: SubsidyType[]
   locks?: SlotLock[]
   teamLocks?: TeamLockInfo[]
@@ -51,6 +52,7 @@ export interface ServerChanges {
   ok: boolean
   dataVersion: number
   lockVersion: number
+  isAdmin?: boolean
   dataChanged: boolean
   lockChanged: boolean
   data?: ServerData
@@ -275,6 +277,10 @@ function encodePath(value: string | number) {
   return encodeURIComponent(String(value))
 }
 
+function withActor<T extends object>(body: T, actorQq?: string | null): T & { actorQq?: string } {
+  return actorQq ? { ...body, actorQq } : body
+}
+
 function jsonRequest(method: string, body?: unknown): RequestInit {
   return {
     method,
@@ -283,129 +289,129 @@ function jsonRequest(method: string, body?: unknown): RequestInit {
   }
 }
 
-function routeMutation(mutation: Mutation): { url: string; init: RequestInit } {
+function routeMutation(mutation: Mutation, actorQq?: string | null): { url: string; init: RequestInit } {
   switch (mutation.type) {
     case 'createTeam':
-      return { url: `${API}/teams`, init: jsonRequest('POST', { team: mutation.team }) }
+      return { url: `${API}/teams`, init: jsonRequest('POST', withActor({ team: mutation.team }, actorQq)) }
 
     case 'deleteTeam':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}`,
-        init: jsonRequest('DELETE', { fallbackTeam: mutation.fallbackTeam }),
+        init: jsonRequest('DELETE', withActor({ fallbackTeam: mutation.fallbackTeam }, actorQq)),
       }
 
     case 'archiveTeam':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/archive`,
-        init: jsonRequest('POST', {
+        init: jsonRequest('POST', withActor({
           archivedBy: mutation.archivedBy,
           archivedAt: mutation.archivedAt,
           fallbackTeam: mutation.fallbackTeam,
-        }),
+        }, actorQq)),
       }
 
     case 'restoreArchivedTeam':
       return {
         url: `${API}/archives/${encodePath(mutation.archiveId)}/restore`,
-        init: jsonRequest('POST', { actorQq: mutation.actorQq, restoredAt: mutation.restoredAt }),
+        init: jsonRequest('POST', withActor({ actorQq: mutation.actorQq, restoredAt: mutation.restoredAt }, actorQq)),
       }
 
     case 'renameTeam':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}`,
-        init: jsonRequest('PATCH', { name: mutation.name }),
+        init: jsonRequest('PATCH', withActor({ name: mutation.name }, actorQq)),
       }
 
     case 'updateTeamWeekStart':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}`,
-        init: jsonRequest('PATCH', { weekStart: mutation.weekStart }),
+        init: jsonRequest('PATCH', withActor({ weekStart: mutation.weekStart }, actorQq)),
       }
 
     case 'updateTeamNote':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}`,
-        init: jsonRequest('PATCH', { note: mutation.note }),
+        init: jsonRequest('PATCH', withActor({ note: mutation.note }, actorQq)),
       }
 
     case 'reorderTeams':
-      return { url: `${API}/teams/reorder`, init: jsonRequest('POST', { ids: mutation.ids }) }
+      return { url: `${API}/teams/reorder`, init: jsonRequest('POST', withActor({ ids: mutation.ids }, actorQq)) }
 
     case 'toggleTeamConfigLock':
     case 'setTeamLockState':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/lock-state`,
-        init: jsonRequest('PATCH', { locked: mutation.locked }),
+        init: jsonRequest('PATCH', withActor({ locked: mutation.locked }, actorQq)),
       }
 
     case 'setSlotRole':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/role`,
-        init: jsonRequest('PUT', {
+        init: jsonRequest('PUT', withActor({
           role: mutation.role,
           martialArtIndex: mutation.martialArtIndex,
           assignQQ: mutation.assignQQ,
           actorQq: mutation.actorQq,
-        }),
+        }, actorQq)),
       }
 
     case 'quickReserve':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/quick-reserve`,
-        init: jsonRequest('POST', { reserveType: mutation.reserveType, count: mutation.count }),
+        init: jsonRequest('POST', withActor({ reserveType: mutation.reserveType, count: mutation.count }, actorQq)),
       }
 
     case 'signupSlot':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/member`,
-        init: jsonRequest('PUT', {
+        init: jsonRequest('PUT', withActor({
           qq: mutation.member.qq,
           actorQq: mutation.actorQq,
           member: mutation.member,
           lockToken: mutation.lockTimestamp,
           expectedMemberQq: mutation.expectedMemberQq,
-        }),
+        }, actorQq)),
       }
 
     case 'cancelSlot':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/cancel`,
-        init: jsonRequest('POST', {
+        init: jsonRequest('POST', withActor({
           reason: mutation.reason,
           cancelledBy: mutation.cancelledBy,
           timestamp: mutation.timestamp,
           actorQq: mutation.actorQq,
           lockToken: mutation.lockTimestamp,
           expectedMemberQq: mutation.expectedMemberQq,
-        }),
+        }, actorQq)),
       }
 
     case 'leaveSlot':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/member`,
-        init: jsonRequest('DELETE', {
+        init: jsonRequest('DELETE', withActor({
           actorQq: mutation.actorQq,
           lockToken: mutation.lockTimestamp,
           expectedMemberQq: mutation.expectedMemberQq,
-        }),
+        }, actorQq)),
       }
 
     case 'dismissCancellation':
       return {
         url: `${API}/cancellations/${encodePath(mutation.qq)}/${encodePath(mutation.timestamp)}`,
-        init: jsonRequest('DELETE'),
+        init: jsonRequest('DELETE', withActor({}, actorQq)),
       }
 
     case 'updateNickname':
       return {
         url: `${API}/user-profiles/${encodePath(mutation.qq)}`,
-        init: jsonRequest('PUT', { nickname: mutation.nickname }),
+        init: jsonRequest('PUT', withActor({ nickname: mutation.nickname }, actorQq)),
       }
 
     case 'updateTeamSubsidyTypes':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/subsidy-types`,
-        init: jsonRequest('PUT', { subsidyTypes: mutation.subsidyTypes }),
+        init: jsonRequest('PUT', withActor({ subsidyTypes: mutation.subsidyTypes }, actorQq)),
       }
 
     case 'registerMemberSubsidies': {
@@ -414,7 +420,7 @@ function routeMutation(mutation: Mutation): { url: string; init: RequestInit } {
         : `${API}/teams/${encodePath(mutation.teamId ?? '')}/subsidies/${encodePath(mutation.qq)}`
       return {
         url: target,
-        init: jsonRequest('PUT', { selections: mutation.selections, weekStart: mutation.weekStart }),
+        init: jsonRequest('PUT', withActor({ selections: mutation.selections, weekStart: mutation.weekStart }, actorQq)),
       }
     }
   }
@@ -425,8 +431,11 @@ export async function checkServer(): Promise<boolean> {
   return Boolean(version)
 }
 
-export async function fetchData(): Promise<ServerData | null> {
-  const data = await requestData<unknown>(`${API}/bootstrap`, noCache)
+export async function fetchData(qq?: string | null): Promise<ServerData | null> {
+  const params = new URLSearchParams()
+  if (qq) params.set('qq', qq)
+  const suffix = params.toString() ? `?${params}` : ''
+  const data = await requestData<unknown>(`${API}/bootstrap${suffix}`, noCache)
   return isServerData(data) ? data : null
 }
 
@@ -447,10 +456,11 @@ export async function fetchServerVersion(): Promise<ServerVersion | null> {
   return null
 }
 
-export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null): Promise<ServerChanges | null> {
+export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null, qq?: string | null): Promise<ServerChanges | null> {
   const params = new URLSearchParams()
   if (typeof dataVersion === 'number') params.set('dataVersion', String(dataVersion))
   if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
+  if (qq) params.set('qq', qq)
   const suffix = params.toString() ? `?${params}` : ''
   const data = await requestData<unknown>(`${API}/sync${suffix}`, noCache)
   if (
@@ -468,6 +478,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
       ok: payload.ok !== false,
       dataVersion: nextDataVersion,
       lockVersion: nextLockVersion,
+      isAdmin: typeof (payload as { isAdmin?: unknown }).isAdmin === 'boolean' ? (payload as { isAdmin: boolean }).isAdmin : undefined,
       dataChanged: Boolean(payload.dataChanged),
       lockChanged: Boolean(payload.lockChanged),
       data: isServerData(payload.data) ? payload.data : undefined,
@@ -509,13 +520,13 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): ((
   return () => source.close()
 }
 
-export async function pushData(data: Partial<ServerData>): Promise<boolean> {
+export async function pushData(data: Partial<ServerData> & { actorQq?: string | null }): Promise<boolean> {
   const result = await requestResult<{ ok: boolean }>(`${API}/data`, jsonRequest('PUT', data))
   return result.ok
 }
 
-export async function mutateData(mutation: Mutation): Promise<MutationResult> {
-  const route = routeMutation(mutation)
+export async function mutateData(mutation: Mutation, actorQq?: string | null): Promise<MutationResult> {
+  const route = routeMutation(mutation, actorQq)
   return requestResult<MutationResult>(route.url, route.init)
 }
 
@@ -528,7 +539,7 @@ export async function acquireSlotLock(teamId: string, slotIndex: number, qq: str
   return result
 }
 
-export async function releaseSlotLock(teamId: string, slotIndex: number, qq: string, lockTimestamp?: number): Promise<boolean> {
+export async function releaseSlotLock(teamId: string, slotIndex: number, qq: string, lockTimestamp?: LockToken): Promise<boolean> {
   const result = await requestResult<{ ok: boolean }>(
     `${API}/slot-locks/${encodePath(teamId)}/${encodePath(slotIndex)}`,
     jsonRequest('DELETE', { qq, lockToken: lockTimestamp }),
@@ -558,20 +569,23 @@ export async function fetchLockStateOrNull(): Promise<LockState | null> {
   }
 }
 
-export async function lockTeam(teamId: string): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/team-locks`, jsonRequest('POST', { teamId }))
+export async function lockTeam(teamId: string, actorQq?: string | null): Promise<boolean> {
+  const result = await requestResult<{ ok: boolean }>(`${API}/team-locks`, jsonRequest('POST', withActor({ teamId }, actorQq)))
   return result.ok
 }
 
-export async function unlockTeam(teamId: string): Promise<boolean> {
+export async function unlockTeam(teamId: string, actorQq?: string | null): Promise<boolean> {
+  const params = new URLSearchParams()
+  if (actorQq) params.set('actorQq', actorQq)
+  const suffix = params.toString() ? `?${params}` : ''
   const result = await requestResult<{ ok: boolean }>(
-    `${API}/team-locks/${encodePath(teamId)}`,
+    `${API}/team-locks/${encodePath(teamId)}${suffix}`,
     jsonRequest('DELETE'),
   )
   return result.ok
 }
 
-export async function validateLock(teamId: string, slotIndex: number, qq: string, lockTimestamp: number): Promise<ValidateResult> {
+export async function validateLock(teamId: string, slotIndex: number, qq: string, lockTimestamp: LockToken): Promise<ValidateResult> {
   return requestResult<ValidateResult>(
     `${API}/slot-locks/validate`,
     jsonRequest('POST', { teamId, slotIndex, qq, lockToken: lockTimestamp }),
@@ -584,38 +598,43 @@ export async function fetchSubsidyPresets(): Promise<SubsidyType[] | null> {
   return Array.isArray(data?.presets) ? data.presets : null
 }
 
-export async function pushSubsidyPresets(presets: SubsidyType[]): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/subsidy-presets`, jsonRequest('PUT', { presets }))
+export async function pushSubsidyPresets(presets: SubsidyType[], actorQq?: string | null): Promise<boolean> {
+  const result = await requestResult<{ ok: boolean }>(`${API}/subsidy-presets`, jsonRequest('PUT', withActor({ presets }, actorQq)))
   return result.ok
 }
-export async function fetchBackups(): Promise<BackupListResult> {
-  return requestResult<BackupListResult>(`${API}/backups`, noCache)
+function actorQuery(actorQq?: string | null) {
+  const params = new URLSearchParams()
+  if (actorQq) params.set('actorQq', actorQq)
+  const query = params.toString()
+  return query ? `?${query}` : ''
 }
 
-export async function createBackup(): Promise<BackupActionResult> {
-  return requestResult<BackupActionResult>(`${API}/backups`, {
-    method: 'POST',
-  })
+export async function fetchBackups(actorQq?: string | null): Promise<BackupListResult> {
+  return requestResult<BackupListResult>(`${API}/backups${actorQuery(actorQq)}`, noCache)
 }
 
-export async function restoreBackup(name: string): Promise<BackupActionResult> {
-  return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}/restore`, jsonRequest('POST'))
+export async function createBackup(actorQq?: string | null): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups`, jsonRequest('POST', withActor({}, actorQq)))
 }
 
-export async function downloadBackup(name: string): Promise<BackupDownloadResult> {
-  const result = await requestBlob(`${API}/backups/${encodePath(name)}/download`, noCache)
+export async function restoreBackup(name: string, actorQq?: string | null): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}/restore`, jsonRequest('POST', withActor({}, actorQq)))
+}
+
+export async function downloadBackup(name: string, actorQq?: string | null): Promise<BackupDownloadResult> {
+  const result = await requestBlob(`${API}/backups/${encodePath(name)}/download${actorQuery(actorQq)}`, noCache)
   if (result.ok && !result.filename) {
     return { ...result, filename: name }
   }
   return result
 }
 
-export async function deleteBackup(name: string): Promise<BackupActionResult> {
-  return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}`, jsonRequest('DELETE'))
+export async function deleteBackup(name: string, actorQq?: string | null): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}`, jsonRequest('DELETE', withActor({}, actorQq)))
 }
 
-export async function importBackupFile(file: File): Promise<BackupActionResult> {
-  return requestResult<BackupActionResult>(`${API}/backups/import`, {
+export async function importBackupFile(file: File, actorQq?: string | null): Promise<BackupActionResult> {
+  return requestResult<BackupActionResult>(`${API}/backups/import${actorQuery(actorQq)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: await file.arrayBuffer(),

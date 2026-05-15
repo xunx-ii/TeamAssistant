@@ -32,7 +32,7 @@ This document defines the contract used by the split React frontend and the new 
 
 - `POST /api/v2/slot-locks`
   - Body: `{ teamId, slotIndex, qq }`.
-  - Returns `{ ok: true, lockToken, timestamp }` or a conflict payload.
+  - Returns `{ ok: true, lockToken, timestamp }` or a conflict payload. `lockToken` is an opaque string; clients must not treat it as a timestamp.
 - `DELETE /api/v2/slot-locks/{teamId}/{slotIndex}`
   - Body: `{ qq, lockToken }`.
   - Best-effort release, returns `{ ok: true }`.
@@ -65,11 +65,16 @@ All admin operations must be validated on the backend using `actorQq`.
 - `PUT /api/v2/subsidy-presets`
 - `PUT /api/v2/teams/{teamId}/subsidies/{qq}`
 - `PUT /api/v2/archives/{archiveId}/subsidies/{qq}`
-- `GET /api/v2/backups`
-- `POST /api/v2/backups`
-- `GET /api/v2/backups/{name}/download`
-- `POST /api/v2/backups/{name}/restore`
-- `DELETE /api/v2/backups/{name}`
-- `POST /api/v2/backups/import`
+- `GET /api/v2/backups?actorQq=...`
+- `POST /api/v2/backups` with `{ actorQq }`
+- `GET /api/v2/backups/{name}/download?actorQq=...`
+- `POST /api/v2/backups/{name}/restore` with `{ actorQq }`
+- `DELETE /api/v2/backups/{name}` with `{ actorQq }`
+- `POST /api/v2/backups/import?actorQq=...`
 
 Backup import and restore may return a full snapshot because the full application state changes.
+
+## Admin Config
+
+- Backend reads administrator QQs from `backend-cpp/admin.json` by default, or `TEAMASSISTANT_ADMIN_CONFIG` when set.
+- The admin list is not served to the frontend; `bootstrap` and `sync` return only the current viewer's `isAdmin` boolean.

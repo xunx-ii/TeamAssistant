@@ -2,6 +2,7 @@
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cctype>
@@ -48,6 +49,7 @@ struct SlotLockRecord {
     std::string teamId;
     int slotIndex = 0;
     std::string qq;
+    std::string token;
     long long timestamp = 0;
 };
 
@@ -168,6 +170,71 @@ private:
     }
 };
 
+Value parseJsonText(const std::string &text, Value fallback) {
+    if (text.empty()) {
+        return fallback;
+    }
+    Json::CharReaderBuilder builder;
+    std::string errors;
+    std::istringstream input(text);
+    Value parsed;
+    if (!Json::parseFromStream(builder, input, &parsed, &errors)) {
+        return fallback;
+    }
+    return parsed;
+}
+
+std::string writeJsonText(const Value &value) {
+    Json::StreamWriterBuilder builder;
+    builder["indentation"] = "";
+    return Json::writeString(builder, value);
+}
+
+class AdminConfig {
+public:
+    explicit AdminConfig(std::filesystem::path path) {
+        load(std::move(path));
+    }
+
+    bool isAdmin(const std::string &qq) const {
+        return !qq.empty() && adminQqs_.contains(qq);
+    }
+
+private:
+    std::unordered_set<std::string> adminQqs_;
+
+    void load(std::filesystem::path path) {
+        std::ifstream input;
+        auto open = [&input](const std::filesystem::path &candidate) {
+            input.close();
+            input.clear();
+            input.open(candidate);
+        };
+        open(path);
+        if (!input && path != "backend-cpp/admin.json") {
+            open("backend-cpp/admin.json");
+        }
+        if (!input && path != "admin.json") {
+            open("admin.json");
+        }
+        if (!input) {
+            return;
+        }
+
+        std::stringstream buffer;
+        buffer << input.rdbuf();
+        const Value config = parseJsonText(buffer.str(), Value(Json::objectValue));
+        const Value list = config["adminQQs"].isArray()
+            ? config["adminQQs"]
+            : (config["admins"].isArray() ? config["admins"] : Value(Json::arrayValue));
+        for (const auto &item : list) {
+            if (item.isString() && !item.asString().empty()) {
+                adminQqs_.insert(item.asString());
+            }
+        }
+    }
+};
+
 class SqliteDb {
 public:
     explicit SqliteDb(const std::filesystem::path &path) {
@@ -185,6 +252,8 @@ public:
         exec("PRAGMA temp_store=MEMORY;");
         exec("PRAGMA wal_autocheckpoint=1000;");
         exec("PRAGMA cache_size=-20000;");
+        ensureSchema();
+        dataVersionCache_.store(readDataVersionUnlocked(), std::memory_order_relaxed);
     }
 
     ~SqliteDb() {
@@ -205,20 +274,11 @@ public:
         }
     }
 
-    Value versions() {
-        std::lock_guard lock(mutex_);
-        ensureSchema();
-        sqlite3_stmt *stmt = nullptr;
-        prepare("SELECT data_version FROM meta_versions WHERE id = 1", &stmt);
+    Value versionSnapshot() {
         Value json;
         json["ok"] = true;
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            json["dataVersion"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 0));
-        } else {
-            json["dataVersion"] = 1;
-        }
+        json["dataVersion"] = static_cast<Json::Int64>(dataVersionCache_.load(std::memory_order_relaxed));
         json["lockVersion"] = static_cast<Json::Int64>(runtimeLockVersion());
-        sqlite3_finalize(stmt);
         return json;
     }
 
@@ -255,13 +315,15 @@ public:
         return cleanExpiredLocks();
     }
 
-    Value bootstrap() {
+    Value bootstrap(bool isAdmin = false) {
         std::lock_guard lock(mutex_);
         ensureSchema();
-        return bootstrapUnlocked();
+        Value json = bootstrapUnlocked();
+        json["isAdmin"] = isAdmin;
+        return json;
     }
 
-    Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion) {
+    Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion, bool isAdmin = false) {
         std::lock_guard lock(mutex_);
         ensureSchema();
         Value current = versionsUnlocked();
@@ -270,10 +332,12 @@ public:
         const bool dataChanged = !dataVersion.has_value() || *dataVersion != currentData;
         const bool lockChanged = !lockVersion.has_value() || *lockVersion != currentLocks;
         Value json = current;
+        json["isAdmin"] = isAdmin;
         json["dataChanged"] = dataChanged;
         json["lockChanged"] = lockChanged;
         if (dataChanged) {
             Value data = bootstrapUnlocked();
+            data["isAdmin"] = isAdmin;
             json["data"] = data;
         }
         if (lockChanged) {
@@ -304,18 +368,19 @@ public:
             return conflict;
         }
 
-        runtimeLocks_.slots[key] = SlotLockRecord{teamId, slotIndex, qq, now};
+        const std::string token = std::to_string(now) + "-" + std::to_string(nextLockToken_++);
+        runtimeLocks_.slots[key] = SlotLockRecord{teamId, slotIndex, qq, token, now};
         bumpLockVersionLocked();
 
         Value ok;
         ok["ok"] = true;
         ok["timestamp"] = static_cast<Json::Int64>(now);
-        ok["lockToken"] = static_cast<Json::Int64>(now);
+        ok["lockToken"] = token;
         ok["lockVersion"] = static_cast<Json::Int64>(runtimeLocks_.version);
         return ok;
     }
 
-    Value validateSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, long long lockToken) {
+    Value validateSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, const std::string &lockToken) {
         std::lock_guard lock(runtimeMutex_);
         return validateSlotMutationLockLocked(teamId, slotIndex, qq, lockToken);
     }
@@ -325,7 +390,7 @@ public:
         int slotIndex,
         const std::string &actorQq,
         const Value &member,
-        long long lockToken,
+        const std::string &lockToken,
         std::optional<std::string> expectedMemberQq
     ) {
         std::lock_guard lock(mutex_);
@@ -382,7 +447,7 @@ public:
             throw;
         }
         if (shouldReleaseLock) {
-            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq));
+            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq, lockToken));
         }
         return result;
     }
@@ -391,7 +456,7 @@ public:
         const std::string &teamId,
         int slotIndex,
         const std::string &actorQq,
-        long long lockToken,
+        const std::string &lockToken,
         std::optional<std::string> expectedMemberQq
     ) {
         std::lock_guard lock(mutex_);
@@ -439,7 +504,7 @@ public:
             throw;
         }
         if (shouldReleaseLock) {
-            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq));
+            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq, lockToken));
         }
         return result;
     }
@@ -450,7 +515,7 @@ public:
         const std::string &actorQq,
         const std::string &cancelledBy,
         const std::string &reason,
-        long long lockToken,
+        const std::string &lockToken,
         std::optional<std::string> expectedMemberQq
     ) {
         std::lock_guard lock(mutex_);
@@ -511,19 +576,19 @@ public:
             throw;
         }
         if (shouldReleaseLock) {
-            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq));
+            result["lockVersion"] = static_cast<Json::Int64>(releaseMutationSlotLock(teamId, slotIndex, actorQq, lockToken));
         }
         return result;
     }
 
-    void releaseSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, std::optional<long long> lockToken) {
+    void releaseSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, const std::optional<std::string> &lockToken) {
         std::lock_guard lock(runtimeMutex_);
         const std::string key = slotLockKey(teamId, slotIndex);
         const auto existing = runtimeLocks_.slots.find(key);
         if (
             existing != runtimeLocks_.slots.end() &&
             existing->second.qq == qq &&
-            (!lockToken.has_value() || existing->second.timestamp == *lockToken)
+            (!lockToken.has_value() || existing->second.token == *lockToken)
         ) {
             runtimeLocks_.slots.erase(existing);
             bumpLockVersionLocked();
@@ -1281,6 +1346,8 @@ private:
     bool schemaReady_ = false;
     const long long lockTimeoutMs_ = 30'000;
     RuntimeLockState runtimeLocks_;
+    std::atomic<long long> dataVersionCache_{1};
+    std::uint64_t nextLockToken_ = 1;
 
     static long long nowMs() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1309,23 +1376,11 @@ private:
     }
 
     static Value parseJson(const std::string &text, Value fallback) {
-        if (text.empty()) {
-            return fallback;
-        }
-        Json::CharReaderBuilder builder;
-        std::string errors;
-        std::istringstream input(text);
-        Value parsed;
-        if (!Json::parseFromStream(builder, input, &parsed, &errors)) {
-            return fallback;
-        }
-        return parsed;
+        return parseJsonText(text, std::move(fallback));
     }
 
     static std::string writeJson(const Value &value) {
-        Json::StreamWriterBuilder builder;
-        builder["indentation"] = "";
-        return Json::writeString(builder, value);
+        return writeJsonText(value);
     }
 
     static void bindString(sqlite3_stmt *stmt, int index, const std::string &value) {
@@ -1831,26 +1886,26 @@ private:
         return result;
     }
 
-    Value validateSlotMutationLockLocked(const std::string &teamId, int slotIndex, const std::string &qq, long long lockToken) {
-        if (teamId.empty() || slotIndex < 0 || qq.empty() || lockToken <= 0) {
+    Value validateSlotMutationLockLocked(const std::string &teamId, int slotIndex, const std::string &qq, const std::string &lockToken) {
+        if (teamId.empty() || slotIndex < 0 || qq.empty() || lockToken.empty()) {
             return conflictJson("missingFields");
         }
         cleanExpiredLocksLocked(nowMs());
-
-        const auto teamLock = runtimeLocks_.teams.find(teamId);
-        if (teamLock != runtimeLocks_.teams.end() && teamLock->second > lockToken) {
-            Value conflict = conflictJson("teamLocked");
-            conflict["lockedAt"] = static_cast<Json::Int64>(teamLock->second);
-            return conflict;
-        }
 
         const auto existing = runtimeLocks_.slots.find(slotLockKey(teamId, slotIndex));
         if (existing == runtimeLocks_.slots.end() || existing->second.qq != qq) {
             return conflictJson("expired");
         }
 
-        if (existing->second.timestamp != lockToken || nowMs() - existing->second.timestamp > lockTimeoutMs_) {
+        if (existing->second.token != lockToken || nowMs() - existing->second.timestamp > lockTimeoutMs_) {
             return conflictJson("expired");
+        }
+
+        const auto teamLock = runtimeLocks_.teams.find(teamId);
+        if (teamLock != runtimeLocks_.teams.end() && teamLock->second > existing->second.timestamp) {
+            Value conflict = conflictJson("teamLocked");
+            conflict["lockedAt"] = static_cast<Json::Int64>(teamLock->second);
+            return conflict;
         }
 
         Value ok;
@@ -1862,7 +1917,7 @@ private:
         const std::string &teamId,
         int slotIndex,
         const std::string &qq,
-        long long lockToken
+        const std::string &lockToken
     ) {
         std::lock_guard lock(runtimeMutex_);
         return validateSlotMutationLockLocked(teamId, slotIndex, qq, lockToken);
@@ -1871,11 +1926,12 @@ private:
     long long releaseMutationSlotLock(
         const std::string &teamId,
         int slotIndex,
-        const std::string &qq
+        const std::string &qq,
+        const std::string &lockToken
     ) {
         std::lock_guard lock(runtimeMutex_);
         const auto existing = runtimeLocks_.slots.find(slotLockKey(teamId, slotIndex));
-        if (existing != runtimeLocks_.slots.end() && existing->second.qq == qq) {
+        if (existing != runtimeLocks_.slots.end() && existing->second.qq == qq && existing->second.token == lockToken) {
             runtimeLocks_.slots.erase(existing);
             bumpLockVersionLocked();
         }
@@ -1941,6 +1997,7 @@ private:
 
     void bumpDataVersionUnlocked() {
         exec("UPDATE meta_versions SET data_version = data_version + 1 WHERE id = 1;");
+        dataVersionCache_.fetch_add(1, std::memory_order_relaxed);
     }
 
     long long runtimeLockVersion() {
@@ -2349,19 +2406,19 @@ private:
         schemaReady_ = true;
     }
 
-    Value versionsUnlocked() {
+    long long readDataVersionUnlocked() {
         sqlite3_stmt *stmt = nullptr;
         prepare("SELECT data_version FROM meta_versions WHERE id = 1", &stmt);
-        Value json;
-        json["ok"] = true;
+        long long version = 1;
         if (sqlite3_step(stmt) == SQLITE_ROW) {
-            json["dataVersion"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 0));
-        } else {
-            json["dataVersion"] = 1;
+            version = sqlite3_column_int64(stmt, 0);
         }
-        json["lockVersion"] = static_cast<Json::Int64>(runtimeLockVersion());
         sqlite3_finalize(stmt);
-        return json;
+        return version;
+    }
+
+    Value versionsUnlocked() {
+        return versionSnapshot();
     }
 
     Value publicLocksSnapshot() {
@@ -2558,9 +2615,21 @@ long long toInt64(const Value &value, long long fallback) {
     return fallback;
 }
 
-std::optional<long long> optionalInt64(const Value &value) {
-    if (value.isNull()) return std::nullopt;
-    return toInt64(value);
+std::string bodyString(const Value &value) {
+    if (value.isString()) return value.asString();
+    if (value.isInt64()) return std::to_string(value.asInt64());
+    if (value.isInt()) return std::to_string(value.asInt());
+    if (value.isUInt64()) return std::to_string(value.asUInt64());
+    if (value.isUInt()) return std::to_string(value.asUInt());
+    return "";
+}
+
+std::optional<std::string> optionalTokenString(const Value &value) {
+    const std::string token = bodyString(value);
+    if (token.empty()) {
+        return std::nullopt;
+    }
+    return token;
 }
 
 std::optional<long long> optionalQueryInt64(const std::string &value) {
@@ -2588,6 +2657,9 @@ drogon::HttpStatusCode statusForResult(const Value &json) {
     const std::string reason = json["reason"].isString() ? json["reason"].asString() : "";
     if (reason == "teamLocked" || reason == "expired" || reason == "slotChanged") {
         return drogon::k409Conflict;
+    }
+    if (reason == "forbidden") {
+        return drogon::k403Forbidden;
     }
     if (reason == "notFound") {
         return drogon::k404NotFound;
@@ -2640,13 +2712,17 @@ int main() {
     const std::filesystem::path dbPath = std::getenv("TEAMASSISTANT_DB") != nullptr
         ? std::getenv("TEAMASSISTANT_DB")
         : "backend-cpp/data/teamassistant.sqlite3";
+    const std::filesystem::path adminPath = std::getenv("TEAMASSISTANT_ADMIN_CONFIG") != nullptr
+        ? std::getenv("TEAMASSISTANT_ADMIN_CONFIG")
+        : "backend-cpp/admin.json";
 
     auto db = std::make_shared<SqliteDb>(dbPath);
+    auto admins = std::make_shared<AdminConfig>(adminPath);
     auto events = std::make_shared<VersionEventHub>();
     setupCors();
 
     auto publishVersion = [db, events]() {
-        events->publish(db->versions());
+        events->publish(db->versionSnapshot());
     };
     auto respondMutation = [publishVersion](std::function<void(const HttpResponsePtr &)> &&callback, const Value &result) {
         callback(jsonResponse(result, statusForResult(result)));
@@ -2660,6 +2736,36 @@ int main() {
             publishVersion();
         }
     };
+    auto forbiddenResponse = [] {
+        Value json;
+        json["ok"] = false;
+        json["reason"] = "forbidden";
+        json["error"] = "需要管理员权限";
+        return json;
+    };
+    auto requireAdminQq = [admins, forbiddenResponse](const std::string &actorQq, std::function<void(const HttpResponsePtr &)> &callback) {
+        if (admins->isAdmin(actorQq)) {
+            return true;
+        }
+        callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
+        return false;
+    };
+    auto requireAdmin = [admins, forbiddenResponse](const Value &body, std::function<void(const HttpResponsePtr &)> &callback) {
+        const std::string actorQq = body["actorQq"].isString() ? body["actorQq"].asString() : "";
+        if (admins->isAdmin(actorQq)) {
+            return true;
+        }
+        callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
+        return false;
+    };
+    auto requireSelfOrAdmin = [admins, forbiddenResponse](const std::string &targetQq, const Value &body, std::function<void(const HttpResponsePtr &)> &callback) {
+        const std::string actorQq = body["actorQq"].isString() ? body["actorQq"].asString() : "";
+        if (!actorQq.empty() && (actorQq == targetQq || admins->isAdmin(actorQq))) {
+            return true;
+        }
+        callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
+        return false;
+    };
     drogon::app().getLoop()->runEvery(5.0, [db, publishVersion]() {
         if (db->expireRuntimeLocks()) {
             publishVersion();
@@ -2671,23 +2777,25 @@ int main() {
 
     drogon::app().registerHandler("/api/v2/version",
         [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
-            callback(jsonResponse(db->versions()));
+            callback(jsonResponse(db->versionSnapshot()));
         },
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/bootstrap",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
-            callback(jsonResponse(db->bootstrap()));
+        [db, admins](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto qq = request->getParameter("qq");
+            callback(jsonResponse(db->bootstrap(admins->isAdmin(qq))));
         },
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/data",
-        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing data"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->replaceData(*json));
             } catch (const std::exception &error) {
@@ -2697,10 +2805,11 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/sync",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, admins](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto dataVersion = request->getParameter("dataVersion");
             const auto lockVersion = request->getParameter("lockVersion");
-            callback(jsonResponse(db->sync(optionalQueryInt64(dataVersion), optionalQueryInt64(lockVersion))));
+            const auto qq = request->getParameter("qq");
+            callback(jsonResponse(db->sync(optionalQueryInt64(dataVersion), optionalQueryInt64(lockVersion), admins->isAdmin(qq))));
         },
         {drogon::Get});
 
@@ -2708,7 +2817,7 @@ int main() {
         [db, events](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
             auto response = drogon::HttpResponse::newAsyncStreamResponse(
                 [db, events](drogon::ResponseStreamPtr stream) {
-                    events->subscribe(std::move(stream), db->versions());
+                    events->subscribe(std::move(stream), db->versionSnapshot());
                 },
                 true);
             response->setContentTypeCodeAndCustomString(drogon::CT_TEXT_PLAIN, "text/event-stream; charset=utf-8");
@@ -2726,12 +2835,13 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/teams",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["team"].isObject()) {
                 callback(jsonResponse(errorJson("Missing team"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->createTeam((*json)["team"]);
                 respondMutation(std::move(callback), result);
@@ -2742,12 +2852,13 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/reorder",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing ids"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->reorderTeams((*json)["ids"]);
                 respondMutation(std::move(callback), result);
@@ -2758,13 +2869,14 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing team patch"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->patchTeam(teamId, *json);
                 respondMutation(std::move(callback), result);
@@ -2775,11 +2887,13 @@ int main() {
         {drogon::Patch});
 
     drogon::app().registerHandler("/api/v2/teams/{1}",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
+            const Value body = json == nullptr ? Value(Json::objectValue) : *json;
+            if (!requireAdmin(body, callback)) return;
             try {
-                const auto result = db->deleteTeam(teamId, json == nullptr ? Value(Json::nullValue) : (*json)["fallbackTeam"]);
+                const auto result = db->deleteTeam(teamId, body["fallbackTeam"]);
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
@@ -2788,13 +2902,14 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/archive",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing archive body"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->archiveTeam(
                     teamId,
@@ -2809,13 +2924,14 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/archives/{1}/restore",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &archiveId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing restore body"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->restoreArchive(
                     archiveId,
@@ -2829,13 +2945,14 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/lock-state",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["locked"].isBool()) {
                 callback(jsonResponse(errorJson("Missing locked"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->setTeamConfigLock(teamId, (*json)["locked"].asBool());
                 respondMutation(std::move(callback), result);
@@ -2872,7 +2989,7 @@ int main() {
                 return;
             }
             try {
-                db->releaseSlotLock(teamId, slotIndex, (*json)["qq"].asString(), optionalInt64((*json)["lockToken"]));
+                db->releaseSlotLock(teamId, slotIndex, (*json)["qq"].asString(), optionalTokenString((*json)["lockToken"]));
                 Value ok;
                 ok["ok"] = true;
                 respondOkMutation(std::move(callback), ok);
@@ -2894,7 +3011,7 @@ int main() {
                     (*json)["teamId"].asString(),
                     static_cast<int>(toInt64((*json)["slotIndex"])),
                     (*json)["qq"].asString(),
-                    toInt64((*json)["lockToken"]));
+                    bodyString((*json)["lockToken"]));
                 callback(jsonResponse(result, statusForResult(result)));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
@@ -2919,7 +3036,7 @@ int main() {
                     slotIndex,
                     actorQq,
                     (*json)["member"],
-                    toInt64((*json)["lockToken"]),
+                    bodyString((*json)["lockToken"]),
                     optionalBodyString((*json)["expectedMemberQq"]));
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
@@ -2941,7 +3058,7 @@ int main() {
                     teamId,
                     slotIndex,
                     (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "",
-                    toInt64((*json)["lockToken"]),
+                    bodyString((*json)["lockToken"]),
                     optionalBodyString((*json)["expectedMemberQq"]));
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
@@ -2967,7 +3084,7 @@ int main() {
                     actorQq,
                     cancelledBy,
                     (*json)["reason"].isString() ? (*json)["reason"].asString() : "",
-                    toInt64((*json)["lockToken"]),
+                    bodyString((*json)["lockToken"]),
                     optionalBodyString((*json)["expectedMemberQq"]));
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
@@ -2977,13 +3094,14 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/role",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing role update"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->setSlotRole(
                     teamId,
@@ -3000,13 +3118,14 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/quick-reserve",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["reserveType"].isString()) {
                 callback(jsonResponse(errorJson("Missing quick reserve body"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->quickReserve(
                     teamId,
@@ -3020,8 +3139,11 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/cancellations/{1}/{2}",
-        [db, respondMutation](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &qq, long long timestamp) {
+            const auto json = request->getJsonObject();
+            const Value body = json == nullptr ? Value(Json::objectValue) : *json;
+            if (!requireSelfOrAdmin(qq, body, callback)) return;
             try {
                 const auto result = db->dismissCancellation(qq, timestamp);
                 respondMutation(std::move(callback), result);
@@ -3032,12 +3154,13 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/team-locks",
-        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["teamId"].isString()) {
                 callback(jsonResponse(errorJson("Missing teamId"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->setTeamLock((*json)["teamId"].asString()));
             } catch (const std::exception &error) {
@@ -3047,8 +3170,9 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/team-locks/{1}",
-        [db, respondOkMutation](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondOkMutation, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
+            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->removeTeamLock(teamId));
             } catch (const std::exception &error) {
@@ -3085,12 +3209,13 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/subsidy-presets",
-        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing presets"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->updateSubsidyPresets((*json)["presets"]));
             } catch (const std::exception &error) {
@@ -3100,13 +3225,14 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidy-types",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing subsidy types"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireAdmin(*json, callback)) return;
             try {
                 const auto result = db->updateTeamSubsidyTypes(teamId, (*json)["subsidyTypes"]);
                 respondMutation(std::move(callback), result);
@@ -3117,13 +3243,14 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidies/{2}",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing subsidy selections"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireSelfOrAdmin(qq, *json, callback)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::optional<std::string>(teamId),
@@ -3139,13 +3266,14 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/archives/{1}/subsidies/{2}",
-        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &archiveId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing subsidy selections"), drogon::k400BadRequest));
                 return;
             }
+            if (!requireSelfOrAdmin(qq, *json, callback)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::nullopt,
@@ -3161,7 +3289,8 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/backups",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
             try {
                 callback(jsonResponse(db->backups()));
             } catch (const std::exception &error) {
@@ -3171,7 +3300,12 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/backups",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            const std::string actorQq = json != nullptr && (*json)["actorQq"].isString()
+                ? (*json)["actorQq"].asString()
+                : request->getParameter("actorQq");
+            if (!requireAdminQq(actorQq, callback)) return;
             try {
                 callback(jsonResponse(db->createBackup()));
             } catch (const std::exception &error) {
@@ -3181,8 +3315,13 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/backups/{1}/restore",
-        [db, respondMutation](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &name) {
+            const auto json = request->getJsonObject();
+            const std::string actorQq = json != nullptr && (*json)["actorQq"].isString()
+                ? (*json)["actorQq"].asString()
+                : request->getParameter("actorQq");
+            if (!requireAdminQq(actorQq, callback)) return;
             try {
                 const auto result = db->restoreBackup(name);
                 respondMutation(std::move(callback), result);
@@ -3193,8 +3332,9 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/backups/{1}/download",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &name) {
+            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
             try {
                 const auto path = db->backupDownloadPath(name);
                 if (!path.has_value()) {
@@ -3220,8 +3360,13 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/backups/{1}",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &name) {
+            const auto json = request->getJsonObject();
+            const std::string actorQq = json != nullptr && (*json)["actorQq"].isString()
+                ? (*json)["actorQq"].asString()
+                : request->getParameter("actorQq");
+            if (!requireAdminQq(actorQq, callback)) return;
             try {
                 callback(jsonResponse(db->deleteBackup(name)));
             } catch (const std::exception &error) {
@@ -3231,7 +3376,8 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/backups/import",
-        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
             try {
                 const auto body = request->body();
                 respondOkMutation(std::move(callback), db->importBackup(std::string(body.data(), body.size())));

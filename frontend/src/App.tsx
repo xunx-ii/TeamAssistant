@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { loadAdminQQs } from './config'
 import { initTheme } from './storage/theme'
 import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
@@ -13,7 +12,7 @@ import {
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchServerChanges, fetchServerVersion, mutateData, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
-import { applyMutation, type Mutation, type Snapshot } from './dataStore'
+import { applyMutation, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
@@ -81,7 +80,7 @@ function App() {
   const [archivedTeams, setArchivedTeams] = useState<ArchivedTeam[]>(loadArchivedTeams)
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>(loadOperationLogs)
   const [userProfiles, setUserProfiles] = useState<UserProfiles>(loadUserProfiles)
-  const [adminQQs, setAdminQQs] = useState<string[]>([])
+  const [isAdmin, setIsAdmin] = useState(false)
   const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
 
   const [signupSlot, setSignupSlot] = useState<number | null>(null)
@@ -113,7 +112,6 @@ function App() {
   const syncingChangesRef = useRef(false)
   const pendingServerEventRef = useRef<ServerEvent | null>(null)
 
-  const isAdmin = qq ? adminQQs.includes(qq) : false
   const activeTeamExists = teams.some(t => t.id === activeTeamId)
   const resolvedActiveTeamId = activeTeamExists ? activeTeamId : (teams[0]?.id ?? '')
   const activeTeam = teams.find(t => t.id === resolvedActiveTeamId) ?? teams[0]
@@ -154,6 +152,9 @@ function App() {
     const snapshot = normalizeServerData(data)
     if (Array.isArray(data.subsidyPresets)) {
       syncSubsidyPresets(data.subsidyPresets)
+    }
+    if (typeof data.isAdmin === 'boolean') {
+      setIsAdmin(data.isAdmin)
     }
     if (snapshot.teams.length === 0) return false
     const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
@@ -244,8 +245,11 @@ function App() {
           continue
         }
 
-        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current)
+        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current, qq)
         if (!changes) return false
+        if (typeof changes.isAdmin === 'boolean') {
+          setIsAdmin(changes.isAdmin)
+        }
 
         let synced = true
         if (changes.data) {
@@ -268,20 +272,20 @@ function App() {
     } finally {
       syncingChangesRef.current = false
     }
-  }, [syncLockState, syncServerData])
+  }, [qq, syncLockState, syncServerData])
 
   useEffect(() => {
     let active = true
     const initialize = async () => {
-      const [sm, admins] = await Promise.all([
-        initServerMode(),
-        loadAdminQQs(),
-      ])
+      const sm = await initServerMode()
       if (!active) return
-      setAdminQQs(admins)
       if (sm) {
-        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current)
+        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current, qq)
         if (!active) return
+        const viewerIsAdmin = changes?.isAdmin === true
+        if (typeof changes?.isAdmin === 'boolean') {
+          setIsAdmin(viewerIsAdmin)
+        }
         const loadedData = changes?.data ?? null
         if (loadedData && syncServerData(loadedData)) {
           const loadedTeams = loadTeams()
@@ -299,7 +303,12 @@ function App() {
             setActiveTeamId(loadedTeams[0].id)
           }
         } else if (loadedData && normalizeServerData(loadedData).teams.length === 0) {
-          await saveTeams(loadTeams())
+          if (viewerIsAdmin) {
+            const localTeams = loadTeams()
+            if (localTeams[0]) {
+              await mutateData({ type: 'createTeam', team: localTeams[0] }, qq)
+            }
+          }
         }
       }
       if (!active) return
@@ -314,7 +323,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [syncSnapshot, syncServerData])
+  }, [qq, syncSnapshot, syncServerData])
 
   useEffect(() => { initTheme() }, [])
 
@@ -371,12 +380,16 @@ function App() {
       return { ok: true }
     }
 
-    const result = await mutateData(mutation)
+    const result = await mutateData(mutation, qq)
     if (result.ok) {
       if (result.data) {
         syncServerData(result.data)
       } else {
+        const previousDataVersion = dataVersionRef.current
         applyLocalMutation(mutation)
+        if (typeof result.dataVersion === 'number' && typeof previousDataVersion === 'number' && result.dataVersion > previousDataVersion + 1) {
+          void syncServerChanges({ dataVersion: result.dataVersion, lockVersion: result.lockVersion ?? lockVersionRef.current ?? 0 })
+        }
         if (typeof result.dataVersion === 'number') dataVersionRef.current = result.dataVersion
         if (typeof result.lockVersion === 'number') lockVersionRef.current = result.lockVersion
       }
@@ -409,7 +422,7 @@ function App() {
     }
 
     return result
-  }, [applyLocalMutation, applyReleasedSlotLock, qq, serverMode, syncServerData])
+  }, [applyLocalMutation, applyReleasedSlotLock, qq, serverMode, syncServerChanges, syncServerData])
 
   const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
   const handleBackupRestored = (data: ServerData) => {
@@ -612,7 +625,7 @@ function App() {
     })
   }
 
-  const handleSignupConfirm = async (data: Omit<Member, 'qq'>, lockTimestamp?: number) => {
+  const handleSignupConfirm = async (data: Omit<Member, 'qq'>, lockTimestamp?: LockToken) => {
     const slotIndex = signupSlot ?? editSlot
     if (slotIndex === null || !qq || !activeTeam) return
     const originalQq = editSlot !== null ? activeTeam.slots[editSlot]?.member?.qq : null
@@ -642,7 +655,7 @@ function App() {
     }
   }
 
-  const handleCancelConfirm = async (reason: string, lockTimestamp?: number) => {
+  const handleCancelConfirm = async (reason: string, lockTimestamp?: LockToken) => {
     if (cancelSlot === null || !qq || !activeTeam) return
     const textReason = normalizeTextInput(reason, { maxLength: TEXT_INPUT_LIMITS.cancelReason, multiline: true })
     if (!textReason) return
@@ -664,7 +677,7 @@ function App() {
     }
   }
 
-  const handleLeave = useCallback(async (slotIndex: number, lockTimestamp?: number) => {
+  const handleLeave = useCallback(async (slotIndex: number, lockTimestamp?: LockToken) => {
     if (!activeTeam || !qq) return
     const expectedMemberQq = activeTeam.slots[slotIndex]?.member?.qq ?? null
     const result = await runMutation({
@@ -680,7 +693,7 @@ function App() {
     }
   }, [activeTeam, qq, runMutation])
 
-  const handleEditSlotLeave = useCallback((lockTimestamp?: number) => {
+  const handleEditSlotLeave = useCallback((lockTimestamp?: LockToken) => {
     if (editSlot === null) return
     void handleLeave(editSlot, lockTimestamp)
   }, [editSlot, handleLeave])
@@ -1030,12 +1043,14 @@ function App() {
       <PresetSubsidyDialog
         open={showSubsidyPreset}
         serverMode={serverMode}
+        actorQq={qq}
         subsidyPresets={subsidyPresets}
         onSaved={setSubsidyPresets}
         onClose={() => setShowSubsidyPreset(false)}
       />
       <BackupSettingsDialog
         open={showBackupSettings}
+        actorQq={qq}
         onRestored={handleBackupRestored}
         onClose={() => setShowBackupSettings(false)}
       />

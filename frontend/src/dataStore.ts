@@ -10,6 +10,8 @@ export interface Snapshot {
   userProfiles: UserProfiles
 }
 
+export type LockToken = number | string
+
 export type Mutation =
   | { type: 'createTeam'; team: Team }
   | { type: 'deleteTeam'; teamId: string; fallbackTeam?: Team }
@@ -37,7 +39,7 @@ export type Mutation =
       slotIndex: number
       member: Member
       actorQq?: string
-      lockTimestamp?: number
+      lockTimestamp?: LockToken
       expectedMemberQq?: string | null
     }
   | {
@@ -48,7 +50,7 @@ export type Mutation =
       cancelledBy: string
       timestamp?: number
       actorQq?: string
-      lockTimestamp?: number
+      lockTimestamp?: LockToken
       expectedMemberQq?: string | null
     }
   | {
@@ -56,7 +58,7 @@ export type Mutation =
       teamId: string
       slotIndex: number
       actorQq?: string
-      lockTimestamp?: number
+      lockTimestamp?: LockToken
       expectedMemberQq?: string | null
     }
   | { type: 'dismissCancellation'; qq: string; timestamp: number }

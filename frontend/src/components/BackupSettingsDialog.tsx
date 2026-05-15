@@ -15,6 +15,7 @@ import { formatShanghaiMonthDayTimeMinute } from '../time'
 
 interface Props {
   open: boolean
+  actorQq?: string | null
   onRestored: (data: ServerData) => void
   onClose: () => void
 }
@@ -33,7 +34,7 @@ function formatSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
+export function BackupSettingsDialog({ open, actorQq, onRestored, onClose }: Props) {
   const [backups, setBackups] = useState<BackupEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -56,18 +57,18 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   }, [])
 
   const loadBackups = useCallback(async () => {
-    const result = await fetchBackups()
+    const result = await fetchBackups(actorQq)
     if (result.ok) {
       setBackups(result.backups ?? [])
       return
     }
     setMessage(result.error ?? '读取备份失败')
-  }, [])
+  }, [actorQq])
 
   useEffect(() => {
     if (!open) return
     let active = true
-    void fetchBackups().then(result => {
+    void fetchBackups(actorQq).then(result => {
       if (!active) return
       if (result.ok) {
         setBackups(result.backups ?? [])
@@ -78,7 +79,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     return () => {
       active = false
     }
-  }, [open])
+  }, [actorQq, open])
 
   const handleClose = () => {
     resolveConfirm(false)
@@ -96,7 +97,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (!shouldBackup) return
     setBusy(true)
     setMessage('')
-    const result = await createBackup()
+    const result = await createBackup(actorQq)
     if (result.ok) {
       setBackups(result.backups ?? [])
       setMessage('已备份')
@@ -116,7 +117,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (shouldBackupCurrent) {
       setBusy(true)
       setMessage('')
-      const backupResult = await createBackup()
+      const backupResult = await createBackup(actorQq)
       setBusy(false)
       if (!backupResult.ok) {
         setMessage(backupResult.error ?? '回退前备份失败')
@@ -135,7 +136,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (!shouldRestore) return
     setBusy(true)
     setMessage('')
-    const result = await restoreBackup(name)
+    const result = await restoreBackup(name, actorQq)
     if (result.ok && result.data) {
       onRestored(result.data)
       await loadBackups()
@@ -157,7 +158,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (!shouldDelete) return
     setBusy(true)
     setMessage('')
-    const result = await deleteBackup(name)
+    const result = await deleteBackup(name, actorQq)
     if (result.ok) {
       setBackups(result.backups ?? [])
       setMessage('已删除')
@@ -170,7 +171,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
   const handleDownload = async (name: string) => {
     setBusy(true)
     setMessage('')
-    const result = await downloadBackup(name)
+    const result = await downloadBackup(name, actorQq)
     if (result.ok) {
       const url = URL.createObjectURL(result.blob)
       const link = document.createElement('a')
@@ -198,7 +199,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     if (shouldBackupCurrent) {
       setBusy(true)
       setMessage('')
-      const backupResult = await createBackup()
+      const backupResult = await createBackup(actorQq)
       setBusy(false)
       if (!backupResult.ok) {
         setMessage(backupResult.error ?? '导入前备份失败')
@@ -220,7 +221,7 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     }
     setBusy(true)
     setMessage('')
-    const result = await importBackupFile(file)
+    const result = await importBackupFile(file, actorQq)
     if (result.ok && result.data) {
       onRestored(result.data)
       await loadBackups()

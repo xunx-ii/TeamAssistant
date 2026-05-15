@@ -28,6 +28,7 @@ struct Config {
     int clients = 30;
     int timeoutSeconds = 10;
     bool prepareData = true;
+    bool sameSlot = false;
 };
 
 struct HttpResult {
@@ -80,9 +81,10 @@ std::string apiPath(const std::string &path) {
 
 void usage() {
     std::cout
-        << "Usage: teamassistant_concurrency_bench [--url http://127.0.0.1:23219] [--clients 30] [--no-prepare]\n"
+        << "Usage: teamassistant_concurrency_bench [--url http://127.0.0.1:23219] [--clients 30] [--no-prepare] [--same-slot]\n"
         << "\n"
-        << "Runs 30 concurrent signup flows by default: acquire slot lock, then save member.\n";
+        << "Runs concurrent signup flows by default: acquire slot lock, then save member.\n"
+        << "--same-slot makes all clients compete for one team/slot and expects one winner.\n";
 }
 
 Config parseArgs(int argc, char **argv) {
@@ -114,6 +116,10 @@ Config parseArgs(int argc, char **argv) {
         }
         if (arg == "--no-prepare") {
             config.prepareData = false;
+            continue;
+        }
+        if (arg == "--same-slot") {
+            config.sameSlot = true;
             continue;
         }
         throw std::runtime_error("Unknown argument: " + arg);
@@ -178,10 +184,11 @@ Value benchTeam(int index) {
     return team;
 }
 
-Value preparePayload(int clients) {
+Value preparePayload(int clients, bool sameSlot) {
     Value data;
     data["teams"] = Value(Json::arrayValue);
-    for (int index = 0; index < clients; ++index) {
+    const int teamCount = sameSlot ? 1 : clients;
+    for (int index = 0; index < teamCount; ++index) {
         data["teams"].append(benchTeam(index));
     }
     data["cancellations"] = Value(Json::arrayValue);
@@ -201,6 +208,16 @@ Value memberPayload(int index) {
     member["note"] = "";
     member["hasOrangeWeapon"] = false;
     return member;
+}
+
+std::string resultReason(const HttpResult &response) {
+    if (response.json["reason"].isString()) {
+        return response.json["reason"].asString();
+    }
+    if (response.json["error"].isString()) {
+        return response.json["error"].asString();
+    }
+    return "";
 }
 
 class StartGate {
@@ -230,8 +247,8 @@ WorkerResult signupFlow(const Config &config, trantor::EventLoop *loop, StartGat
     auto client = drogon::HttpClient::newHttpClient(config.baseUrl, loop);
     WorkerResult result;
     result.index = index;
-    const std::string teamId = "bench-team-" + std::to_string(index);
-    const int slotIndex = index % 25;
+    const std::string teamId = config.sameSlot ? "bench-team-0" : "bench-team-" + std::to_string(index);
+    const int slotIndex = config.sameSlot ? 0 : index % 25;
     const std::string qq = "bench-qq-" + std::to_string(10000 + index);
 
     gate.wait();
@@ -249,8 +266,16 @@ WorkerResult signupFlow(const Config &config, trantor::EventLoop *loop, StartGat
     result.lockStatus = lockResponse.status;
     result.lockOk = lockResponse.ok;
     if (!result.lockOk) {
-        result.reason = "lock failed: " + std::string(drogon::to_string_view(lockResponse.requestResult)) +
-            " http=" + std::to_string(lockResponse.status) + " body=" + lockResponse.body;
+        result.reason = resultReason(lockResponse);
+        if (result.reason.empty()) {
+            result.reason = "lock failed: " + std::string(drogon::to_string_view(lockResponse.requestResult)) +
+                " http=" + std::to_string(lockResponse.status) + " body=" + lockResponse.body;
+        }
+        result.totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+        return result;
+    }
+
+    if (config.sameSlot) {
         result.totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
         return result;
     }
@@ -274,8 +299,11 @@ WorkerResult signupFlow(const Config &config, trantor::EventLoop *loop, StartGat
     result.saveStatus = saveResponse.status;
     result.saveOk = saveResponse.ok;
     if (!result.saveOk) {
-        result.reason = "save failed: " + std::string(drogon::to_string_view(saveResponse.requestResult)) +
-            " http=" + std::to_string(saveResponse.status) + " body=" + saveResponse.body;
+        result.reason = resultReason(saveResponse);
+        if (result.reason.empty()) {
+            result.reason = "save failed: " + std::string(drogon::to_string_view(saveResponse.requestResult)) +
+                " http=" + std::to_string(saveResponse.status) + " body=" + saveResponse.body;
+        }
     }
 
     result.totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
@@ -332,7 +360,9 @@ int main(int argc, char **argv) {
         }
 
         if (config.prepareData) {
-            const HttpResult prepared = requestJson(client, drogon::Put, "/data", preparePayload(config.clients), config.timeoutSeconds);
+            Value payload = preparePayload(config.clients, config.sameSlot);
+            payload["actorQq"] = "89906502";
+            const HttpResult prepared = requestJson(client, drogon::Put, "/data", payload, config.timeoutSeconds);
             if (!prepared.ok) {
                 std::cerr << "Failed to prepare benchmark data: "
                           << std::string(drogon::to_string_view(prepared.requestResult))
@@ -378,6 +408,7 @@ int main(int argc, char **argv) {
         std::cout << "TeamAssistant signup concurrency benchmark\n";
         std::cout << "url=" << config.baseUrl << " clients=" << config.clients
                   << " prepareData=" << (config.prepareData ? "true" : "false")
+                  << " sameSlot=" << (config.sameSlot ? "true" : "false")
                   << " batchElapsed=" << batchMs << "ms\n";
         std::cout << "lockSuccess=" << lockSuccess << "/" << config.clients
                   << " saveSuccess=" << saveSuccess << "/" << config.clients << "\n";
@@ -385,7 +416,7 @@ int main(int argc, char **argv) {
         printStats("save", saveLatencies);
         printStats("total", totalLatencies);
 
-        if (saveSuccess != config.clients) {
+        if (!config.sameSlot && saveSuccess != config.clients) {
             std::cout << "\nFailures:\n";
             for (const auto &result : results) {
                 if (!result.saveOk) {
@@ -396,6 +427,21 @@ int main(int argc, char **argv) {
                               << " saveHttp=" << result.saveStatus
                               << " reason=" << result.reason << "\n";
                 }
+            }
+            return 1;
+        }
+
+        if (config.sameSlot && lockSuccess != 1) {
+            std::cout << "\nExpected exactly one same-slot lock winner.\n";
+            std::cout << "Results:\n";
+            for (const auto &result : results) {
+                std::cout << "#" << result.index
+                          << " lockOk=" << (result.lockOk ? "true" : "false")
+                          << " saveOk=" << (result.saveOk ? "true" : "false")
+                          << " lockHttp=" << result.lockStatus
+                          << " saveHttp=" << result.saveStatus
+                          << " total=" << result.totalMs << "ms"
+                          << " reason=" << result.reason << "\n";
             }
             return 1;
         }

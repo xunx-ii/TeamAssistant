@@ -92,6 +92,7 @@ export async function saveTeams(teams: Team[]) {
       archivedTeams: loadArchivedTeamsLocal(),
       logs: loadLogsLocal(),
       userProfiles: loadUserProfilesLocal(),
+      actorQq: getStoredQQ(),
     })
   }
 }
@@ -113,6 +114,7 @@ export async function saveCancellations(cancellations: Cancellation[]) {
       archivedTeams: loadArchivedTeamsLocal(),
       logs: loadLogsLocal(),
       userProfiles: loadUserProfilesLocal(),
+      actorQq: getStoredQQ(),
     })
   }
 }

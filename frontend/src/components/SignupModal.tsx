@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
+import type { LockToken } from '../dataStore'
 import { acquireSlotLock, releaseSlotLock } from '../api'
 import { ChevronsUpDown, Search, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
@@ -24,11 +25,11 @@ interface Props {
   lockRetrySignal?: string | number
   takenMartialArts: number[]
   readOnly?: boolean
-  onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void | Promise<void>
+  onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: LockToken) => void | Promise<void>
   onClose: () => void
   onLockAcquired?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp: number; lockVersion?: number }) => void
   onLockReleased?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => void
-  onLeave?: (lockTimestamp?: number) => void
+  onLeave?: (lockTimestamp?: LockToken) => void
   onCancelMember?: () => void
 }
 
@@ -39,11 +40,13 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const [note, setNote] = useState(sanitizeTextInput(existing?.note ?? '', { maxLength: TEXT_INPUT_LIMITS.note }))
   const [hasOrangeWeapon, setHasOrangeWeapon] = useState(existing?.hasOrangeWeapon ?? false)
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
+  const [lockToken, setLockToken] = useState<LockToken | undefined>(undefined)
   const [error, setError] = useState('')
   const [maSearch, setMaSearch] = useState('')
   const [showMaDropdown, setShowMaDropdown] = useState(false)
   const [saving, setSaving] = useState(false)
   const lockTimestampRef = useRef(0)
+  const lockTokenRef = useRef<LockToken | undefined>(undefined)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(false)
@@ -82,13 +85,16 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     requestingLockRef.current = false
     if (scope !== lockScopeRef.current) {
       if (result.ok && result.timestamp) {
-        void releaseSlotLock(teamId, slotIndex, lockQq, result.timestamp)
+        void releaseSlotLock(teamId, slotIndex, lockQq, result.lockToken ?? result.timestamp)
       }
       return
     }
     if (result.ok && result.timestamp) {
+      const token = result.lockToken ?? result.timestamp
       lockTimestampRef.current = result.timestamp
+      lockTokenRef.current = token
       setLockTimestamp(result.timestamp)
+      setLockToken(token)
       onLockAcquired?.({ teamId, slotIndex, qq: lockQq, timestamp: result.timestamp, lockVersion: result.lockVersion })
       setError('')
       return
@@ -110,12 +116,15 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       lockScopeRef.current += 1
       requestingLockRef.current = false
       const currentLockTimestamp = lockTimestampRef.current
+      const currentLockToken = lockTokenRef.current
       lockTimestampRef.current = 0
+      lockTokenRef.current = undefined
       if (currentLockTimestamp > 0) {
         onLockReleased?.({ teamId, slotIndex, qq: lockQq, timestamp: currentLockTimestamp })
-        void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
+        void releaseSlotLock(teamId, slotIndex, lockQq, currentLockToken ?? currentLockTimestamp)
       }
       setLockTimestamp(0)
+      setLockToken(undefined)
       setError('')
       savingRef.current = false
       setSaving(false)
@@ -129,10 +138,12 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
 
   const handleClose = () => {
     const currentLockTimestamp = lockTimestampRef.current
+    const currentLockToken = lockTokenRef.current
     lockTimestampRef.current = 0
+    lockTokenRef.current = undefined
     if (teamId && slotIndex != null && currentLockTimestamp > 0) {
       onLockReleased?.({ teamId, slotIndex, qq: lockQq, timestamp: currentLockTimestamp })
-      void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
+      void releaseSlotLock(teamId, slotIndex, lockQq, currentLockToken ?? currentLockTimestamp)
     }
     onClose()
   }
@@ -181,7 +192,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       }
     }
     try {
-      await onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockTimestamp)
+      await onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockToken ?? lockTimestamp)
     } finally {
       savingRef.current = false
       if (mountedRef.current) {
@@ -415,7 +426,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
                 {saving ? '保存中' : existing ? '保存修改' : shouldLock && lockTimestamp <= 0 ? '锁定中' : '确认报名'}
               </Button>
               {onLeave && (
-                <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" disabled={saving} onClick={() => onLeave(lockTimestamp)}>
+                <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" disabled={saving} onClick={() => onLeave(lockToken ?? lockTimestamp)}>
                   退出报名
                 </Button>
               )}

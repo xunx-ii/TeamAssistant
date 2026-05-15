@@ -9,6 +9,7 @@ import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT
 interface Props {
   open: boolean
   serverMode: boolean
+  actorQq?: string | null
   subsidyPresets: SubsidyType[]
   onSaved: (presets: SubsidyType[]) => void
   onClose: () => void
@@ -16,20 +17,21 @@ interface Props {
 
 interface EditorProps {
   serverMode: boolean
+  actorQq?: string | null
   subsidyPresets: SubsidyType[]
   onSaved: (presets: SubsidyType[]) => void
   onClose: () => void
 }
 
-export function PresetSubsidyDialog({ open, serverMode, subsidyPresets, onSaved, onClose }: Props) {
+export function PresetSubsidyDialog({ open, serverMode, actorQq, subsidyPresets, onSaved, onClose }: Props) {
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      {open && <PresetSubsidyEditor serverMode={serverMode} subsidyPresets={subsidyPresets} onSaved={onSaved} onClose={onClose} />}
+      {open && <PresetSubsidyEditor serverMode={serverMode} actorQq={actorQq} subsidyPresets={subsidyPresets} onSaved={onSaved} onClose={onClose} />}
     </Dialog>
   )
 }
 
-function PresetSubsidyEditor({ serverMode, subsidyPresets, onSaved, onClose }: EditorProps) {
+function PresetSubsidyEditor({ serverMode, actorQq, subsidyPresets, onSaved, onClose }: EditorProps) {
   const [presets, setPresets] = useState<SubsidyType[]>(subsidyPresets)
   const [saveError, setSaveError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -90,7 +92,7 @@ function PresetSubsidyEditor({ serverMode, subsidyPresets, onSaved, onClose }: E
         }))
         .filter(t => t.name && t.levels.length > 0)
       if (serverMode) {
-        const saved = await saveSubsidyPresetsRemote(valid)
+        const saved = await saveSubsidyPresetsRemote(valid, actorQq)
         if (!saved) {
           setSaveError('保存失败：未同步到服务器，请稍后重试')
           return

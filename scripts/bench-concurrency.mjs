@@ -101,12 +101,22 @@ try {
   }
 
   await waitForBackend(server, url)
-  const runner = spawnProcess('bench', bench, ['--url', url, '--clients', clients])
-  try {
-    const [code] = await waitForProcess(runner, benchTimeoutMs, '并发压测')
-    exitCode = code ?? 0
-  } finally {
-    await stopProcess(runner)
+  const scenarios = [
+    { label: 'bench-diff', args: ['--url', url, '--clients', clients] },
+    { label: 'bench-same', args: ['--url', url, '--clients', clients, '--same-slot'] },
+  ]
+  exitCode = 0
+  for (const scenario of scenarios) {
+    const runner = spawnProcess(scenario.label, bench, scenario.args)
+    try {
+      const [code] = await waitForProcess(runner, benchTimeoutMs, '并发压测')
+      if ((code ?? 0) !== 0) {
+        exitCode = code ?? 1
+        break
+      }
+    } finally {
+      await stopProcess(runner)
+    }
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))

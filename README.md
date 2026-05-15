@@ -35,4 +35,4 @@ npm run backend:build
 npm run bench:concurrency
 ```
 
-该命令会启动一个使用临时 SQLite 数据库的后端，然后运行 C++ 压测程序模拟 30 人同时抢锁并报名不同表格/格子。可用 `BENCH_CLIENTS=30`、`BENCH_PORT=23961` 调整参数。
+该命令会启动一个使用临时 SQLite 数据库的后端，然后运行 C++ 压测程序模拟 30 人同时报名不同表格/格子，以及 30 人同时抢同一个格子的内存锁冲突场景。可用 `BENCH_CLIENTS=30`、`BENCH_PORT=23961` 调整参数。
