@@ -65,6 +65,11 @@ struct RuntimeLockState {
     std::unordered_map<std::string, long long> teams;
 };
 
+struct DataPatchRecord {
+    long long version = 0;
+    Value patch = Value(Json::objectValue);
+};
+
 class VersionEventHub {
 public:
     int subscribe(drogon::ResponseStreamPtr stream, const Value &initialVersion) {
@@ -292,7 +297,7 @@ public:
             exec("BEGIN IMMEDIATE;");
             try {
                 replaceDataUnlocked(data);
-                bumpDataVersionUnlocked();
+                bumpDataVersionAndClearPatchesUnlocked();
                 exec("COMMIT;");
             } catch (...) {
                 exec("ROLLBACK;");
@@ -300,10 +305,7 @@ public:
             }
         }
         clearRuntimeLocks();
-        {
-            std::lock_guard lock(mutex_);
-            snapshot = bootstrapUnlocked();
-        }
+        snapshot = cachedBootstrap();
         snapshot["ok"] = true;
         return snapshot;
     }
@@ -318,9 +320,7 @@ public:
     }
 
     Value bootstrap(bool isAdmin = false) {
-        std::lock_guard lock(mutex_);
-        ensureSchema();
-        Value json = bootstrapUnlocked();
+        Value json = cachedBootstrap();
         json["isAdmin"] = isAdmin;
         return json;
     }
@@ -336,16 +336,16 @@ public:
         json["dataChanged"] = dataChanged;
         json["lockChanged"] = lockChanged;
         if (dataChanged) {
-            Value data;
-            {
-                std::lock_guard lock(mutex_);
-                ensureSchema();
-                data = bootstrapUnlocked();
+            Value patches = dataPatchesSince(dataVersion);
+            if (patches.isArray()) {
+                json["patches"] = patches;
+            } else {
+                Value data = cachedBootstrap();
+                data["isAdmin"] = isAdmin;
+                json["data"] = data;
+                json["dataVersion"] = data["dataVersion"];
+                json["lockVersion"] = data["lockVersion"];
             }
-            data["isAdmin"] = isAdmin;
-            json["data"] = data;
-            json["dataVersion"] = data["dataVersion"];
-            json["lockVersion"] = data["lockVersion"];
         }
         if (lockChanged) {
             Value locks = publicLocksSnapshot();
@@ -450,9 +450,18 @@ public:
             const std::string action = currentMemberQq.has_value()
                 ? "修改 #" + std::to_string(slotIndex + 1) + " 报名：" + normalizedMember["characterId"].asString()
                 : "报名 #" + std::to_string(slotIndex + 1) + "：" + normalizedMember["characterId"].asString();
+            const std::string logId = insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
             bumpDataVersionUnlocked();
-            insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
             result = mutationOkUnlocked("signupSlot", teamId, slotIndex, normalizedMember);
+            Value logPatch;
+            logPatch["id"] = logId;
+            logPatch["teamId"] = teamId;
+            logPatch["teamName"] = slot.teamName;
+            logPatch["timestamp"] = static_cast<Json::Int64>(now);
+            logPatch["actorQq"] = actorQq;
+            logPatch["action"] = action;
+            result["patch"]["log"] = logPatch;
+            rememberDataPatchUnlocked(result["patch"]);
             exec("COMMIT;");
             shouldReleaseLock = true;
         } catch (...) {
@@ -512,9 +521,18 @@ public:
             if (!characterId.empty()) {
                 action += "：" + characterId;
             }
-            insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
+            const std::string logId = insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
             bumpDataVersionUnlocked();
             result = mutationOkUnlocked("leaveSlot", teamId, slotIndex, resetStatus, Value(Json::nullValue));
+            Value logPatch;
+            logPatch["id"] = logId;
+            logPatch["teamId"] = teamId;
+            logPatch["teamName"] = slot.teamName;
+            logPatch["timestamp"] = static_cast<Json::Int64>(now);
+            logPatch["actorQq"] = actorQq;
+            logPatch["action"] = action;
+            result["patch"]["log"] = logPatch;
+            rememberDataPatchUnlocked(result["patch"]);
             exec("COMMIT;");
             shouldReleaseLock = true;
         } catch (...) {
@@ -589,9 +607,30 @@ public:
             const std::string characterId = slot.member["characterId"].isString() ? slot.member["characterId"].asString() : "";
             const std::string reset = computeResetStatus(slot, slotIndex);
             updateSlotStatusUnlocked(teamId, slotIndex, reset);
-            insertLogUnlocked(teamId, slot.teamName, now, cancelledBy, "取消 #" + std::to_string(slotIndex + 1) + " 报名：" + characterId);
+            const std::string action = "取消 #" + std::to_string(slotIndex + 1) + " 报名：" + characterId;
+            const std::string logId = insertLogUnlocked(teamId, slot.teamName, now, cancelledBy, action);
             bumpDataVersionUnlocked();
             result = mutationOkUnlocked("cancelSlot", teamId, slotIndex, reset, Value(Json::nullValue));
+            Value logPatch;
+            logPatch["id"] = logId;
+            logPatch["teamId"] = teamId;
+            logPatch["teamName"] = slot.teamName;
+            logPatch["timestamp"] = static_cast<Json::Int64>(now);
+            logPatch["actorQq"] = cancelledBy;
+            logPatch["action"] = action;
+            result["patch"]["log"] = logPatch;
+            if (slot.member.isObject()) {
+                Value cancellationPatch;
+                cancellationPatch["qq"] = slot.member["qq"].isString() ? slot.member["qq"].asString() : "";
+                cancellationPatch["reason"] = reason;
+                cancellationPatch["cancelledBy"] = cancelledBy;
+                cancellationPatch["teamId"] = teamId;
+                cancellationPatch["teamName"] = slot.teamName;
+                cancellationPatch["slotIndex"] = slotIndex;
+                cancellationPatch["timestamp"] = static_cast<Json::Int64>(now);
+                result["patch"]["cancellation"] = cancellationPatch;
+            }
+            rememberDataPatchUnlocked(result["patch"]);
             exec("COMMIT;");
             shouldReleaseLock = true;
         } catch (...) {
@@ -656,7 +695,7 @@ public:
         exec("BEGIN IMMEDIATE;");
         try {
             replaceSubsidyPresetsUnlocked(arrayOrEmpty(presets));
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             exec("COMMIT;");
         } catch (...) {
             exec("ROLLBACK;");
@@ -700,7 +739,7 @@ public:
                 ? "设置昵称：" + nickname
                 : "修改昵称：" + previous + " -> " + nickname;
             insertLogUnlocked("", "", now, qq, action);
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
 
             result = versionsUnlocked();
             result["ok"] = true;
@@ -728,7 +767,7 @@ public:
         exec("BEGIN IMMEDIATE;");
         try {
             insertTeamUnlocked(normalizeTeam(team, "默认团队"), nextTeamSortOrderUnlocked());
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -758,7 +797,7 @@ public:
             if (teamCountUnlocked() == 0 && fallbackTeam.isObject()) {
                 insertTeamUnlocked(normalizeTeam(fallbackTeam, "默认团队"), 0);
             }
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -805,7 +844,7 @@ public:
             if (teamCountUnlocked() == 0 && fallbackTeam.isObject()) {
                 insertTeamUnlocked(normalizeTeam(fallbackTeam, "默认团队"), 0);
             }
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -847,7 +886,7 @@ public:
             sqlite3_finalize(stmt);
 
             insertLogUnlocked(team["id"].asString(), team["name"].asString(), restoredAt, actorQq, "恢复表格");
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -892,7 +931,7 @@ public:
                 exec("ROLLBACK;");
                 return conflictJson("notFound");
             }
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -928,7 +967,7 @@ public:
             bindString(stmt, 2, writeJson(ids));
             stepDone(stmt);
             sqlite3_finalize(stmt);
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -955,7 +994,7 @@ public:
                 exec("ROLLBACK;");
                 return conflictJson("notFound");
             }
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -1018,7 +1057,7 @@ public:
 
             team["config"]["reservedSlots"] = reserved;
             updateTeamFromJsonUnlocked(team);
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -1122,7 +1161,7 @@ public:
 
             team["config"]["reservedSlots"] = sortUniqueIntArray(reserved);
             updateTeamFromJsonUnlocked(team);
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -1144,7 +1183,7 @@ public:
             sqlite3_bind_int64(stmt, 2, timestamp);
             stepDone(stmt);
             sqlite3_finalize(stmt);
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -1168,7 +1207,7 @@ public:
             team["subsidyTypes"] = normalizeSubsidyTypes(subsidyTypes);
             cleanMemberSubsidiesForTypes(team);
             updateTeamFromJsonUnlocked(team);
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -1229,7 +1268,7 @@ public:
                 updateTeamFromJsonUnlocked(team);
             }
             insertLogUnlocked(team["id"].asString(), team["name"].asString(), nowMs(), qq, "登记补贴");
-            bumpDataVersionUnlocked();
+            bumpDataVersionAndClearPatchesUnlocked();
             result = mutationVersionsUnlocked();
             exec("COMMIT;");
         } catch (...) {
@@ -1282,7 +1321,7 @@ public:
             exec("BEGIN IMMEDIATE;");
             try {
                 replaceDataUnlocked(data);
-                bumpDataVersionUnlocked();
+                bumpDataVersionAndClearPatchesUnlocked();
                 exec("COMMIT;");
             } catch (...) {
                 exec("ROLLBACK;");
@@ -1294,12 +1333,9 @@ public:
             result["backups"] = backupEntriesJson(listBackupsUnlocked());
         }
         clearRuntimeLocks();
-        {
-            std::lock_guard lock(mutex_);
-            Value snapshot = bootstrapUnlocked();
-            snapshot["ok"] = true;
-            result["data"] = snapshot;
-        }
+        Value snapshot = cachedBootstrap();
+        snapshot["ok"] = true;
+        result["data"] = snapshot;
         return result;
     }
 
@@ -1338,7 +1374,7 @@ public:
             exec("BEGIN IMMEDIATE;");
             try {
                 replaceDataUnlocked(data);
-                bumpDataVersionUnlocked();
+                bumpDataVersionAndClearPatchesUnlocked();
                 exec("COMMIT;");
             } catch (...) {
                 exec("ROLLBACK;");
@@ -1350,12 +1386,9 @@ public:
             result["backups"] = backupEntriesJson(listBackupsUnlocked());
         }
         clearRuntimeLocks();
-        {
-            std::lock_guard lock(mutex_);
-            Value snapshot = bootstrapUnlocked();
-            snapshot["ok"] = true;
-            result["data"] = snapshot;
-        }
+        Value snapshot = cachedBootstrap();
+        snapshot["ok"] = true;
+        result["data"] = snapshot;
         return result;
     }
 
@@ -1363,6 +1396,8 @@ private:
     sqlite3 *db_ = nullptr;
     std::mutex mutex_;
     std::mutex runtimeMutex_;
+    std::mutex snapshotMutex_;
+    std::mutex patchMutex_;
     std::filesystem::path dbPath_;
     std::filesystem::path dataDir_;
     std::filesystem::path backupDir_;
@@ -1371,6 +1406,10 @@ private:
     RuntimeLockState runtimeLocks_;
     std::atomic<long long> dataVersionCache_{1};
     std::atomic<long long> lockVersionCache_{1};
+    long long cachedSnapshotDataVersion_ = 0;
+    Value cachedSnapshot_ = Value(Json::nullValue);
+    std::vector<DataPatchRecord> dataPatches_;
+    static constexpr std::size_t maxDataPatches_ = 128;
     std::uint64_t nextLockToken_ = 1;
 
     static long long nowMs() {
@@ -1831,13 +1870,70 @@ private:
     }
 
     Value readTeamUnlocked(const std::string &teamId) {
-        Value snapshot = bootstrapUnlocked();
-        for (const auto &team : snapshot["teams"]) {
-            if (team["id"].isString() && team["id"].asString() == teamId) {
-                return team;
-            }
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "SELECT id, name, note, week_start, locked, reserved_slots_json, subsidy_types_json, member_subsidies_json "
+            "FROM teams WHERE id = ?",
+            &stmt);
+        bindString(stmt, 1, teamId);
+        if (sqlite3_step(stmt) != SQLITE_ROW) {
+            sqlite3_finalize(stmt);
+            return Value(Json::nullValue);
         }
-        return Value(Json::nullValue);
+
+        Value team;
+        team["id"] = textColumn(stmt, 0);
+        team["name"] = textColumn(stmt, 1);
+        team["note"] = textColumn(stmt, 2);
+        if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
+            team["weekStart"] = textColumn(stmt, 3);
+        }
+        Value config;
+        config["locked"] = sqlite3_column_int(stmt, 4) != 0;
+        config["reservedSlots"] = parseJson(textColumn(stmt, 5), Value(Json::arrayValue));
+        team["config"] = config;
+        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+            team["subsidyTypes"] = parseJson(textColumn(stmt, 6), Value(Json::arrayValue));
+        }
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            team["memberSubsidies"] = parseJson(textColumn(stmt, 7), Value(Json::objectValue));
+        }
+        sqlite3_finalize(stmt);
+
+        team["slots"] = Value(Json::arrayValue);
+        for (int index = 0; index < 25; ++index) {
+            team["slots"].append(defaultSlot(index));
+        }
+
+        sqlite3_stmt *slotStmt = nullptr;
+        prepare(
+            "SELECT slot_index, status, member_json, fixed_role, fixed_martial_art_index "
+            "FROM slots WHERE team_id = ? ORDER BY slot_index",
+            &slotStmt);
+        bindString(slotStmt, 1, teamId);
+        while (sqlite3_step(slotStmt) == SQLITE_ROW) {
+            const int index = sqlite3_column_int(slotStmt, 0);
+            if (index < 0 || index >= 25) {
+                continue;
+            }
+            Value slot;
+            slot["index"] = index;
+            slot["status"] = textColumn(slotStmt, 1);
+            slot["member"] = sqlite3_column_type(slotStmt, 2) == SQLITE_NULL
+                ? Value(Json::nullValue)
+                : parseJson(textColumn(slotStmt, 2), Value(Json::nullValue));
+            slot["fixedRole"] = sqlite3_column_type(slotStmt, 3) == SQLITE_NULL
+                ? Value(Json::nullValue)
+                : Value(textColumn(slotStmt, 3));
+            if (sqlite3_column_type(slotStmt, 4) == SQLITE_NULL) {
+                slot["fixedMartialArtIndex"] = Value(Json::nullValue);
+            } else {
+                slot["fixedMartialArtIndex"] = sqlite3_column_int(slotStmt, 4);
+            }
+            team["slots"][index] = slot;
+        }
+        sqlite3_finalize(slotStmt);
+        return normalizeTeam(team, team["name"].isString() ? team["name"].asString() : "默认团队");
     }
 
     Value readArchivedTeamUnlocked(const std::string &archiveId) {
@@ -1910,6 +2006,98 @@ private:
         return result;
     }
 
+    Value dataPatchesSince(std::optional<long long> clientVersion) {
+        if (!clientVersion.has_value()) {
+            return Value(Json::nullValue);
+        }
+
+        std::lock_guard lock(patchMutex_);
+        if (dataPatches_.empty()) {
+            return Value(Json::nullValue);
+        }
+        const long long firstVersion = dataPatches_.front().version;
+        const long long latestVersion = dataPatches_.back().version;
+        if (*clientVersion >= latestVersion) {
+            return Value(Json::arrayValue);
+        }
+        if (*clientVersion < firstVersion - 1) {
+            return Value(Json::nullValue);
+        }
+
+        Value patches(Json::arrayValue);
+        for (const auto &record : dataPatches_) {
+            if (record.version > *clientVersion) {
+                Value item = record.patch;
+                item["dataVersion"] = static_cast<Json::Int64>(record.version);
+                patches.append(item);
+            }
+        }
+        return patches;
+    }
+
+    void rememberDataPatchUnlocked(const Value &patch) {
+        const long long version = dataVersionCache_.load(std::memory_order_relaxed);
+        std::lock_guard lock(patchMutex_);
+        dataPatches_.push_back(DataPatchRecord{version, patch});
+        while (dataPatches_.size() > maxDataPatches_) {
+            dataPatches_.erase(dataPatches_.begin());
+        }
+    }
+
+    void clearDataPatchesUnlocked() {
+        std::lock_guard lock(patchMutex_);
+        dataPatches_.clear();
+    }
+
+    Value attachLiveLocks(Value json) {
+        Value locks = publicLocksSnapshot();
+        json["locks"] = locks["slots"];
+        json["teamLocks"] = locks["teams"];
+        json["lockVersion"] = locks["lockVersion"];
+        return json;
+    }
+
+    Value cachedBootstrap() {
+        const long long currentVersion = dataVersionCache_.load(std::memory_order_relaxed);
+        Value cached;
+        {
+            std::lock_guard lock(snapshotMutex_);
+            if (cachedSnapshotDataVersion_ == currentVersion && cachedSnapshot_.isObject()) {
+                cached = cachedSnapshot_;
+            }
+        }
+        if (cached.isObject()) {
+            return attachLiveLocks(std::move(cached));
+        }
+
+        Value rebuilt;
+        long long rebuiltVersion = 0;
+        {
+            std::lock_guard dbLock(mutex_);
+            ensureSchema();
+            const long long versionAfterDbLock = dataVersionCache_.load(std::memory_order_relaxed);
+            Value cachedAfterWait;
+            {
+                std::lock_guard snapshotLock(snapshotMutex_);
+                if (cachedSnapshotDataVersion_ == versionAfterDbLock && cachedSnapshot_.isObject()) {
+                    cachedAfterWait = cachedSnapshot_;
+                }
+            }
+            if (cachedAfterWait.isObject()) {
+                return attachLiveLocks(std::move(cachedAfterWait));
+            }
+
+            rebuilt = bootstrapDataUnlocked();
+            rebuiltVersion = rebuilt["dataVersion"].asInt64();
+            {
+                std::lock_guard lock(snapshotMutex_);
+                cachedSnapshotDataVersion_ = rebuiltVersion;
+                cachedSnapshot_ = rebuilt;
+            }
+        }
+        return attachLiveLocks(std::move(rebuilt));
+    }
+
     Value validateSlotMutationLockLocked(const std::string &teamId, int slotIndex, const std::string &qq, const std::string &lockToken) {
         if (teamId.empty() || slotIndex < 0 || qq.empty() || lockToken.empty()) {
             return conflictJson("missingFields");
@@ -1972,7 +2160,7 @@ private:
         sqlite3_finalize(stmt);
     }
 
-    void insertLogUnlocked(
+    std::string insertLogUnlocked(
         const std::string &teamId,
         const std::string &teamName,
         long long timestamp,
@@ -1993,6 +2181,7 @@ private:
         bindString(stmt, 6, action);
         stepDone(stmt);
         sqlite3_finalize(stmt);
+        return id;
     }
 
     Value mutationOkUnlocked(
@@ -2015,6 +2204,21 @@ private:
         return result;
     }
 
+    Value mutationOkUnlocked(
+        const std::string &type,
+        const std::string &teamId,
+        int slotIndex,
+        const std::string &status,
+        const Value &member,
+        const Value &extraPatch
+    ) {
+        Value result = mutationOkUnlocked(type, teamId, slotIndex, status, member);
+        for (const auto &name : extraPatch.getMemberNames()) {
+            result["patch"][name] = extraPatch[name];
+        }
+        return result;
+    }
+
     Value mutationOkUnlocked(const std::string &type, const std::string &teamId, int slotIndex, const Value &member) {
         return mutationOkUnlocked(type, teamId, slotIndex, "occupied", member);
     }
@@ -2022,6 +2226,18 @@ private:
     void bumpDataVersionUnlocked() {
         exec("UPDATE meta_versions SET data_version = data_version + 1 WHERE id = 1;");
         dataVersionCache_.fetch_add(1, std::memory_order_relaxed);
+        invalidateSnapshotCacheUnlocked();
+    }
+
+    void bumpDataVersionAndClearPatchesUnlocked() {
+        bumpDataVersionUnlocked();
+        clearDataPatchesUnlocked();
+    }
+
+    void invalidateSnapshotCacheUnlocked() {
+        std::lock_guard lock(snapshotMutex_);
+        cachedSnapshotDataVersion_ = 0;
+        cachedSnapshot_ = Value(Json::nullValue);
     }
 
     long long runtimeLockVersion() {
@@ -2241,7 +2457,7 @@ private:
         Value payload;
         payload["version"] = 1;
         payload["createdAt"] = shanghaiTimestamp(nowMs());
-        Value snapshot = bootstrapUnlocked();
+        Value snapshot = bootstrapDataUnlocked();
         Value data;
         data["teams"] = snapshot["teams"];
         data["cancellations"] = snapshot["cancellations"];
@@ -2249,9 +2465,10 @@ private:
         data["logs"] = snapshot["logs"];
         data["userProfiles"] = snapshot["userProfiles"];
         payload["data"] = data;
+        Value liveLocks = publicLocksSnapshot();
         Value locks;
-        locks["slots"] = snapshot["locks"];
-        locks["teams"] = snapshot["teamLocks"];
+        locks["slots"] = liveLocks["slots"];
+        locks["teams"] = liveLocks["teams"];
         payload["locks"] = locks;
         payload["subsidyPresets"] = snapshot["subsidyPresets"];
         return payload;
@@ -2497,7 +2714,7 @@ private:
         return presets;
     }
 
-    Value bootstrapUnlocked() {
+    Value bootstrapDataUnlocked() {
         Value json = versionsUnlocked();
         json["teams"] = Value(Json::arrayValue);
         json["cancellations"] = Value(Json::arrayValue);
@@ -2512,28 +2729,8 @@ private:
             "FROM teams ORDER BY sort_order, id",
             &stmt);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            Value team;
             const std::string teamId = textColumn(stmt, 0);
-            team["id"] = teamId;
-            team["name"] = textColumn(stmt, 1);
-            team["note"] = textColumn(stmt, 2);
-            if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-                team["weekStart"] = textColumn(stmt, 3);
-            }
-            Value config;
-            config["locked"] = sqlite3_column_int(stmt, 4) != 0;
-            config["reservedSlots"] = parseJson(textColumn(stmt, 5), Value(Json::arrayValue));
-            team["config"] = config;
-            if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-                team["subsidyTypes"] = parseJson(textColumn(stmt, 6), Value(Json::arrayValue));
-            }
-            if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-                team["memberSubsidies"] = parseJson(textColumn(stmt, 7), Value(Json::objectValue));
-            }
-            team["slots"] = Value(Json::arrayValue);
-            for (int index = 0; index < 25; ++index) {
-                team["slots"].append(defaultSlot(index));
-            }
+            Value team = teamFromRow(stmt);
 
             sqlite3_stmt *slotStmt = nullptr;
             prepare(
@@ -2619,11 +2816,32 @@ private:
 
         json["subsidyPresets"] = readSubsidyPresetsUnlocked();
 
-        Value locks = publicLocksSnapshot();
-        json["locks"] = locks["slots"];
-        json["teamLocks"] = locks["teams"];
-        json["lockVersion"] = locks["lockVersion"];
         return json;
+    }
+
+    Value teamFromRow(sqlite3_stmt *stmt) {
+        Value team;
+        team["id"] = textColumn(stmt, 0);
+        team["name"] = textColumn(stmt, 1);
+        team["note"] = textColumn(stmt, 2);
+        if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
+            team["weekStart"] = textColumn(stmt, 3);
+        }
+        Value config;
+        config["locked"] = sqlite3_column_int(stmt, 4) != 0;
+        config["reservedSlots"] = parseJson(textColumn(stmt, 5), Value(Json::arrayValue));
+        team["config"] = config;
+        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+            team["subsidyTypes"] = parseJson(textColumn(stmt, 6), Value(Json::arrayValue));
+        }
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            team["memberSubsidies"] = parseJson(textColumn(stmt, 7), Value(Json::objectValue));
+        }
+        team["slots"] = Value(Json::arrayValue);
+        for (int index = 0; index < 25; ++index) {
+            team["slots"].append(defaultSlot(index));
+        }
+        return team;
     }
 };
 

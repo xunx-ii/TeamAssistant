@@ -102,7 +102,7 @@ try {
 
   await waitForBackend(server, url)
   const scenarios = [
-    { label: 'bench-diff', args: ['--url', url, '--clients', clients] },
+    { label: 'bench-diff', args: ['--url', url, '--clients', clients, '--sync-after-save'] },
     { label: 'bench-same', args: ['--url', url, '--clients', clients, '--same-slot'] },
   ]
   exitCode = 0

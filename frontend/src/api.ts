@@ -56,6 +56,7 @@ export interface ServerChanges {
   dataChanged: boolean
   lockChanged: boolean
   data?: ServerData
+  patches?: unknown[]
   locks?: LockState
 }
 
@@ -482,6 +483,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
       dataChanged: Boolean(payload.dataChanged),
       lockChanged: Boolean(payload.lockChanged),
       data: isServerData(payload.data) ? payload.data : undefined,
+      patches: Array.isArray((payload as { patches?: unknown }).patches) ? (payload as { patches: unknown[] }).patches : undefined,
       locks: locks && typeof locks === 'object'
         ? {
             slots: Array.isArray(locks.slots) ? locks.slots : [],

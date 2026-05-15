@@ -805,3 +805,59 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
     }
   }
 }
+
+export function applyServerPatch(snapshot: Snapshot, patch: unknown): Snapshot {
+  if (!isPlainObject(patch) || typeof patch.type !== 'string') {
+    return snapshot
+  }
+
+  const next = cloneSnapshot(snapshot)
+  if (
+    (patch.type === 'signupSlot' || patch.type === 'cancelSlot' || patch.type === 'leaveSlot') &&
+    typeof patch.teamId === 'string' &&
+    isSlotIndex(patch.slotIndex) &&
+    isPlainObject(patch.slot)
+  ) {
+    const team = next.teams.find(item => item.id === patch.teamId)
+    const slot = team?.slots[patch.slotIndex]
+    if (slot) {
+      const patchedSlot = patch.slot
+      slot.status = toText(patchedSlot.status, slot.status) as typeof slot.status
+      slot.member = isPlainObject(patchedSlot.member) ? normalizeMember(patchedSlot.member) : null
+      slot.fixedRole = patchedSlot.fixedRole === 'T' || patchedSlot.fixedRole === '治疗' || patchedSlot.fixedRole === 'DPS'
+        ? patchedSlot.fixedRole
+        : null
+      slot.fixedMartialArtIndex = typeof patchedSlot.fixedMartialArtIndex === 'number'
+        ? patchedSlot.fixedMartialArtIndex
+        : null
+    }
+
+    if (isPlainObject(patch.cancellation)) {
+      next.cancellations.push({
+        qq: toText(patch.cancellation.qq),
+        reason: toText(patch.cancellation.reason),
+        cancelledBy: toText(patch.cancellation.cancelledBy),
+        teamId: toText(patch.cancellation.teamId),
+        teamName: toText(patch.cancellation.teamName),
+        slotIndex: toFiniteNumber(patch.cancellation.slotIndex),
+        timestamp: toFiniteNumber(patch.cancellation.timestamp),
+      })
+    }
+
+    if (isPlainObject(patch.log)) {
+      const id = toText(patch.log.id)
+      if (id && !next.logs.some(log => log.id === id)) {
+        next.logs.push({
+          id,
+          teamId: toText(patch.log.teamId),
+          teamName: toText(patch.log.teamName),
+          timestamp: toFiniteNumber(patch.log.timestamp),
+          actorQq: toText(patch.log.actorQq),
+          action: toText(patch.log.action),
+        })
+      }
+    }
+  }
+
+  return next
+}

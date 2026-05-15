@@ -29,6 +29,7 @@ struct Config {
     int timeoutSeconds = 10;
     bool prepareData = true;
     bool sameSlot = false;
+    bool syncAfterSave = false;
 };
 
 struct HttpResult {
@@ -49,6 +50,16 @@ struct WorkerResult {
     std::string reason;
     int lockStatus = 0;
     int saveStatus = 0;
+};
+
+struct SyncResult {
+    int index = 0;
+    bool ok = false;
+    long long ms = 0;
+    int status = 0;
+    bool dataChanged = false;
+    bool lockChanged = false;
+    std::string reason;
 };
 
 std::string writeJson(const Value &value) {
@@ -81,7 +92,7 @@ std::string apiPath(const std::string &path) {
 
 void usage() {
     std::cout
-        << "Usage: teamassistant_concurrency_bench [--url http://127.0.0.1:23219] [--clients 30] [--no-prepare] [--same-slot]\n"
+        << "Usage: teamassistant_concurrency_bench [--url http://127.0.0.1:23219] [--clients 30] [--no-prepare] [--same-slot] [--sync-after-save]\n"
         << "\n"
         << "Runs concurrent signup flows by default: acquire slot lock, then save member.\n"
         << "--same-slot makes all clients compete for one team/slot and expects one winner.\n";
@@ -120,6 +131,10 @@ Config parseArgs(int argc, char **argv) {
         }
         if (arg == "--same-slot") {
             config.sameSlot = true;
+            continue;
+        }
+        if (arg == "--sync-after-save") {
+            config.syncAfterSave = true;
             continue;
         }
         throw std::runtime_error("Unknown argument: " + arg);
@@ -310,6 +325,41 @@ WorkerResult signupFlow(const Config &config, trantor::EventLoop *loop, StartGat
     return result;
 }
 
+SyncResult syncFlow(
+    const Config &config,
+    trantor::EventLoop *loop,
+    StartGate &gate,
+    int index,
+    long long dataVersion,
+    long long lockVersion
+) {
+    auto client = drogon::HttpClient::newHttpClient(config.baseUrl, loop);
+    SyncResult result;
+    result.index = index;
+
+    gate.wait();
+    const auto started = Clock::now();
+    const HttpResult response = requestJson(
+        client,
+        drogon::Get,
+        "/sync?dataVersion=" + std::to_string(dataVersion) + "&lockVersion=" + std::to_string(lockVersion),
+        Value(Json::nullValue),
+        config.timeoutSeconds);
+    result.ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+    result.status = response.status;
+    result.ok = response.ok;
+    result.dataChanged = response.json["dataChanged"].asBool();
+    result.lockChanged = response.json["lockChanged"].asBool();
+    if (!result.ok) {
+        result.reason = resultReason(response);
+        if (result.reason.empty()) {
+            result.reason = "sync failed: " + std::string(drogon::to_string_view(response.requestResult)) +
+                " http=" + std::to_string(response.status) + " body=" + response.body;
+        }
+    }
+    return result;
+}
+
 long long percentile(std::vector<long long> values, double p) {
     if (values.empty()) {
         return 0;
@@ -351,7 +401,7 @@ int main(int argc, char **argv) {
         loopThread.run();
         auto client = drogon::HttpClient::newHttpClient(config.baseUrl, loopThread.getLoop());
 
-        const HttpResult version = requestJson(client, drogon::Get, "/version", Value(Json::nullValue), config.timeoutSeconds);
+        HttpResult version = requestJson(client, drogon::Get, "/version", Value(Json::nullValue), config.timeoutSeconds);
         if (!version.ok) {
             std::cerr << "Backend is not ready at " << config.baseUrl << "\n"
                       << "version request failed: " << std::string(drogon::to_string_view(version.requestResult))
@@ -368,6 +418,13 @@ int main(int argc, char **argv) {
                           << std::string(drogon::to_string_view(prepared.requestResult))
                           << " http=" << prepared.status << " body=" << prepared.body << "\n";
                 return 3;
+            }
+            version = requestJson(client, drogon::Get, "/version", Value(Json::nullValue), config.timeoutSeconds);
+            if (!version.ok) {
+                std::cerr << "Failed to read benchmark baseline version after prepare: "
+                          << std::string(drogon::to_string_view(version.requestResult))
+                          << " http=" << version.status << " body=" << version.body << "\n";
+                return 4;
             }
         }
 
@@ -409,6 +466,7 @@ int main(int argc, char **argv) {
         std::cout << "url=" << config.baseUrl << " clients=" << config.clients
                   << " prepareData=" << (config.prepareData ? "true" : "false")
                   << " sameSlot=" << (config.sameSlot ? "true" : "false")
+                  << " syncAfterSave=" << (config.syncAfterSave ? "true" : "false")
                   << " batchElapsed=" << batchMs << "ms\n";
         std::cout << "lockSuccess=" << lockSuccess << "/" << config.clients
                   << " saveSuccess=" << saveSuccess << "/" << config.clients << "\n";
@@ -444,6 +502,67 @@ int main(int argc, char **argv) {
                           << " reason=" << result.reason << "\n";
             }
             return 1;
+        }
+
+        if (config.syncAfterSave && !config.sameSlot) {
+            const long long staleDataVersion = std::max(1LL, static_cast<long long>(version.json["dataVersion"].asInt64()));
+            const long long staleLockVersion = std::max(1LL, static_cast<long long>(version.json["lockVersion"].asInt64()));
+            std::vector<SyncResult> syncResults(static_cast<std::size_t>(config.clients));
+            std::vector<std::thread> syncThreads;
+            syncThreads.reserve(static_cast<std::size_t>(config.clients));
+            StartGate syncGate(config.clients);
+
+            const auto syncBatchStarted = Clock::now();
+            for (int index = 0; index < config.clients; ++index) {
+                syncThreads.emplace_back([&config, &syncGate, &syncResults, index, loop = loopThread.getLoop(), staleDataVersion, staleLockVersion]() {
+                    syncResults[static_cast<std::size_t>(index)] = syncFlow(
+                        config,
+                        loop,
+                        syncGate,
+                        index,
+                        staleDataVersion,
+                        staleLockVersion);
+                });
+            }
+
+            for (auto &thread : syncThreads) {
+                thread.join();
+            }
+
+            const auto syncBatchMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - syncBatchStarted).count();
+            int syncSuccess = 0;
+            int dataChanged = 0;
+            std::vector<long long> syncLatencies;
+            for (const auto &result : syncResults) {
+                if (result.ok) {
+                    syncSuccess += 1;
+                    syncLatencies.push_back(result.ms);
+                    if (result.dataChanged) {
+                        dataChanged += 1;
+                    }
+                }
+            }
+
+            std::cout << "syncBatchElapsed=" << syncBatchMs << "ms\n";
+            std::cout << "syncSuccess=" << syncSuccess << "/" << config.clients
+                      << " dataChanged=" << dataChanged << "/" << config.clients << "\n";
+            printStats("sync", syncLatencies);
+
+            if (syncSuccess != config.clients || dataChanged != config.clients) {
+                std::cout << "\nSync failures:\n";
+                for (const auto &result : syncResults) {
+                    if (!result.ok || !result.dataChanged) {
+                        std::cout << "#" << result.index
+                                  << " ok=" << (result.ok ? "true" : "false")
+                                  << " dataChanged=" << (result.dataChanged ? "true" : "false")
+                                  << " lockChanged=" << (result.lockChanged ? "true" : "false")
+                                  << " http=" << result.status
+                                  << " ms=" << result.ms
+                                  << " reason=" << result.reason << "\n";
+                    }
+                }
+                return 1;
+            }
         }
 
         return 0;

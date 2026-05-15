@@ -24,6 +24,7 @@ This document defines the contract used by the split React frontend and the new 
   - Returns the initial public snapshot: teams, cancellations, archivedTeams, logs, userProfiles, subsidyPresets, current memory locks, teamLocks, versions, and viewer admin status.
 - `GET /api/v2/sync?dataVersion=&lockVersion=`
   - Returns changed data and/or locks only when the caller versions are stale.
+  - When the caller is only behind by recent slot save operations, the response may include `patches` instead of a full `data` snapshot. Clients must apply patches in order and fall back to `data` whenever it is present.
 - `GET /api/v2/events`
   - Persistent server-sent events. Sends `hello` once, then `version` events with `{ ok, type, dataVersion, lockVersion }`.
   - Browsers that support `EventSource` should use this as the primary sync trigger and call `/sync` only after receiving version changes. Version polling is only a compatibility fallback when SSE is unavailable.

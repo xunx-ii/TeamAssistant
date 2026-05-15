@@ -12,7 +12,7 @@ import {
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
 import { fetchServerChanges, fetchServerVersion, mutateData, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
-import { applyMutation, type LockToken, type Mutation, type Snapshot } from './dataStore'
+import { applyMutation, applyServerPatch, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
@@ -224,6 +224,15 @@ function App() {
     )))
   }, [])
 
+  const applyServerPatches = useCallback((patches: unknown[]) => {
+    let next: Snapshot = { teams, cancellations, archivedTeams, logs: operationLogs, userProfiles }
+    for (const patch of patches) {
+      next = applyServerPatch(next, patch)
+    }
+    syncSnapshot(next)
+    return next
+  }, [teams, cancellations, archivedTeams, operationLogs, userProfiles, syncSnapshot])
+
   const syncServerChanges = useCallback(async (event?: ServerEvent | null) => {
     if (syncingChangesRef.current) {
       if (event) pendingServerEventRef.current = event
@@ -254,6 +263,9 @@ function App() {
         let synced = true
         if (changes.data) {
           synced = syncServerData(changes.data)
+        } else if (Array.isArray(changes.patches)) {
+          applyServerPatches(changes.patches)
+          dataVersionRef.current = changes.dataVersion
         } else {
           dataVersionRef.current = changes.dataVersion
         }
@@ -272,7 +284,7 @@ function App() {
     } finally {
       syncingChangesRef.current = false
     }
-  }, [qq, syncLockState, syncServerData])
+  }, [applyServerPatches, qq, syncLockState, syncServerData])
 
   useEffect(() => {
     let active = true
@@ -386,7 +398,14 @@ function App() {
         syncServerData(result.data)
       } else {
         const previousDataVersion = dataVersionRef.current
-        applyLocalMutation(mutation)
+        if (
+          result.patch &&
+          (mutation.type === 'signupSlot' || mutation.type === 'cancelSlot' || mutation.type === 'leaveSlot')
+        ) {
+          applyServerPatches([result.patch])
+        } else {
+          applyLocalMutation(mutation)
+        }
         if (typeof result.dataVersion === 'number' && typeof previousDataVersion === 'number' && result.dataVersion > previousDataVersion + 1) {
           void syncServerChanges({ dataVersion: result.dataVersion, lockVersion: result.lockVersion ?? lockVersionRef.current ?? 0 })
         }
@@ -395,13 +414,13 @@ function App() {
       }
       if (
         (mutation.type === 'signupSlot' || mutation.type === 'cancelSlot' || mutation.type === 'leaveSlot') &&
-        typeof mutation.lockTimestamp === 'number'
+        mutation.lockTimestamp != null
       ) {
         applyReleasedSlotLock({
           teamId: mutation.teamId,
           slotIndex: mutation.slotIndex,
           qq: mutation.type === 'signupSlot' ? (mutation.actorQq ?? mutation.member.qq) : (mutation.actorQq ?? qq ?? ''),
-          timestamp: mutation.lockTimestamp,
+          timestamp: typeof mutation.lockTimestamp === 'number' ? mutation.lockTimestamp : undefined,
         })
       }
       return result

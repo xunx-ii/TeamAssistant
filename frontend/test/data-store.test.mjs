@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   applyMutation,
   applyMutation as applyClientMutation,
+  applyServerPatch,
   validateDataReplacement,
   validateExpectedSlotMember,
   validateSnapshotData,
@@ -81,6 +82,55 @@ test('applyMutation preserves concurrent changes on different slots', () => {
   assert.equal(second.logs.length, 2)
   assert.equal(second.logs[0].actorQq, '10001')
   assert.match(second.logs[0].action, /报名 #1/)
+})
+
+test('applyServerPatch applies slot update, log, and cancellation incrementally', () => {
+  const snapshot = createSnapshot()
+  snapshot.teams[0].slots[0].status = 'occupied'
+  snapshot.teams[0].slots[0].member = {
+    qq: '10001',
+    martialArtIndex: '1',
+    gearScore: '1200',
+    characterId: '旧角色',
+    note: '',
+  }
+
+  const next = applyServerPatch(snapshot, {
+    type: 'cancelSlot',
+    teamId: snapshot.teams[0].id,
+    slotIndex: 0,
+    slot: {
+      index: 0,
+      status: 'empty',
+      member: null,
+      fixedRole: null,
+      fixedMartialArtIndex: null,
+    },
+    cancellation: {
+      qq: '10001',
+      reason: '超时',
+      cancelledBy: 'admin',
+      teamId: snapshot.teams[0].id,
+      teamName: snapshot.teams[0].name,
+      slotIndex: 0,
+      timestamp: 123,
+    },
+    log: {
+      id: 'log-1',
+      teamId: snapshot.teams[0].id,
+      teamName: snapshot.teams[0].name,
+      timestamp: 123,
+      actorQq: 'admin',
+      action: '取消 #1 报名：旧角色',
+    },
+  })
+
+  assert.equal(next.teams[0].slots[0].status, 'empty')
+  assert.equal(next.teams[0].slots[0].member, null)
+  assert.equal(next.cancellations.length, 1)
+  assert.equal(next.cancellations[0].reason, '超时')
+  assert.equal(next.logs.length, 1)
+  assert.equal(next.logs[0].id, 'log-1')
 })
 
 test('validateSlotMutationLock rejects expired slot locks', () => {
