@@ -1,6 +1,10 @@
 PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 3000;
+PRAGMA temp_store = MEMORY;
+PRAGMA wal_autocheckpoint = 1000;
+PRAGMA cache_size = -20000;
 
 CREATE TABLE IF NOT EXISTS meta_versions (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -81,18 +85,4 @@ CREATE TABLE IF NOT EXISTS subsidy_preset_levels (
   FOREIGN KEY (preset_id) REFERENCES subsidy_presets(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS slot_locks (
-  team_id TEXT NOT NULL,
-  slot_index INTEGER NOT NULL,
-  qq TEXT NOT NULL,
-  timestamp INTEGER NOT NULL,
-  PRIMARY KEY (team_id, slot_index)
-);
-
-CREATE TABLE IF NOT EXISTS team_locks (
-  team_id TEXT PRIMARY KEY,
-  timestamp INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_slot_locks_qq ON slot_locks(qq);
 CREATE INDEX IF NOT EXISTS idx_logs_team_timestamp ON operation_logs(team_id, timestamp);

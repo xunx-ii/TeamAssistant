@@ -31,11 +31,13 @@ Supported backup payload:
 }
 ```
 
+The `locks` field remains accepted for backup compatibility, but runtime locks are not restored into SQLite. Slot locks and team runtime locks are process-local and are rebuilt by active clients after restart.
+
 ## Concurrency Model
 
-- SQLite runs in WAL mode with `busy_timeout` and short write transactions.
-- Slot lock writes touch only the lock table.
-- Slot saves validate the lock token, update one slot, append one log, release the lock, and increment versions in one transaction.
+- SQLite runs in WAL mode with `synchronous=NORMAL`, `busy_timeout`, memory temp storage, a larger page cache, and short write transactions.
+- Slot locks and team runtime locks live in memory, not SQLite. Lock acquire/release does not open a database transaction.
+- Slot saves validate the memory lock token, update one slot, append one log, release the memory lock, and increment versions with only the slot/log write inside SQLite.
 - The service must not use a global application queue for unrelated teams or slots.
 
 ## Acceptance Criteria

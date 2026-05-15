@@ -35,6 +35,13 @@ struct SlotRecord {
     std::optional<int> fixedMartialArtIndex;
 };
 
+struct SlotLockRecord {
+    std::string teamId;
+    int slotIndex = 0;
+    std::string qq;
+    long long timestamp = 0;
+};
+
 class SqliteDb {
 public:
     explicit SqliteDb(const std::filesystem::path &path) {
@@ -43,8 +50,12 @@ public:
             throw std::runtime_error(sqlite3_errmsg(db_));
         }
         exec("PRAGMA journal_mode=WAL;");
+        exec("PRAGMA synchronous=NORMAL;");
         exec("PRAGMA foreign_keys=ON;");
         exec("PRAGMA busy_timeout=3000;");
+        exec("PRAGMA temp_store=MEMORY;");
+        exec("PRAGMA wal_autocheckpoint=1000;");
+        exec("PRAGMA cache_size=-20000;");
     }
 
     ~SqliteDb() {
@@ -69,16 +80,15 @@ public:
         std::lock_guard lock(mutex_);
         ensureSchema();
         sqlite3_stmt *stmt = nullptr;
-        prepare("SELECT data_version, lock_version FROM meta_versions WHERE id = 1", &stmt);
+        prepare("SELECT data_version FROM meta_versions WHERE id = 1", &stmt);
         Value json;
         json["ok"] = true;
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             json["dataVersion"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 0));
-            json["lockVersion"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 1));
         } else {
             json["dataVersion"] = 1;
-            json["lockVersion"] = 1;
         }
+        json["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
         sqlite3_finalize(stmt);
         return json;
     }
@@ -89,6 +99,8 @@ public:
         exec("BEGIN IMMEDIATE;");
         try {
             replaceDataUnlocked(data);
+            slotLocks_.clear();
+            teamLocks_.clear();
             bumpDataVersionUnlocked();
             bumpLockVersionUnlocked();
             exec("COMMIT;");
@@ -103,46 +115,21 @@ public:
 
     Value publicLocks() {
         std::lock_guard lock(mutex_);
-        ensureSchema();
-        Value json;
-        json["slots"] = Value(Json::arrayValue);
-        json["teams"] = Value(Json::arrayValue);
-
-        sqlite3_stmt *stmt = nullptr;
-        prepare("SELECT team_id, slot_index, qq, timestamp FROM slot_locks ORDER BY team_id, slot_index", &stmt);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            Value item;
-            item["teamId"] = textColumn(stmt, 0);
-            item["slotIndex"] = sqlite3_column_int(stmt, 1);
-            item["qq"] = textColumn(stmt, 2);
-            item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 3));
-            json["slots"].append(item);
-        }
-        sqlite3_finalize(stmt);
-
-        prepare("SELECT team_id, timestamp FROM team_locks ORDER BY team_id", &stmt);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            Value item;
-            item["teamId"] = textColumn(stmt, 0);
-            item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 1));
-            json["teams"].append(item);
-        }
-        sqlite3_finalize(stmt);
-
-        auto version = versionsUnlocked();
-        json["lockVersion"] = version["lockVersion"];
-        return json;
+        cleanExpiredLocksUnlocked();
+        return publicLocksUnlocked();
     }
 
     Value bootstrap() {
         std::lock_guard lock(mutex_);
         ensureSchema();
+        cleanExpiredLocksUnlocked();
         return bootstrapUnlocked();
     }
 
     Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion) {
         std::lock_guard lock(mutex_);
         ensureSchema();
+        cleanExpiredLocksUnlocked();
         Value current = versionsUnlocked();
         const auto currentData = current["dataVersion"].asInt64();
         const auto currentLocks = current["lockVersion"].asInt64();
@@ -163,60 +150,28 @@ public:
 
     Value acquireSlotLock(const std::string &teamId, int slotIndex, const std::string &qq) {
         std::lock_guard lock(mutex_);
-        ensureSchema();
         const auto now = nowMs();
-        exec("BEGIN IMMEDIATE;");
-        try {
-            sqlite3_stmt *stmt = nullptr;
-            prepare("SELECT timestamp FROM team_locks WHERE team_id = ?", &stmt);
-            sqlite3_bind_text(stmt, 1, teamId.c_str(), -1, SQLITE_TRANSIENT);
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                const auto lockedAt = sqlite3_column_int64(stmt, 0);
-                sqlite3_finalize(stmt);
-                exec("ROLLBACK;");
-                Value conflict;
-                conflict["ok"] = false;
-                conflict["reason"] = "teamLocked";
-                conflict["lockedAt"] = static_cast<Json::Int64>(lockedAt);
-                return conflict;
-            }
-            sqlite3_finalize(stmt);
+        cleanExpiredLocksUnlocked(now);
 
-            prepare("SELECT qq, timestamp FROM slot_locks WHERE team_id = ? AND slot_index = ?", &stmt);
-            sqlite3_bind_text(stmt, 1, teamId.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(stmt, 2, slotIndex);
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                const std::string owner = textColumn(stmt, 0);
-                const auto lockedAt = sqlite3_column_int64(stmt, 1);
-                if (owner != qq && now - lockedAt < lockTimeoutMs_) {
-                    sqlite3_finalize(stmt);
-                    exec("ROLLBACK;");
-                    Value conflict;
-                    conflict["ok"] = false;
-                    conflict["lockedBy"] = owner;
-                    conflict["lockedAt"] = static_cast<Json::Int64>(lockedAt);
-                    return conflict;
-                }
-            }
-            sqlite3_finalize(stmt);
-
-            prepare(
-                "INSERT INTO slot_locks(team_id, slot_index, qq, timestamp) VALUES(?, ?, ?, ?) "
-                "ON CONFLICT(team_id, slot_index) DO UPDATE SET qq = excluded.qq, timestamp = excluded.timestamp",
-                &stmt);
-            sqlite3_bind_text(stmt, 1, teamId.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(stmt, 2, slotIndex);
-            sqlite3_bind_text(stmt, 3, qq.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(stmt, 4, now);
-            stepDone(stmt);
-            sqlite3_finalize(stmt);
-
-            exec("UPDATE meta_versions SET lock_version = lock_version + 1 WHERE id = 1;");
-            exec("COMMIT;");
-        } catch (...) {
-            exec("ROLLBACK;");
-            throw;
+        const auto teamLock = teamLocks_.find(teamId);
+        if (teamLock != teamLocks_.end()) {
+            Value conflict = conflictJson("teamLocked");
+            conflict["lockedAt"] = static_cast<Json::Int64>(teamLock->second);
+            return conflict;
         }
+
+        const std::string key = slotLockKey(teamId, slotIndex);
+        const auto existing = slotLocks_.find(key);
+        if (existing != slotLocks_.end() && existing->second.qq != qq && now - existing->second.timestamp < lockTimeoutMs_) {
+            Value conflict;
+            conflict["ok"] = false;
+            conflict["lockedBy"] = existing->second.qq;
+            conflict["lockedAt"] = static_cast<Json::Int64>(existing->second.timestamp);
+            return conflict;
+        }
+
+        slotLocks_[key] = SlotLockRecord{teamId, slotIndex, qq, now};
+        bumpLockVersionUnlocked();
 
         Value ok;
         ok["ok"] = true;
@@ -227,7 +182,6 @@ public:
 
     Value validateSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, long long lockToken) {
         std::lock_guard lock(mutex_);
-        ensureSchema();
         return validateSlotMutationLockUnlocked(teamId, slotIndex, qq, lockToken);
     }
 
@@ -420,76 +374,38 @@ public:
 
     void releaseSlotLock(const std::string &teamId, int slotIndex, const std::string &qq, std::optional<long long> lockToken) {
         std::lock_guard lock(mutex_);
-        ensureSchema();
-        sqlite3_stmt *stmt = nullptr;
-        if (lockToken.has_value()) {
-            prepare("DELETE FROM slot_locks WHERE team_id = ? AND slot_index = ? AND qq = ? AND timestamp = ?", &stmt);
-            sqlite3_bind_text(stmt, 1, teamId.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(stmt, 2, slotIndex);
-            sqlite3_bind_text(stmt, 3, qq.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(stmt, 4, *lockToken);
-        } else {
-            prepare("DELETE FROM slot_locks WHERE team_id = ? AND slot_index = ? AND qq = ?", &stmt);
-            sqlite3_bind_text(stmt, 1, teamId.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int(stmt, 2, slotIndex);
-            sqlite3_bind_text(stmt, 3, qq.c_str(), -1, SQLITE_TRANSIENT);
-        }
-        stepDone(stmt);
-        const bool changed = sqlite3_changes(db_) > 0;
-        sqlite3_finalize(stmt);
-        if (changed) {
-            exec("UPDATE meta_versions SET lock_version = lock_version + 1 WHERE id = 1;");
+        const std::string key = slotLockKey(teamId, slotIndex);
+        const auto existing = slotLocks_.find(key);
+        if (
+            existing != slotLocks_.end() &&
+            existing->second.qq == qq &&
+            (!lockToken.has_value() || existing->second.timestamp == *lockToken)
+        ) {
+            slotLocks_.erase(existing);
+            bumpLockVersionUnlocked();
         }
     }
 
     Value setTeamLock(const std::string &teamId) {
         std::lock_guard lock(mutex_);
-        ensureSchema();
         const auto now = nowMs();
-        exec("BEGIN IMMEDIATE;");
-        try {
-            sqlite3_stmt *stmt = nullptr;
-            prepare(
-                "INSERT INTO team_locks(team_id, timestamp) VALUES(?, ?) "
-                "ON CONFLICT(team_id) DO UPDATE SET timestamp = excluded.timestamp",
-                &stmt);
-            bindString(stmt, 1, teamId);
-            sqlite3_bind_int64(stmt, 2, now);
-            stepDone(stmt);
-            sqlite3_finalize(stmt);
-            bumpLockVersionUnlocked();
-            exec("COMMIT;");
-        } catch (...) {
-            exec("ROLLBACK;");
-            throw;
-        }
-        Value result = versionsUnlocked();
+        teamLocks_[teamId] = now;
+        bumpLockVersionUnlocked();
+        Value result;
         result["ok"] = true;
+        result["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
         result["timestamp"] = static_cast<Json::Int64>(now);
         return result;
     }
 
     Value removeTeamLock(const std::string &teamId) {
         std::lock_guard lock(mutex_);
-        ensureSchema();
-        exec("BEGIN IMMEDIATE;");
-        try {
-            sqlite3_stmt *stmt = nullptr;
-            prepare("DELETE FROM team_locks WHERE team_id = ?", &stmt);
-            bindString(stmt, 1, teamId);
-            stepDone(stmt);
-            const bool changed = sqlite3_changes(db_) > 0;
-            sqlite3_finalize(stmt);
-            if (changed) {
-                bumpLockVersionUnlocked();
-            }
-            exec("COMMIT;");
-        } catch (...) {
-            exec("ROLLBACK;");
-            throw;
+        if (teamLocks_.erase(teamId) > 0) {
+            bumpLockVersionUnlocked();
         }
-        Value result = versionsUnlocked();
+        Value result;
         result["ok"] = true;
+        result["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
         return result;
     }
 
@@ -524,10 +440,17 @@ private:
     std::mutex mutex_;
     bool schemaReady_ = false;
     const long long lockTimeoutMs_ = 30'000;
+    long long lockVersion_ = 1;
+    std::unordered_map<std::string, SlotLockRecord> slotLocks_;
+    std::unordered_map<std::string, long long> teamLocks_;
 
     static long long nowMs() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    static std::string slotLockKey(const std::string &teamId, int slotIndex) {
+        return teamId + ":" + std::to_string(slotIndex);
     }
 
     static std::string textColumn(sqlite3_stmt *stmt, int index) {
@@ -650,6 +573,21 @@ private:
         return false;
     }
 
+    void cleanExpiredLocksUnlocked(long long now = nowMs()) {
+        bool changed = false;
+        for (auto iterator = slotLocks_.begin(); iterator != slotLocks_.end();) {
+            if (now - iterator->second.timestamp > lockTimeoutMs_) {
+                iterator = slotLocks_.erase(iterator);
+                changed = true;
+            } else {
+                ++iterator;
+            }
+        }
+        if (changed) {
+            bumpLockVersionUnlocked();
+        }
+    }
+
     static std::string computeResetStatus(const SlotRecord &slot, int slotIndex) {
         if (slot.fixedRole.has_value() || slot.fixedMartialArtIndex.has_value()) {
             return "fixed";
@@ -690,32 +628,21 @@ private:
         if (teamId.empty() || slotIndex < 0 || qq.empty() || lockToken <= 0) {
             return conflictJson("missingFields");
         }
+        cleanExpiredLocksUnlocked();
 
-        sqlite3_stmt *stmt = nullptr;
-        prepare("SELECT timestamp FROM team_locks WHERE team_id = ? AND timestamp > ?", &stmt);
-        bindString(stmt, 1, teamId);
-        sqlite3_bind_int64(stmt, 2, lockToken);
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            const auto lockedAt = sqlite3_column_int64(stmt, 0);
-            sqlite3_finalize(stmt);
+        const auto teamLock = teamLocks_.find(teamId);
+        if (teamLock != teamLocks_.end() && teamLock->second > lockToken) {
             Value conflict = conflictJson("teamLocked");
-            conflict["lockedAt"] = static_cast<Json::Int64>(lockedAt);
+            conflict["lockedAt"] = static_cast<Json::Int64>(teamLock->second);
             return conflict;
         }
-        sqlite3_finalize(stmt);
 
-        prepare("SELECT timestamp FROM slot_locks WHERE team_id = ? AND slot_index = ? AND qq = ?", &stmt);
-        bindString(stmt, 1, teamId);
-        sqlite3_bind_int(stmt, 2, slotIndex);
-        bindString(stmt, 3, qq);
-        if (sqlite3_step(stmt) != SQLITE_ROW) {
-            sqlite3_finalize(stmt);
+        const auto existing = slotLocks_.find(slotLockKey(teamId, slotIndex));
+        if (existing == slotLocks_.end() || existing->second.qq != qq) {
             return conflictJson("expired");
         }
-        const auto lockedAt = sqlite3_column_int64(stmt, 0);
-        sqlite3_finalize(stmt);
 
-        if (lockedAt != lockToken || nowMs() - lockedAt > lockTimeoutMs_) {
+        if (existing->second.timestamp != lockToken || nowMs() - existing->second.timestamp > lockTimeoutMs_) {
             return conflictJson("expired");
         }
 
@@ -735,13 +662,10 @@ private:
     }
 
     void releaseMutationSlotLockUnlocked(const std::string &teamId, int slotIndex, const std::string &qq) {
-        sqlite3_stmt *stmt = nullptr;
-        prepare("DELETE FROM slot_locks WHERE team_id = ? AND slot_index = ? AND qq = ?", &stmt);
-        bindString(stmt, 1, teamId);
-        sqlite3_bind_int(stmt, 2, slotIndex);
-        bindString(stmt, 3, qq);
-        stepDone(stmt);
-        sqlite3_finalize(stmt);
+        const auto existing = slotLocks_.find(slotLockKey(teamId, slotIndex));
+        if (existing != slotLocks_.end() && existing->second.qq == qq) {
+            slotLocks_.erase(existing);
+        }
     }
 
     void insertLogUnlocked(
@@ -796,7 +720,7 @@ private:
     }
 
     void bumpLockVersionUnlocked() {
-        exec("UPDATE meta_versions SET lock_version = lock_version + 1 WHERE id = 1;");
+        lockVersion_ += 1;
     }
 
     void replaceSubsidyPresetsUnlocked(const Value &presets) {
@@ -1000,16 +924,15 @@ private:
 
     Value versionsUnlocked() {
         sqlite3_stmt *stmt = nullptr;
-        prepare("SELECT data_version, lock_version FROM meta_versions WHERE id = 1", &stmt);
+        prepare("SELECT data_version FROM meta_versions WHERE id = 1", &stmt);
         Value json;
         json["ok"] = true;
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             json["dataVersion"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 0));
-            json["lockVersion"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 1));
         } else {
             json["dataVersion"] = 1;
-            json["lockVersion"] = 1;
         }
+        json["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
         sqlite3_finalize(stmt);
         return json;
     }
@@ -1018,27 +941,23 @@ private:
         Value json;
         json["slots"] = Value(Json::arrayValue);
         json["teams"] = Value(Json::arrayValue);
-        sqlite3_stmt *stmt = nullptr;
-        prepare("SELECT team_id, slot_index, qq, timestamp FROM slot_locks ORDER BY team_id, slot_index", &stmt);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
+        for (const auto &entry : slotLocks_) {
+            const auto &lock = entry.second;
             Value item;
-            item["teamId"] = textColumn(stmt, 0);
-            item["slotIndex"] = sqlite3_column_int(stmt, 1);
-            item["qq"] = textColumn(stmt, 2);
-            item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 3));
+            item["teamId"] = lock.teamId;
+            item["slotIndex"] = lock.slotIndex;
+            item["qq"] = lock.qq;
+            item["timestamp"] = static_cast<Json::Int64>(lock.timestamp);
             json["slots"].append(item);
         }
-        sqlite3_finalize(stmt);
 
-        prepare("SELECT team_id, timestamp FROM team_locks ORDER BY team_id", &stmt);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
+        for (const auto &[teamId, timestamp] : teamLocks_) {
             Value item;
-            item["teamId"] = textColumn(stmt, 0);
-            item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 1));
+            item["teamId"] = teamId;
+            item["timestamp"] = static_cast<Json::Int64>(timestamp);
             json["teams"].append(item);
         }
-        sqlite3_finalize(stmt);
-        json["lockVersion"] = versionsUnlocked()["lockVersion"];
+        json["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
         return json;
     }
 

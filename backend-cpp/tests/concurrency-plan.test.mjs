@@ -6,4 +6,5 @@ test('C++ backend concurrency acceptance targets are documented', async () => {
   assert.match(docs, /30 concurrent saves/)
   assert.match(docs, /30 concurrent lock attempts/)
   assert.match(docs, /Successful member saves release/)
+  assert.match(docs, /Slot locks and team runtime locks live in memory/)
 })

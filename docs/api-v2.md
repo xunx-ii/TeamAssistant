@@ -14,14 +14,14 @@ This document defines the contract used by the split React frontend and the new 
 - `error`: human-readable error for unexpected failures.
 - `reason`: stable conflict code for expected failures, such as `teamLocked`, `expired`, or `slotChanged`.
 - `dataVersion`: monotonically increasing data version.
-- `lockVersion`: monotonically increasing lock version.
+- `lockVersion`: monotonically increasing process-local lock version. Lock state is intentionally memory-only and resets when the backend restarts.
 
 ## Sync Endpoints
 
 - `GET /api/v2/version`
   - Returns `{ ok, dataVersion, lockVersion }`.
 - `GET /api/v2/bootstrap?qq=...`
-  - Returns the initial public snapshot: teams, cancellations, archivedTeams, logs, userProfiles, subsidyPresets, locks, teamLocks, versions, and viewer admin status.
+  - Returns the initial public snapshot: teams, cancellations, archivedTeams, logs, userProfiles, subsidyPresets, current memory locks, teamLocks, versions, and viewer admin status.
 - `GET /api/v2/sync?dataVersion=&lockVersion=`
   - Returns changed data and/or locks only when the caller versions are stale.
 - `GET /api/v2/events`
@@ -40,7 +40,7 @@ This document defines the contract used by the split React frontend and the new 
   - Optional compatibility endpoint. The frontend should not call it before normal saves.
 - `PUT /api/v2/teams/{teamId}/slots/{slotIndex}/member`
   - Body: `{ qq, actorQq, member, lockToken, expectedMemberQq }`.
-  - Atomically validates the lock and expected member, updates the slot, appends an operation log, releases the slot lock, increments versions, broadcasts SSE, and returns `{ ok, dataVersion, lockVersion, patch }`.
+  - Validates the memory lock and expected member, then uses one short database transaction to update the slot, append an operation log, increment `dataVersion`, release the memory lock, increment `lockVersion`, broadcast SSE, and return `{ ok, dataVersion, lockVersion, patch }`.
 - `DELETE /api/v2/teams/{teamId}/slots/{slotIndex}/member`
   - Body: `{ actorQq, lockToken, expectedMemberQq }`.
 - `POST /api/v2/teams/{teamId}/slots/{slotIndex}/cancel`
