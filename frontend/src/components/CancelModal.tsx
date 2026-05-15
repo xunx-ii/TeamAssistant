@@ -33,8 +33,21 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
     if (!open || !qq || !teamId || slotIndex == null || !shouldLock) return
     let active = true
     const acquire = async () => {
-      const result = await acquireSlotLock(teamId, slotIndex, qq)
-      if (!active) return
+      let result
+      try {
+        result = await acquireSlotLock(teamId, slotIndex, qq)
+      } catch {
+        if (active) setError('网络异常，无法锁定该位置')
+        return
+      }
+      if (!active) {
+        // Effect was cleaned up while the request was in flight; release the
+        // lock immediately so we do not strand it on the server.
+        if (result.ok && result.timestamp) {
+          void releaseSlotLock(teamId, slotIndex, qq, result.lockToken ?? result.timestamp)
+        }
+        return
+      }
       if (result.ok && result.timestamp) {
         const token = result.lockToken ?? result.timestamp
         lockTimestampRef.current = result.timestamp
@@ -53,6 +66,7 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
     }
 
     void acquire()
+
     return () => {
       active = false
       const currentLockTimestamp = lockTimestampRef.current

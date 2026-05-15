@@ -81,8 +81,19 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     if (lockTimestampRef.current > 0 || requestingLockRef.current) return
     const scope = lockScopeRef.current
     requestingLockRef.current = true
-    const result = await acquireSlotLock(teamId, slotIndex, lockQq)
-    requestingLockRef.current = false
+    let result
+    try {
+      result = await acquireSlotLock(teamId, slotIndex, lockQq)
+    } catch {
+      // Network failures should not strand `requestingLockRef` in the true state,
+      // otherwise subsequent retries silently no-op.
+      if (scope === lockScopeRef.current) {
+        setError('网络异常，无法锁定该位置')
+      }
+      return
+    } finally {
+      requestingLockRef.current = false
+    }
     if (scope !== lockScopeRef.current) {
       if (result.ok && result.timestamp) {
         void releaseSlotLock(teamId, slotIndex, lockQq, result.lockToken ?? result.timestamp)
@@ -107,6 +118,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       setError(result.error || '无法锁定该位置，请稍后重试')
     }
   }, [lockQq, onLockAcquired, open, shouldLock, slotIndex, teamId])
+
 
   useEffect(() => {
     lockScopeRef.current += 1

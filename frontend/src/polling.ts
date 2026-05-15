@@ -24,9 +24,11 @@ export function startAdaptivePoll(
   let stopped = false
   let timeoutId = 0
   let failureCount = 0
+  let running = false
 
   const schedule = (delayMs: number) => {
     if (stopped) return
+    window.clearTimeout(timeoutId)
     timeoutId = window.setTimeout(run, Math.max(0, delayMs))
   }
 
@@ -41,16 +43,28 @@ export function startAdaptivePoll(
   }
 
   const run = async () => {
-    if (stopped) return
+    if (stopped || running) return
+    running = true
     try {
       const ok = await task()
       failureCount = ok === false ? Math.min(failureCount + 1, 6) : 0
     } catch {
       failureCount = Math.min(failureCount + 1, 6)
     } finally {
+      running = false
       schedule(getDelay())
     }
   }
+
+  const handleVisibilityChange = () => {
+    if (stopped) return
+    if (document.visibilityState === 'visible' && !running) {
+      // Trigger an immediate sync once the page becomes visible again,
+      // so users do not have to wait for the hiddenDelay countdown.
+      schedule(0)
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 
   schedule(runImmediately ? 0 : getDelay())
 
@@ -58,6 +72,8 @@ export function startAdaptivePoll(
     stop: () => {
       stopped = true
       window.clearTimeout(timeoutId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     },
   }
 }
+

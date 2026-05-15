@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchServerChanges, fetchServerVersion, mutateData, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { fetchLogsPage, fetchServerChanges, fetchServerVersion, mutateData, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatch, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -82,6 +82,9 @@ function App() {
   const [userProfiles, setUserProfiles] = useState<UserProfiles>(loadUserProfiles)
   const [isAdmin, setIsAdmin] = useState(false)
   const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
+  // 服务器告诉我们 bootstrap 里的 logs 是否被截断了。截断时弹日志窗口会暴露
+  // 「加载更早」入口，去 /api/v2/logs 拿更老的分页。
+  const [logsTruncated, setLogsTruncated] = useState(false)
 
   const [signupSlot, setSignupSlot] = useState<number | null>(null)
   const [editSlot, setEditSlot] = useState<number | null>(null)
@@ -156,6 +159,9 @@ function App() {
     if (typeof data.isAdmin === 'boolean') {
       setIsAdmin(data.isAdmin)
     }
+    // 只有 bootstrap / 全量替换的 ServerData 才会带 truncated 字段，
+    // 增量 patch 的路径不会进到这里。这里直接覆盖即可。
+    setLogsTruncated(Boolean(data.logsTruncated))
     if (snapshot.teams.length === 0) return false
     const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
     const canApplyLocks = incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
@@ -1008,6 +1014,13 @@ function App() {
         open={showLogs}
         teamName={activeTeam?.name ?? ''}
         logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
+        // 服务器告知 bootstrap 截断后才提供「加载更早」入口；
+        // 单机/本地模式下没有更早日志可以拉，按钮就不会显示。
+        hasMore={serverMode && logsTruncated}
+        onLoadMore={serverMode ? (cursor) => fetchLogsPage({
+          before: cursor,
+          teamId: activeTeam?.id ?? null,
+        }) : undefined}
         onClose={() => setShowLogs(false)}
       />
       <ArchiveDialog

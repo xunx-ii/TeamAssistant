@@ -22,6 +22,12 @@ This document defines the contract used by the split React frontend and the new 
   - Returns `{ ok, dataVersion, lockVersion }`.
 - `GET /api/v2/bootstrap?qq=...`
   - Returns the initial public snapshot: teams, cancellations, archivedTeams, logs, userProfiles, subsidyPresets, current memory locks, teamLocks, versions, and viewer admin status.
+  - `cancellations` and `logs` are capped to a recent window (200 and 500 entries by default). The response includes `cancellationsTotal`, `cancellationsTruncated`, `logsTotal`, and `logsTruncated` flags so the client can decide whether to fetch older entries from the dedicated history endpoints below.
+- `GET /api/v2/logs?teamId=&before=&limit=`
+  - Returns operation logs ordered by `timestamp DESC`. `teamId` filters to a single team, `before` (timestamp in ms) pages older entries, and `limit` is bounded server-side (default 200, max 500). The response is `{ ok, items, hasMore, nextCursor, limit }` where `nextCursor` is the timestamp of the last returned entry; pass it back as `before` to load the next older page.
+- `GET /api/v2/cancellations?qq=&before=&limit=`
+  - Same shape as `/api/v2/logs`. `qq` filters by member when provided.
+
 - `GET /api/v2/sync?dataVersion=&lockVersion=`
   - Returns changed data and/or locks only when the caller versions are stale.
   - When the caller is only behind by recent slot save operations, the response may include `patches` instead of a full `data` snapshot. Clients must apply patches in order and fall back to `data` whenever it is present.

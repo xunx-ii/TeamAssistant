@@ -30,7 +30,12 @@ $SUDO apt-get install -y \
   cmake \
   pkg-config \
   uuid-dev \
-  libssl-dev
+  libssl-dev \
+  zlib1g-dev \
+  libsqlite3-dev \
+  libjsoncpp-dev \
+  libbrotli-dev
+
 
 npm install
 npm run start:all

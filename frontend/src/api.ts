@@ -22,7 +22,23 @@ export interface ServerData {
   teamLocks?: TeamLockInfo[]
   dataVersion?: number
   lockVersion?: number
+  // bootstrap 已经只发最近一段历史（默认 logs 500 / cancellations 200 条）。
+  // 客户端可以读这几个字段来决定是否提示「加载更早」。
+  logsTotal?: number
+  logsTruncated?: boolean
+  cancellationsTotal?: number
+  cancellationsTruncated?: boolean
 }
+
+export interface HistoryPageResult<T> {
+  ok: boolean
+  items: T[]
+  hasMore: boolean
+  nextCursor: number | null
+  limit: number
+  error?: string
+}
+
 
 export interface SlotLock {
   teamId: string
@@ -162,6 +178,8 @@ async function readJsonBody<T>(resp: Response): Promise<{ ok: true, data: T } | 
   }
 }
 
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', ''])
+
 function directApiBase() {
   if (typeof window === 'undefined') {
     return `http://127.0.0.1:${DIRECT_API_PORT}${API}`
@@ -175,10 +193,22 @@ function isApiPath(input: RequestInfo | URL): input is string {
   return typeof input === 'string' && input.startsWith(API)
 }
 
+function canUseDirectFallback(): boolean {
+  if (typeof window === 'undefined') return true
+  const hostname = window.location.hostname || ''
+  // Only attempt the dev-time direct backend fallback when the page is loaded
+  // from a local host. On production deployments the backend usually does not
+  // listen on the public hostname:23219 endpoint, and any failed request would
+  // leak the internal port to outsiders without any chance of success.
+  return LOCAL_HOSTNAMES.has(hostname)
+}
+
 function fallbackApiInput(input: RequestInfo | URL): string | null {
   if (!isApiPath(input)) return null
+  if (!canUseDirectFallback()) return null
   return `${directApiBase()}${input.slice(API.length)}`
 }
+
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<
   | { ok: true, data: T }
@@ -642,3 +672,117 @@ export async function importBackupFile(file: File, actorQq?: string | null): Pro
     body: await file.arrayBuffer(),
   })
 }
+
+interface HistoryQueryParams {
+  before?: number | null
+  limit?: number | null
+}
+
+function buildHistoryQuery(extra: Record<string, string | null | undefined>, params: HistoryQueryParams) {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(extra)) {
+    if (value) search.set(key, value)
+  }
+  if (params.before != null && Number.isFinite(params.before)) {
+    search.set('before', String(Math.trunc(params.before)))
+  }
+  if (params.limit != null && Number.isFinite(params.limit)) {
+    search.set('limit', String(Math.trunc(params.limit)))
+  }
+  const query = search.toString()
+  return query ? `?${query}` : ''
+}
+
+function emptyHistoryPage<T>(error?: string): HistoryPageResult<T> {
+  return {
+    ok: !error,
+    items: [],
+    hasMore: false,
+    nextCursor: null,
+    limit: 0,
+    ...(error ? { error } : {}),
+  }
+}
+
+function parseHistoryPage<TRaw, TOut>(
+  payload: unknown,
+  normalize: (item: TRaw) => TOut | null,
+): HistoryPageResult<TOut> {
+  if (!payload || typeof payload !== 'object') {
+    return emptyHistoryPage<TOut>(NON_JSON_RESPONSE_ERROR)
+  }
+  const source = payload as {
+    ok?: unknown
+    items?: unknown
+    hasMore?: unknown
+    nextCursor?: unknown
+    limit?: unknown
+    error?: unknown
+  }
+  if (source.ok === false) {
+    return emptyHistoryPage<TOut>(typeof source.error === 'string' ? source.error : INVALID_JSON_ERROR)
+  }
+  const rawItems = Array.isArray(source.items) ? source.items as TRaw[] : []
+  const items: TOut[] = []
+  for (const raw of rawItems) {
+    const normalized = normalize(raw)
+    if (normalized) items.push(normalized)
+  }
+  const limit = typeof source.limit === 'number' && Number.isFinite(source.limit) ? source.limit : items.length
+  const nextCursor = typeof source.nextCursor === 'number' && Number.isFinite(source.nextCursor)
+    ? source.nextCursor
+    : null
+  return {
+    ok: true,
+    items,
+    hasMore: Boolean(source.hasMore),
+    nextCursor,
+    limit,
+  }
+}
+
+function normalizeOperationLog(raw: unknown): OperationLog | null {
+  if (!raw || typeof raw !== 'object') return null
+  const source = raw as Partial<OperationLog>
+  if (typeof source.id !== 'string' || !source.id) return null
+  if (typeof source.timestamp !== 'number' || !Number.isFinite(source.timestamp)) return null
+  return {
+    id: source.id,
+    teamId: typeof source.teamId === 'string' ? source.teamId : '',
+    teamName: typeof source.teamName === 'string' ? source.teamName : '',
+    timestamp: source.timestamp,
+    actorQq: typeof source.actorQq === 'string' ? source.actorQq : '',
+    action: typeof source.action === 'string' ? source.action : '',
+  }
+}
+
+function normalizeCancellationRow(raw: unknown): Cancellation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const source = raw as Partial<Cancellation>
+  if (typeof source.qq !== 'string' || !source.qq) return null
+  if (typeof source.timestamp !== 'number' || !Number.isFinite(source.timestamp)) return null
+  return {
+    qq: source.qq,
+    reason: typeof source.reason === 'string' ? source.reason : '',
+    cancelledBy: typeof source.cancelledBy === 'string' ? source.cancelledBy : '',
+    teamId: typeof source.teamId === 'string' ? source.teamId : '',
+    teamName: typeof source.teamName === 'string' ? source.teamName : '',
+    slotIndex: typeof source.slotIndex === 'number' && Number.isFinite(source.slotIndex) ? source.slotIndex : 0,
+    timestamp: source.timestamp,
+  }
+}
+
+export async function fetchLogsPage(options: HistoryQueryParams & { teamId?: string | null } = {}): Promise<HistoryPageResult<OperationLog>> {
+  const suffix = buildHistoryQuery({ teamId: options.teamId ?? null }, options)
+  const data = await requestData<unknown>(`${API}/logs${suffix}`, noCache)
+  if (!data) return emptyHistoryPage<OperationLog>(SERVER_UNAVAILABLE_ERROR)
+  return parseHistoryPage<unknown, OperationLog>(data, normalizeOperationLog)
+}
+
+export async function fetchCancellationsPage(options: HistoryQueryParams & { qq?: string | null } = {}): Promise<HistoryPageResult<Cancellation>> {
+  const suffix = buildHistoryQuery({ qq: options.qq ?? null }, options)
+  const data = await requestData<unknown>(`${API}/cancellations${suffix}`, noCache)
+  if (!data) return emptyHistoryPage<Cancellation>(SERVER_UNAVAILABLE_ERROR)
+  return parseHistoryPage<unknown, Cancellation>(data, normalizeCancellationRow)
+}
+

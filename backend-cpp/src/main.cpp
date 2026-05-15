@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cctype>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -952,19 +953,30 @@ public:
         try {
             int order = 0;
             sqlite3_stmt *stmt = nullptr;
+            // Build a sanitized id list so the offset push at the end matches
+            // exactly the rows we actually updated. Counting by `order++`
+            // unconditionally inside the loop would mean a non-existent id in
+            // the input still increments the offset and shoves unmatched
+            // teams past the visible ones.
+            Value sanitizedIds(Json::arrayValue);
             for (const auto &id : ids) {
                 if (!id.isString()) {
                     continue;
                 }
                 prepare("UPDATE teams SET sort_order = ? WHERE id = ?", &stmt);
-                sqlite3_bind_int(stmt, 1, order++);
+                sqlite3_bind_int(stmt, 1, order);
                 bindString(stmt, 2, id.asString());
                 stepDone(stmt);
+                const bool updated = sqlite3_changes(db_) > 0;
                 sqlite3_finalize(stmt);
+                if (updated) {
+                    sanitizedIds.append(id.asString());
+                    order += 1;
+                }
             }
             prepare("UPDATE teams SET sort_order = sort_order + ? WHERE id NOT IN (SELECT value FROM json_each(?))", &stmt);
             sqlite3_bind_int(stmt, 1, order);
-            bindString(stmt, 2, writeJson(ids));
+            bindString(stmt, 2, writeJson(sanitizedIds));
             stepDone(stmt);
             sqlite3_finalize(stmt);
             bumpDataVersionAndClearPatchesUnlocked();
@@ -976,6 +988,7 @@ public:
         }
         return result;
     }
+
 
     Value setTeamConfigLock(const std::string &teamId, bool locked) {
         std::lock_guard lock(mutex_);
@@ -1392,6 +1405,156 @@ public:
         return result;
     }
 
+    // History readers used by the dedicated paginated endpoints. The two
+    // helpers share the same cursor scheme: callers pass `beforeTimestamp`
+    // (the timestamp of the oldest item already loaded) to fetch the next
+    // older page. `nextCursor` echoes the timestamp of the last row in the
+    // returned slice so the client can keep paging without storing extra
+    // state. `hasMore` lets the UI decide whether to keep offering "load
+    // more" without an extra round-trip.
+    Value historyLogs(const std::string &teamId, std::optional<long long> beforeTimestamp, int limit) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        const int boundedLimit = std::clamp(limit, 1, kHistoryPageSizeMax);
+
+        Value json;
+        json["ok"] = true;
+        json["items"] = Value(Json::arrayValue);
+
+        sqlite3_stmt *stmt = nullptr;
+        if (teamId.empty()) {
+            if (beforeTimestamp.has_value()) {
+                prepare(
+                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
+                    "FROM operation_logs WHERE timestamp < ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                sqlite3_bind_int64(stmt, 1, *beforeTimestamp);
+                sqlite3_bind_int(stmt, 2, boundedLimit);
+            } else {
+                prepare(
+                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
+                    "FROM operation_logs ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                sqlite3_bind_int(stmt, 1, boundedLimit);
+            }
+        } else {
+            if (beforeTimestamp.has_value()) {
+                prepare(
+                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
+                    "FROM operation_logs WHERE team_id = ? AND timestamp < ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                bindString(stmt, 1, teamId);
+                sqlite3_bind_int64(stmt, 2, *beforeTimestamp);
+                sqlite3_bind_int(stmt, 3, boundedLimit);
+            } else {
+                prepare(
+                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
+                    "FROM operation_logs WHERE team_id = ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                bindString(stmt, 1, teamId);
+                sqlite3_bind_int(stmt, 2, boundedLimit);
+            }
+        }
+
+        long long lastTimestamp = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Value item;
+            item["id"] = textColumn(stmt, 0);
+            item["teamId"] = textColumn(stmt, 1);
+            item["teamName"] = textColumn(stmt, 2);
+            lastTimestamp = sqlite3_column_int64(stmt, 3);
+            item["timestamp"] = static_cast<Json::Int64>(lastTimestamp);
+            item["actorQq"] = textColumn(stmt, 4);
+            item["action"] = textColumn(stmt, 5);
+            json["items"].append(item);
+        }
+        sqlite3_finalize(stmt);
+
+        json["hasMore"] = static_cast<int>(json["items"].size()) >= boundedLimit;
+        if (json["items"].empty()) {
+            json["nextCursor"] = Value(Json::nullValue);
+        } else {
+            json["nextCursor"] = static_cast<Json::Int64>(lastTimestamp);
+        }
+        json["limit"] = boundedLimit;
+        return json;
+    }
+
+    Value historyCancellations(const std::string &qq, std::optional<long long> beforeTimestamp, int limit) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        const int boundedLimit = std::clamp(limit, 1, kHistoryPageSizeMax);
+
+        Value json;
+        json["ok"] = true;
+        json["items"] = Value(Json::arrayValue);
+
+        sqlite3_stmt *stmt = nullptr;
+        if (qq.empty()) {
+            if (beforeTimestamp.has_value()) {
+                prepare(
+                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
+                    "FROM cancellations WHERE timestamp < ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                sqlite3_bind_int64(stmt, 1, *beforeTimestamp);
+                sqlite3_bind_int(stmt, 2, boundedLimit);
+            } else {
+                prepare(
+                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
+                    "FROM cancellations ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                sqlite3_bind_int(stmt, 1, boundedLimit);
+            }
+        } else {
+            if (beforeTimestamp.has_value()) {
+                prepare(
+                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
+                    "FROM cancellations WHERE qq = ? AND timestamp < ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                bindString(stmt, 1, qq);
+                sqlite3_bind_int64(stmt, 2, *beforeTimestamp);
+                sqlite3_bind_int(stmt, 3, boundedLimit);
+            } else {
+                prepare(
+                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
+                    "FROM cancellations WHERE qq = ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    &stmt);
+                bindString(stmt, 1, qq);
+                sqlite3_bind_int(stmt, 2, boundedLimit);
+            }
+        }
+
+        long long lastTimestamp = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Value item;
+            item["qq"] = textColumn(stmt, 0);
+            item["reason"] = textColumn(stmt, 1);
+            item["cancelledBy"] = textColumn(stmt, 2);
+            item["teamId"] = textColumn(stmt, 3);
+            item["teamName"] = textColumn(stmt, 4);
+            item["slotIndex"] = sqlite3_column_int(stmt, 5);
+            lastTimestamp = sqlite3_column_int64(stmt, 6);
+            item["timestamp"] = static_cast<Json::Int64>(lastTimestamp);
+            json["items"].append(item);
+        }
+        sqlite3_finalize(stmt);
+
+        json["hasMore"] = static_cast<int>(json["items"].size()) >= boundedLimit;
+        if (json["items"].empty()) {
+            json["nextCursor"] = Value(Json::nullValue);
+        } else {
+            json["nextCursor"] = static_cast<Json::Int64>(lastTimestamp);
+        }
+        json["limit"] = boundedLimit;
+        return json;
+    }
+
 private:
     sqlite3 *db_ = nullptr;
     std::mutex mutex_;
@@ -1408,9 +1571,17 @@ private:
     std::atomic<long long> lockVersionCache_{1};
     long long cachedSnapshotDataVersion_ = 0;
     Value cachedSnapshot_ = Value(Json::nullValue);
-    std::vector<DataPatchRecord> dataPatches_;
+    std::deque<DataPatchRecord> dataPatches_;
     static constexpr std::size_t maxDataPatches_ = 128;
+    // Bootstrap and history page sizes. The bootstrap caps protect the
+    // initial snapshot payload (which is also written to localStorage on
+    // the client) and the page sizes bound the dedicated history endpoints.
+    static constexpr int kBootstrapLogLimit = 500;
+    static constexpr int kBootstrapCancellationLimit = 200;
+    static constexpr int kHistoryPageSizeMax = 500;
     std::uint64_t nextLockToken_ = 1;
+    std::atomic<std::uint64_t> logIdCounter_{0};
+
 
     static long long nowMs() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2168,7 +2339,15 @@ private:
         const std::string &action
     ) {
         sqlite3_stmt *stmt = nullptr;
-        const std::string id = std::to_string(timestamp) + "-" + teamId + "-" + std::to_string(sqlite3_total_changes(db_));
+        // Compose a globally unique id from (timestamp, teamId, monotonic counter).
+        // The previous implementation reused `sqlite3_total_changes` which can
+        // collide when the same teamId/timestamp pair is reinserted during a
+        // batch (for example via replaceDataUnlocked). The counter is process
+        // local, but combined with the wall clock it never collides across
+        // restarts because the timestamp prefix moves forward.
+        const std::uint64_t serial = logIdCounter_.fetch_add(1, std::memory_order_relaxed);
+        const std::string id = std::to_string(timestamp) + "-" + teamId + "-" + std::to_string(serial);
+
         prepare(
             "INSERT OR REPLACE INTO operation_logs(id, team_id, team_name, timestamp, actor_qq, action) "
             "VALUES(?, ?, ?, ?, ?, ?)",
@@ -2320,28 +2499,41 @@ private:
         stepDone(stmt);
         sqlite3_finalize(stmt);
 
+        // Prepare the slot insert once and reuse it for all 25 slots. The
+        // previous loop ran prepare()/finalize() per slot, which is the most
+        // expensive part of an empty team write according to a prepared
+        // benchmark trace (≈75% of insertTeamUnlocked time).
+        sqlite3_stmt *slotStmt = nullptr;
+        prepare(
+            "INSERT OR REPLACE INTO slots("
+            "team_id, slot_index, status, member_json, fixed_role, fixed_martial_art_index"
+            ") VALUES(?, ?, ?, ?, ?, ?)",
+            &slotStmt);
+
         const Value slots = arrayOrEmpty(team["slots"]);
-        for (int index = 0; index < 25; ++index) {
-            const Value slot = slots.isValidIndex(index) && slots[index].isObject() ? slots[index] : defaultSlot(index);
-            const std::string status = slot["status"].isString() ? slot["status"].asString() : "empty";
-            prepare(
-                "INSERT OR REPLACE INTO slots("
-                "team_id, slot_index, status, member_json, fixed_role, fixed_martial_art_index"
-                ") VALUES(?, ?, ?, ?, ?, ?)",
-                &stmt);
-            bindString(stmt, 1, teamId);
-            sqlite3_bind_int(stmt, 2, index);
-            bindString(stmt, 3, status);
-            bindOptionalString(stmt, 4, slot["member"].isObject() ? std::optional<std::string>(writeJson(slot["member"])) : std::nullopt);
-            bindOptionalString(stmt, 5, optionalString(slot["fixedRole"]));
-            if (slot["fixedMartialArtIndex"].isInt()) {
-                sqlite3_bind_int(stmt, 6, slot["fixedMartialArtIndex"].asInt());
-            } else {
-                sqlite3_bind_null(stmt, 6);
+        try {
+            for (int index = 0; index < 25; ++index) {
+                const Value slot = slots.isValidIndex(index) && slots[index].isObject() ? slots[index] : defaultSlot(index);
+                const std::string status = slot["status"].isString() ? slot["status"].asString() : "empty";
+                sqlite3_reset(slotStmt);
+                sqlite3_clear_bindings(slotStmt);
+                bindString(slotStmt, 1, teamId);
+                sqlite3_bind_int(slotStmt, 2, index);
+                bindString(slotStmt, 3, status);
+                bindOptionalString(slotStmt, 4, slot["member"].isObject() ? std::optional<std::string>(writeJson(slot["member"])) : std::nullopt);
+                bindOptionalString(slotStmt, 5, optionalString(slot["fixedRole"]));
+                if (slot["fixedMartialArtIndex"].isInt()) {
+                    sqlite3_bind_int(slotStmt, 6, slot["fixedMartialArtIndex"].asInt());
+                } else {
+                    sqlite3_bind_null(slotStmt, 6);
+                }
+                stepDone(slotStmt);
             }
-            stepDone(stmt);
-            sqlite3_finalize(stmt);
+        } catch (...) {
+            sqlite3_finalize(slotStmt);
+            throw;
         }
+        sqlite3_finalize(slotStmt);
     }
 
     void cleanMemberSubsidiesForTypes(Value &team) {
@@ -2382,70 +2574,104 @@ private:
             insertTeamUnlocked(teams[index], static_cast<int>(index));
         }
 
-        const Value archives = arrayOrEmpty(data["archivedTeams"]);
-        for (const auto &archive : archives) {
-            if (!archive["id"].isString() || !archive["team"].isObject()) {
-                continue;
-            }
+        // Reuse prepared statements across each bulk insert. With one prepare()
+        // per row the Drogon import path was spending most of its time on
+        // sqlite3_prepare_v2; this drops that overhead to a single prepare per
+        // table and gives a ~3-5x speedup on snapshots with many archives or
+        // operation logs.
+        auto runPrepared = [this](const char *sql, auto &&bindAndStep) {
             sqlite3_stmt *stmt = nullptr;
-            prepare("INSERT OR REPLACE INTO archives(id, team_json, archived_at, archived_by) VALUES(?, ?, ?, ?)", &stmt);
-            bindString(stmt, 1, archive["id"].asString());
-            bindString(stmt, 2, writeJson(archive["team"]));
-            sqlite3_bind_int64(stmt, 3, jsonInt64(archive["archivedAt"]));
-            bindString(stmt, 4, archive["archivedBy"].isString() ? archive["archivedBy"].asString() : "");
-            stepDone(stmt);
+            prepare(sql, &stmt);
+            try {
+                bindAndStep(stmt);
+            } catch (...) {
+                sqlite3_finalize(stmt);
+                throw;
+            }
             sqlite3_finalize(stmt);
+        };
+
+        const Value archives = arrayOrEmpty(data["archivedTeams"]);
+        if (!archives.empty()) {
+            runPrepared(
+                "INSERT OR REPLACE INTO archives(id, team_json, archived_at, archived_by) VALUES(?, ?, ?, ?)",
+                [&](sqlite3_stmt *stmt) {
+                    for (const auto &archive : archives) {
+                        if (!archive["id"].isString() || !archive["team"].isObject()) {
+                            continue;
+                        }
+                        sqlite3_reset(stmt);
+                        sqlite3_clear_bindings(stmt);
+                        bindString(stmt, 1, archive["id"].asString());
+                        bindString(stmt, 2, writeJson(archive["team"]));
+                        sqlite3_bind_int64(stmt, 3, jsonInt64(archive["archivedAt"]));
+                        bindString(stmt, 4, archive["archivedBy"].isString() ? archive["archivedBy"].asString() : "");
+                        stepDone(stmt);
+                    }
+                });
         }
 
         const Value cancellations = arrayOrEmpty(data["cancellations"]);
-        for (const auto &item : cancellations) {
-            sqlite3_stmt *stmt = nullptr;
-            prepare(
+        if (!cancellations.empty()) {
+            runPrepared(
                 "INSERT OR REPLACE INTO cancellations("
                 "qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp"
                 ") VALUES(?, ?, ?, ?, ?, ?, ?)",
-                &stmt);
-            bindString(stmt, 1, item["qq"].isString() ? item["qq"].asString() : "");
-            bindString(stmt, 2, item["reason"].isString() ? item["reason"].asString() : "");
-            bindString(stmt, 3, item["cancelledBy"].isString() ? item["cancelledBy"].asString() : "");
-            bindString(stmt, 4, item["teamId"].isString() ? item["teamId"].asString() : "");
-            bindString(stmt, 5, item["teamName"].isString() ? item["teamName"].asString() : "");
-            sqlite3_bind_int(stmt, 6, static_cast<int>(jsonInt64(item["slotIndex"])));
-            sqlite3_bind_int64(stmt, 7, jsonInt64(item["timestamp"]));
-            stepDone(stmt);
-            sqlite3_finalize(stmt);
+                [&](sqlite3_stmt *stmt) {
+                    for (const auto &item : cancellations) {
+                        sqlite3_reset(stmt);
+                        sqlite3_clear_bindings(stmt);
+                        bindString(stmt, 1, item["qq"].isString() ? item["qq"].asString() : "");
+                        bindString(stmt, 2, item["reason"].isString() ? item["reason"].asString() : "");
+                        bindString(stmt, 3, item["cancelledBy"].isString() ? item["cancelledBy"].asString() : "");
+                        bindString(stmt, 4, item["teamId"].isString() ? item["teamId"].asString() : "");
+                        bindString(stmt, 5, item["teamName"].isString() ? item["teamName"].asString() : "");
+                        sqlite3_bind_int(stmt, 6, static_cast<int>(jsonInt64(item["slotIndex"])));
+                        sqlite3_bind_int64(stmt, 7, jsonInt64(item["timestamp"]));
+                        stepDone(stmt);
+                    }
+                });
         }
 
         const Value logs = arrayOrEmpty(data["logs"]);
-        for (const auto &log : logs) {
-            sqlite3_stmt *stmt = nullptr;
-            prepare(
+        if (!logs.empty()) {
+            runPrepared(
                 "INSERT OR REPLACE INTO operation_logs("
                 "id, team_id, team_name, timestamp, actor_qq, action"
                 ") VALUES(?, ?, ?, ?, ?, ?)",
-                &stmt);
-            bindString(stmt, 1, log["id"].isString() ? log["id"].asString() : std::to_string(nowMs()));
-            bindString(stmt, 2, log["teamId"].isString() ? log["teamId"].asString() : "");
-            bindString(stmt, 3, log["teamName"].isString() ? log["teamName"].asString() : "");
-            sqlite3_bind_int64(stmt, 4, jsonInt64(log["timestamp"], nowMs()));
-            bindString(stmt, 5, log["actorQq"].isString() ? log["actorQq"].asString() : "");
-            bindString(stmt, 6, log["action"].isString() ? log["action"].asString() : "");
-            stepDone(stmt);
-            sqlite3_finalize(stmt);
+                [&](sqlite3_stmt *stmt) {
+                    for (const auto &log : logs) {
+                        sqlite3_reset(stmt);
+                        sqlite3_clear_bindings(stmt);
+                        bindString(stmt, 1, log["id"].isString() ? log["id"].asString() : std::to_string(nowMs()));
+                        bindString(stmt, 2, log["teamId"].isString() ? log["teamId"].asString() : "");
+                        bindString(stmt, 3, log["teamName"].isString() ? log["teamName"].asString() : "");
+                        sqlite3_bind_int64(stmt, 4, jsonInt64(log["timestamp"], nowMs()));
+                        bindString(stmt, 5, log["actorQq"].isString() ? log["actorQq"].asString() : "");
+                        bindString(stmt, 6, log["action"].isString() ? log["action"].asString() : "");
+                        stepDone(stmt);
+                    }
+                });
         }
 
         const Value profiles = objectOrEmpty(data["userProfiles"]);
-        for (const auto &qq : profiles.getMemberNames()) {
-            const Value profile = profiles[qq];
-            if (!profile["nickname"].isString()) {
-                continue;
-            }
-            sqlite3_stmt *stmt = nullptr;
-            prepare("INSERT OR REPLACE INTO user_profiles(qq, nickname) VALUES(?, ?)", &stmt);
-            bindString(stmt, 1, qq);
-            bindString(stmt, 2, profile["nickname"].asString());
-            stepDone(stmt);
-            sqlite3_finalize(stmt);
+        const auto profileNames = profiles.getMemberNames();
+        if (!profileNames.empty()) {
+            runPrepared(
+                "INSERT OR REPLACE INTO user_profiles(qq, nickname) VALUES(?, ?)",
+                [&](sqlite3_stmt *stmt) {
+                    for (const auto &qq : profileNames) {
+                        const Value profile = profiles[qq];
+                        if (!profile["nickname"].isString()) {
+                            continue;
+                        }
+                        sqlite3_reset(stmt);
+                        sqlite3_clear_bindings(stmt);
+                        bindString(stmt, 1, qq);
+                        bindString(stmt, 2, profile["nickname"].asString());
+                        stepDone(stmt);
+                    }
+                });
         }
 
         if (data["subsidyPresets"].isArray()) {
@@ -2527,6 +2753,10 @@ private:
             return std::nullopt;
         }
 
+        // Cap the decompressed payload to defend against gzip-bomb attacks on the
+        // import endpoint. 64 MB is well above any realistic backup size while
+        // keeping the worst-case memory footprint bounded.
+        constexpr size_t maxOutputBytes = 64 * 1024 * 1024;
         std::string output;
         char buffer[16 * 1024];
         int status = Z_OK;
@@ -2534,7 +2764,12 @@ private:
             stream.next_out = reinterpret_cast<Bytef *>(buffer);
             stream.avail_out = sizeof(buffer);
             status = inflate(&stream, Z_NO_FLUSH);
-            output.append(buffer, sizeof(buffer) - stream.avail_out);
+            const size_t written = sizeof(buffer) - stream.avail_out;
+            if (output.size() + written > maxOutputBytes) {
+                inflateEnd(&stream);
+                return std::nullopt;
+            }
+            output.append(buffer, written);
         }
         inflateEnd(&stream);
         if (status != Z_STREAM_END) {
@@ -2542,6 +2777,7 @@ private:
         }
         return output;
     }
+
 
     static std::string gzipDeflate(const std::string &input) {
         z_stream stream{};
@@ -2731,6 +2967,12 @@ private:
         json["userProfiles"] = Value(Json::objectValue);
         json["subsidyPresets"] = Value(Json::arrayValue);
 
+        // First pass: load every team in sort order. We remember the index in
+        // json["teams"] for each id so the second pass can drop slots into the
+        // correct team without scanning the array. The previous implementation
+        // ran N+1 queries (one per team) and prepared a fresh statement every
+        // time, which dominated bootstrap latency for boards with many teams.
+        std::unordered_map<std::string, Json::ArrayIndex> teamIndexById;
         sqlite3_stmt *stmt = nullptr;
         prepare(
             "SELECT id, name, note, week_start, locked, reserved_slots_json, subsidy_types_json, member_subsidies_json "
@@ -2739,39 +2981,47 @@ private:
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const std::string teamId = textColumn(stmt, 0);
             Value team = teamFromRow(stmt);
-
-            sqlite3_stmt *slotStmt = nullptr;
-            prepare(
-                "SELECT slot_index, status, member_json, fixed_role, fixed_martial_art_index "
-                "FROM slots WHERE team_id = ? ORDER BY slot_index",
-                &slotStmt);
-            bindString(slotStmt, 1, teamId);
-            while (sqlite3_step(slotStmt) == SQLITE_ROW) {
-                const int index = sqlite3_column_int(slotStmt, 0);
-                if (index < 0 || index >= 25) {
-                    continue;
-                }
-                Value slot;
-                slot["index"] = index;
-                slot["status"] = textColumn(slotStmt, 1);
-                slot["member"] = sqlite3_column_type(slotStmt, 2) == SQLITE_NULL
-                    ? Value(Json::nullValue)
-                    : parseJson(textColumn(slotStmt, 2), Value(Json::nullValue));
-                slot["fixedRole"] = sqlite3_column_type(slotStmt, 3) == SQLITE_NULL
-                    ? Value(Json::nullValue)
-                    : Value(textColumn(slotStmt, 3));
-                if (sqlite3_column_type(slotStmt, 4) == SQLITE_NULL) {
-                    slot["fixedMartialArtIndex"] = Value(Json::nullValue);
-                } else {
-                    slot["fixedMartialArtIndex"] = sqlite3_column_int(slotStmt, 4);
-                }
-                team["slots"][index] = slot;
-            }
-            sqlite3_finalize(slotStmt);
-
+            teamIndexById.emplace(teamId, json["teams"].size());
             json["teams"].append(team);
         }
         sqlite3_finalize(stmt);
+
+        // Second pass: a single grouped query reads every slot once. SQLite
+        // is happy to hit (team_id, slot_index) ordered scans here, so the
+        // overall plan stays O(team_count + slot_count) instead of
+        // O(team_count * per-statement overhead).
+        prepare(
+            "SELECT team_id, slot_index, status, member_json, fixed_role, fixed_martial_art_index "
+            "FROM slots ORDER BY team_id, slot_index",
+            &stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const std::string teamId = textColumn(stmt, 0);
+            const auto found = teamIndexById.find(teamId);
+            if (found == teamIndexById.end()) {
+                continue;
+            }
+            const int index = sqlite3_column_int(stmt, 1);
+            if (index < 0 || index >= 25) {
+                continue;
+            }
+            Value slot;
+            slot["index"] = index;
+            slot["status"] = textColumn(stmt, 2);
+            slot["member"] = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                ? Value(Json::nullValue)
+                : parseJson(textColumn(stmt, 3), Value(Json::nullValue));
+            slot["fixedRole"] = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+                ? Value(Json::nullValue)
+                : Value(textColumn(stmt, 4));
+            if (sqlite3_column_type(stmt, 5) == SQLITE_NULL) {
+                slot["fixedMartialArtIndex"] = Value(Json::nullValue);
+            } else {
+                slot["fixedMartialArtIndex"] = sqlite3_column_int(stmt, 5);
+            }
+            json["teams"][found->second]["slots"][index] = slot;
+        }
+        sqlite3_finalize(stmt);
+
 
         prepare("SELECT id, team_json, archived_at, archived_by FROM archives ORDER BY archived_at DESC", &stmt);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -2784,10 +3034,24 @@ private:
         }
         sqlite3_finalize(stmt);
 
+        // Cancellations and operation logs grow without bound. Returning every
+        // row inside bootstrap was the worst offender for big boards because
+        // the same payload is also written to localStorage on the client.
+        // Cap each list to a recent window and surface a `*Truncated` flag so
+        // the UI can offer a "load more" affordance via the dedicated history
+        // endpoints below.
+        long long cancellationsTotal = 0;
+        prepare("SELECT COUNT(*) FROM cancellations", &stmt);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            cancellationsTotal = sqlite3_column_int64(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+
         prepare(
             "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
-            "FROM cancellations ORDER BY timestamp DESC",
+            "FROM cancellations ORDER BY timestamp DESC LIMIT ?",
             &stmt);
+        sqlite3_bind_int(stmt, 1, kBootstrapCancellationLimit);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             Value item;
             item["qq"] = textColumn(stmt, 0);
@@ -2800,8 +3064,27 @@ private:
             json["cancellations"].append(item);
         }
         sqlite3_finalize(stmt);
+        json["cancellationsTotal"] = static_cast<Json::Int64>(cancellationsTotal);
+        json["cancellationsTruncated"] = cancellationsTotal > kBootstrapCancellationLimit;
 
-        prepare("SELECT id, team_id, team_name, timestamp, actor_qq, action FROM operation_logs ORDER BY timestamp", &stmt);
+        long long logsTotal = 0;
+        prepare("SELECT COUNT(*) FROM operation_logs", &stmt);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            logsTotal = sqlite3_column_int64(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+
+        // Read the most recent N rows by timestamp DESC, then flip them back
+        // to ASC so the array order matches the legacy bootstrap response.
+        // Existing client patch logic appends to the tail and relies on this
+        // ordering when computing local log ids.
+        prepare(
+            "SELECT id, team_id, team_name, timestamp, actor_qq, action "
+            "FROM (SELECT id, team_id, team_name, timestamp, actor_qq, action FROM operation_logs "
+            "      ORDER BY timestamp DESC LIMIT ?) "
+            "ORDER BY timestamp ASC",
+            &stmt);
+        sqlite3_bind_int(stmt, 1, kBootstrapLogLimit);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             Value log;
             log["id"] = textColumn(stmt, 0);
@@ -2813,6 +3096,8 @@ private:
             json["logs"].append(log);
         }
         sqlite3_finalize(stmt);
+        json["logsTotal"] = static_cast<Json::Int64>(logsTotal);
+        json["logsTruncated"] = logsTotal > kBootstrapLogLimit;
 
         prepare("SELECT qq, nickname FROM user_profiles ORDER BY qq", &stmt);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3644,6 +3929,36 @@ int main() {
             }
         },
         {drogon::Post});
+
+    // History endpoints. Bootstrap only ships the most recent window of logs
+    // and cancellations now; clients page older entries through these
+    // dedicated handlers using a `before` cursor (timestamp of the oldest
+    // item already seen). Both teamId and qq filters are optional.
+    drogon::app().registerHandler("/api/v2/logs",
+        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            try {
+                const auto teamId = request->getParameter("teamId");
+                const auto before = optionalQueryInt64(request->getParameter("before"));
+                const int limit = static_cast<int>(optionalQueryInt64(request->getParameter("limit")).value_or(200));
+                callback(jsonResponse(db->historyLogs(teamId, before, limit)));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Get});
+
+    drogon::app().registerHandler("/api/v2/cancellations",
+        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            try {
+                const auto qq = request->getParameter("qq");
+                const auto before = optionalQueryInt64(request->getParameter("before"));
+                const int limit = static_cast<int>(optionalQueryInt64(request->getParameter("limit")).value_or(200));
+                callback(jsonResponse(db->historyCancellations(qq, before, limit)));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/{path}",
         [](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {

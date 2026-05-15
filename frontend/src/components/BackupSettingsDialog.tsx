@@ -66,7 +66,13 @@ export function BackupSettingsDialog({ open, actorQq, onRestored, onClose }: Pro
   }, [actorQq])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      // Reset transient state whenever the dialog is closed so that a stuck
+      // confirm Promise / lingering busy flag cannot persist into the next open.
+      setBusy(false)
+      resolveConfirm(false)
+      return
+    }
     let active = true
     void fetchBackups(actorQq).then(result => {
       if (!active) return
@@ -79,13 +85,15 @@ export function BackupSettingsDialog({ open, actorQq, onRestored, onClose }: Pro
     return () => {
       active = false
     }
-  }, [actorQq, open])
+  }, [actorQq, open, resolveConfirm])
 
   const handleClose = () => {
     resolveConfirm(false)
+    setBusy(false)
     setMessage('')
     onClose()
   }
+
 
   const handleBackupNow = async () => {
     const shouldBackup = await requestConfirm({
@@ -97,15 +105,19 @@ export function BackupSettingsDialog({ open, actorQq, onRestored, onClose }: Pro
     if (!shouldBackup) return
     setBusy(true)
     setMessage('')
-    const result = await createBackup(actorQq)
-    if (result.ok) {
-      setBackups(result.backups ?? [])
-      setMessage('已备份')
-    } else {
-      setMessage(result.error ?? '备份失败')
+    try {
+      const result = await createBackup(actorQq)
+      if (result.ok) {
+        setBackups(result.backups ?? [])
+        setMessage('已备份')
+      } else {
+        setMessage(result.error ?? '备份失败')
+      }
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
   }
+
 
   const handleRestore = async (name: string) => {
     const shouldBackupCurrent = await requestConfirm({
@@ -171,22 +183,31 @@ export function BackupSettingsDialog({ open, actorQq, onRestored, onClose }: Pro
   const handleDownload = async (name: string) => {
     setBusy(true)
     setMessage('')
-    const result = await downloadBackup(name, actorQq)
-    if (result.ok) {
+    try {
+      const result = await downloadBackup(name, actorQq)
+      if (!result.ok) {
+        setMessage(result.error ?? '下载失败')
+        return
+      }
       const url = URL.createObjectURL(result.blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = result.filename || name
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-      setMessage('已下载')
-    } else {
-      setMessage(result.error ?? '下载失败')
+      try {
+        const link = document.createElement('a')
+        link.href = url
+        link.download = result.filename || name
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        setMessage('已下载')
+      } finally {
+        // Defer revoke slightly so that the click() download has a chance to start
+        // in browsers that need the URL to remain valid for a moment.
+        setTimeout(() => URL.revokeObjectURL(url), 0)
+      }
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
   }
+
 
   const handleImport = async (file: File | undefined) => {
     if (!file) return

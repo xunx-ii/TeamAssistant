@@ -38,12 +38,13 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
   }, [loadedPresetIds, subsidyPresets])
 
   useEffect(() => {
-    if (weekTouched) return
+    if (!open || weekTouched) return
     const interval = window.setInterval(() => {
       setWeekStart(getCurrentWeekStartKey())
     }, 60_000)
     return () => window.clearInterval(interval)
-  }, [weekTouched])
+  }, [open, weekTouched])
+
 
   const reset = () => {
     setName('')

@@ -22,7 +22,12 @@ function createTimerEnv() {
           if (timer) timer.cleared = true
         },
       }
-      globalThis.document = { visibilityState: 'visible' }
+      globalThis.document = {
+        visibilityState: 'visible',
+        addEventListener() {},
+        removeEventListener() {},
+      }
+
       return () => {
         globalThis.window = originalWindow
         globalThis.document = originalDocument
