@@ -36,6 +36,16 @@ if (NOT TARGET SQLite::SQLite3)
     "or install a SQLite3 package discoverable by CMake.")
 endif()
 
+if (NOT TARGET ZLIB::ZLIB)
+  find_package(ZLIB QUIET)
+endif()
+
+if (NOT TARGET ZLIB::ZLIB)
+  message(FATAL_ERROR
+    "ZLIB is not available. Add zlib sources under backend-cpp/deps/zlib "
+    "or install a ZLIB package discoverable by CMake.")
+endif()
+
 add_executable(teamassistant_backend
   src/main.cpp
 )
@@ -49,6 +59,7 @@ endif()
 target_link_libraries(teamassistant_backend PRIVATE
   Drogon::Drogon
   SQLite::SQLite3
+  ZLIB::ZLIB
 )
 
 if (MSVC)
