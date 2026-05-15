@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cctype>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -436,6 +437,56 @@ public:
         return result;
     }
 
+    Value updateUserProfile(const std::string &qq, const std::string &rawNickname) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        const std::string nickname = normalizeNickname(rawNickname);
+        if (qq.empty() || nickname.empty()) {
+            return errorJson("Missing fields");
+        }
+
+        const auto now = nowMs();
+        Value result;
+        exec("BEGIN IMMEDIATE;");
+        try {
+            std::string previous;
+            sqlite3_stmt *stmt = nullptr;
+            prepare("SELECT nickname FROM user_profiles WHERE qq = ?", &stmt);
+            bindString(stmt, 1, qq);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                previous = textColumn(stmt, 0);
+            }
+            sqlite3_finalize(stmt);
+
+            prepare("INSERT INTO user_profiles(qq, nickname) VALUES(?, ?) "
+                    "ON CONFLICT(qq) DO UPDATE SET nickname = excluded.nickname",
+                    &stmt);
+            bindString(stmt, 1, qq);
+            bindString(stmt, 2, nickname);
+            stepDone(stmt);
+            sqlite3_finalize(stmt);
+
+            const std::string action = previous.empty()
+                ? "设置昵称：" + nickname
+                : "修改昵称：" + previous + " -> " + nickname;
+            insertLogUnlocked("", "", now, qq, action);
+            bumpDataVersionUnlocked();
+
+            result = versionsUnlocked();
+            result["ok"] = true;
+            Value patch;
+            patch["type"] = "updateNickname";
+            patch["qq"] = qq;
+            patch["profile"]["nickname"] = nickname;
+            result["patch"] = patch;
+            exec("COMMIT;");
+        } catch (...) {
+            exec("ROLLBACK;");
+            throw;
+        }
+        return result;
+    }
+
 private:
     sqlite3 *db_ = nullptr;
     std::mutex mutex_;
@@ -560,6 +611,47 @@ private:
             normalized["hasOrangeWeapon"] = member["hasOrangeWeapon"].asBool();
         }
         return normalized;
+    }
+
+    static std::string normalizeNickname(const std::string &value) {
+        std::string normalized;
+        bool pendingSpace = false;
+        for (unsigned char ch : value) {
+            if (std::isspace(ch) != 0) {
+                if (!normalized.empty()) {
+                    pendingSpace = true;
+                }
+                continue;
+            }
+            if (pendingSpace) {
+                normalized.push_back(' ');
+                pendingSpace = false;
+            }
+            normalized.push_back(static_cast<char>(ch));
+        }
+
+        std::string limited;
+        int codepoints = 0;
+        for (std::size_t index = 0; index < normalized.size() && codepoints < 20;) {
+            const auto byte = static_cast<unsigned char>(normalized[index]);
+            std::size_t width = 1;
+            if ((byte & 0x80) == 0) {
+                width = 1;
+            } else if ((byte & 0xE0) == 0xC0) {
+                width = 2;
+            } else if ((byte & 0xF0) == 0xE0) {
+                width = 3;
+            } else if ((byte & 0xF8) == 0xF0) {
+                width = 4;
+            }
+            if (index + width > normalized.size()) {
+                break;
+            }
+            limited.append(normalized, index, width);
+            index += width;
+            codepoints += 1;
+        }
+        return limited;
     }
 
     static bool arrayContainsInt(const Value &items, int expected) {
@@ -1427,6 +1519,23 @@ int main() {
             }
         },
         {drogon::Delete});
+
+    drogon::app().registerHandler("/api/v2/user-profiles/{1}",
+        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+             const std::string &qq) {
+            const auto json = request->getJsonObject();
+            if (json == nullptr || !(*json)["nickname"].isString()) {
+                callback(jsonResponse(errorJson("Missing fields"), drogon::k400BadRequest));
+                return;
+            }
+            try {
+                const auto result = db->updateUserProfile(qq, (*json)["nickname"].asString());
+                callback(jsonResponse(result, statusForResult(result)));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/subsidy-presets",
         [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
