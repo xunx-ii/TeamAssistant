@@ -2490,8 +2490,7 @@ private:
 
     static std::string shanghaiTimestamp(long long timestamp) {
         const std::time_t seconds = static_cast<std::time_t>(timestamp / 1000 + 8 * 60 * 60);
-        std::tm tm{};
-        gmtime_s(&tm, &seconds);
+        const std::tm tm = utcTime(seconds);
         std::ostringstream output;
         output << std::put_time(&tm, "%Y-%m-%dT%H:%M:%S");
         output << "." << std::setw(3) << std::setfill('0') << (timestamp % 1000) << "+08:00";
@@ -2500,12 +2499,21 @@ private:
 
     static std::string backupFileTimestamp(long long timestamp) {
         const std::time_t seconds = static_cast<std::time_t>(timestamp / 1000 + 8 * 60 * 60);
-        std::tm tm{};
-        gmtime_s(&tm, &seconds);
+        const std::tm tm = utcTime(seconds);
         std::ostringstream output;
         output << std::put_time(&tm, "%Y%m%d-%H%M%S");
         output << "-" << std::setw(3) << std::setfill('0') << (timestamp % 1000);
         return output.str();
+    }
+
+    static std::tm utcTime(const std::time_t seconds) {
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &seconds);
+#else
+        gmtime_r(&seconds, &tm);
+#endif
+        return tm;
     }
 
     static std::optional<std::string> gzipInflate(const std::string &input) {
