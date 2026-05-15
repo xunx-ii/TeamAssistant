@@ -53,6 +53,11 @@ target_link_libraries(teamassistant_backend PRIVATE
 
 if (MSVC)
   target_compile_options(teamassistant_backend PRIVATE /W4 /utf-8)
+  target_compile_definitions(teamassistant_backend PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS
+  )
 else()
   target_compile_options(teamassistant_backend PRIVATE -Wall -Wextra -Wpedantic)
 endif()

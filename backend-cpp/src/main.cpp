@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1177,6 +1178,7 @@ HttpResponsePtr jsonResponse(const Value &json, drogon::HttpStatusCode status = 
 
 int main() {
     const auto port = std::getenv("PORT") != nullptr ? std::atoi(std::getenv("PORT")) : 23219;
+    const auto listenPort = static_cast<uint16_t>(std::clamp(port, 1, 65535));
     const std::filesystem::path dbPath = std::getenv("TEAMASSISTANT_DB") != nullptr
         ? std::getenv("TEAMASSISTANT_DB")
         : "backend-cpp/data/teamassistant.sqlite3";
@@ -1431,7 +1433,7 @@ int main() {
     drogon::app()
         .setLogPath("./")
         .setLogLevel(trantor::Logger::kWarn)
-        .addListener("0.0.0.0", port)
-        .setThreadNum(std::max(2u, std::thread::hardware_concurrency()))
+        .addListener("0.0.0.0", listenPort)
+        .setThreadNum((std::max)(2u, std::thread::hardware_concurrency()))
         .run();
 }
