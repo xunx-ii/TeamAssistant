@@ -44,32 +44,36 @@ include(GNUInstallDirs)
 
 set(CPACK_INCLUDED TRUE)
 
-if(NOT ZLIB_CONF_WRITTEN)
-    set(Z_PREFIX ${ZLIB_PREFIX})
-    set(CONF_OUT_FILE ${zlib_BINARY_DIR}/zconf.h.cmakein)
-    file(READ ${zlib_SOURCE_DIR}/zconf.h ZCONF_CONTENT LIMIT 245)
-    file(WRITE ${CONF_OUT_FILE} ${ZCONF_CONTENT})
-    file(APPEND ${CONF_OUT_FILE} "#cmakedefine Z_PREFIX 1\n")
-    file(APPEND ${CONF_OUT_FILE} "#cmakedefine HAVE_STDARG_H 1\n")
-    file(APPEND ${CONF_OUT_FILE} "#cmakedefine HAVE_UNISTD_H 1\n")
-    file(READ ${zlib_SOURCE_DIR}/zconf.h ZCONF_CONTENT OFFSET 244)
-    set(FIRST_ITEM TRUE)
+set(Z_PREFIX ${ZLIB_PREFIX})
+set(ZLIB_SOURCE_ZCONF ${zlib_SOURCE_DIR}/zconf.h)
+if(NOT EXISTS "${ZLIB_SOURCE_ZCONF}"
+   AND EXISTS "${zlib_SOURCE_DIR}/zconf.h.in")
+    set(ZLIB_SOURCE_ZCONF ${zlib_SOURCE_DIR}/zconf.h.in)
+endif()
+set(CONF_OUT_FILE ${zlib_BINARY_DIR}/zconf.h.cmakein)
+file(READ "${ZLIB_SOURCE_ZCONF}" ZCONF_CONTENT LIMIT 245)
+file(WRITE ${CONF_OUT_FILE} ${ZCONF_CONTENT})
+file(APPEND ${CONF_OUT_FILE} "#cmakedefine Z_PREFIX 1\n")
+file(APPEND ${CONF_OUT_FILE} "#cmakedefine HAVE_STDARG_H 1\n")
+file(APPEND ${CONF_OUT_FILE} "#cmakedefine HAVE_UNISTD_H 1\n")
+file(READ "${ZLIB_SOURCE_ZCONF}" ZCONF_CONTENT OFFSET 244)
+set(OUT_CONTENT "")
+set(FIRST_ITEM TRUE)
 
-    foreach(item IN LISTS ZCONF_CONTENT)
-        if(FIRST_ITEM)
-            string(APPEND OUT_CONTENT ${item})
-            set(FIRST_ITEM FALSE)
-        else(FIRST_ITEM)
-            string(APPEND OUT_CONTENT "\;" ${item})
-        endif(FIRST_ITEM)
-    endforeach(item IN LISTS ${ZCONF_CONTENT})
+foreach(item IN LISTS ZCONF_CONTENT)
+    if(FIRST_ITEM)
+        string(APPEND OUT_CONTENT ${item})
+        set(FIRST_ITEM FALSE)
+    else(FIRST_ITEM)
+        string(APPEND OUT_CONTENT "\;" ${item})
+    endif(FIRST_ITEM)
+endforeach(item IN LISTS ${ZCONF_CONTENT})
 
-    file(APPEND ${CONF_OUT_FILE} ${OUT_CONTENT})
-    set(ZLIB_CONF_WRITTEN
-        TRUE
-        CACHE BOOL "zconf.h.cmakein was created")
-    mark_as_advanced(ZLIB_CONF_WRITTEN)
-endif(NOT ZLIB_CONF_WRITTEN)
+file(APPEND ${CONF_OUT_FILE} ${OUT_CONTENT})
+set(ZLIB_CONF_WRITTEN
+    TRUE
+    CACHE BOOL "zconf.h.cmakein was created")
+mark_as_advanced(ZLIB_CONF_WRITTEN)
 
 #
 # Check to see if we have large file support

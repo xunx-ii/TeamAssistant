@@ -64,9 +64,14 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/zlib/CMakeLists.txt")
       add_library(ZLIB::ZLIB ALIAS zlibstatic)
     endif()
 
-    set(ZLIB_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/zlib" CACHE PATH "Vendored zlib include dir" FORCE)
+    set(_teamassistant_zlib_include_dirs
+      "${CMAKE_CURRENT_SOURCE_DIR}/zlib"
+      "${CMAKE_CURRENT_BINARY_DIR}/zlib"
+    )
+
+    set(ZLIB_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/zlib" CACHE PATH "Vendored zlib source include dir" FORCE)
     set(ZLIB_LIBRARY zlibstatic CACHE STRING "Vendored zlib library target" FORCE)
-    set(ZLIB_INCLUDE_DIRS "${ZLIB_INCLUDE_DIR}" CACHE STRING "Vendored zlib include dirs" FORCE)
+    set(ZLIB_INCLUDE_DIRS "${_teamassistant_zlib_include_dirs}" CACHE STRING "Vendored zlib include dirs" FORCE)
     set(ZLIB_LIBRARIES ZLIB::ZLIB CACHE STRING "Vendored zlib library target" FORCE)
   endif()
 endif()
