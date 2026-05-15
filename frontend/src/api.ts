@@ -498,7 +498,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
 
 export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): (() => void) | null {
   if (typeof EventSource === 'undefined') return null
-  const source = new EventSource(`${directApiBase()}/events`)
+  const source = new EventSource(`${API}/events`)
   const handleMessage = (message: MessageEvent) => {
     try {
       const parsed = JSON.parse(message.data) as Partial<ServerEvent>

@@ -256,7 +256,7 @@ test('subscribeServerEvents parses server sent version events', async () => {
     const { subscribeServerEvents } = await import(`../src/api.ts?case=${Date.now()}-events`)
     const unsubscribe = subscribeServerEvents(event => events.push(event))
 
-    assert.equal(instances[0].url, 'http://127.0.0.1:23219/api/v2/events')
+    assert.equal(instances[0].url, '/api/v2/events')
     instances[0].emit('version', { ok: true, type: 'data', dataVersion: 5, lockVersion: 9 })
     assert.equal(events.length, 1)
     assert.equal(events[0].dataVersion, 5)
