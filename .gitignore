@@ -31,4 +31,3 @@ backup
 .storage.lock
 backend-cpp/build
 backend-cpp/data
-backend-cpp/deps
