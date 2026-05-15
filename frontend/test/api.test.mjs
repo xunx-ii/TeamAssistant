@@ -35,6 +35,22 @@ test('checkServer returns false when /api/v2/version responds with html', async 
   })
 })
 
+test('checkServer falls back to direct backend when dev proxy returns html', async () => {
+  const calls = []
+  await withMockedFetch(async input => {
+    calls.push(String(input))
+    if (calls.length === 1) return createHtmlResponse()
+    return createJsonResponse({ ok: true, dataVersion: 1, lockVersion: 1 })
+  }, async () => {
+    const { checkServer } = await import(`../src/api.ts?case=${Date.now()}-html-fallback-check`)
+    const ok = await checkServer()
+    assert.equal(ok, true)
+  })
+
+  assert.equal(calls[0], '/api/v2/version')
+  assert.match(calls[1], /^http:\/\/127\.0\.0\.1:23219\/api\/v2\/version$/)
+})
+
 test('mutateData returns explicit message when backend is unreachable', async () => {
   await withMockedFetch(async () => {
     throw new TypeError('fetch failed')
@@ -48,13 +64,33 @@ test('mutateData returns explicit message when backend is unreachable', async ()
 })
 
 test('mutateData reports html fallback response instead of generic network error', async () => {
-  await withMockedFetch(async () => createHtmlResponse(), async () => {
+  await withMockedFetch(async input => {
+    assert.match(String(input), /\/api\/v2\/teams\/team-1$/)
+    return createHtmlResponse()
+  }, async () => {
     const { mutateData } = await import(`../src/api.ts?case=${Date.now()}-html`)
     const result = await mutateData({ type: 'renameTeam', teamId: 'team-1', name: '一团' })
     assert.equal(result.ok, false)
     assert.equal(result.reason, 'invalidResponse')
     assert.equal(result.error, '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api/v2 代理')
   })
+})
+
+test('mutateData falls back to direct backend when proxy returns html', async () => {
+  const calls = []
+  await withMockedFetch(async input => {
+    calls.push(String(input))
+    if (calls.length === 1) return createHtmlResponse()
+    return createJsonResponse({ ok: true, dataVersion: 2, lockVersion: 3, patch: { type: 'renameTeam' } })
+  }, async () => {
+    const { mutateData } = await import(`../src/api.ts?case=${Date.now()}-html-mutate-fallback`)
+    const result = await mutateData({ type: 'renameTeam', teamId: 'team-1', name: '一团' })
+    assert.equal(result.ok, true)
+    assert.equal(result.dataVersion, 2)
+  })
+
+  assert.equal(calls[0], '/api/v2/teams/team-1')
+  assert.match(calls[1], /^http:\/\/127\.0\.0\.1:23219\/api\/v2\/teams\/team-1$/)
 })
 
 test('acquireSlotLock preserves server conflict payload', async () => {
@@ -209,7 +245,7 @@ test('subscribeServerEvents parses server sent version events', async () => {
     const { subscribeServerEvents } = await import(`../src/api.ts?case=${Date.now()}-events`)
     const unsubscribe = subscribeServerEvents(event => events.push(event))
 
-    assert.equal(instances[0].url, '/api/v2/events')
+    assert.equal(instances[0].url, 'http://127.0.0.1:23219/api/v2/events')
     instances[0].emit('version', { ok: true, type: 'data', dataVersion: 5, lockVersion: 9 })
     assert.equal(events.length, 1)
     assert.equal(events[0].dataVersion, 5)

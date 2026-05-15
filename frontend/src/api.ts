@@ -2,6 +2,7 @@ import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team, UserP
 import type { Mutation } from './dataStore'
 
 const API = '/api/v2'
+const DIRECT_API_PORT = '23219'
 const noCache = { cache: 'no-store' as const }
 const SERVER_UNAVAILABLE_ERROR = '无法连接到报名服务，请确认后端已启动'
 const HTML_RESPONSE_ERROR = '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api/v2 代理'
@@ -117,6 +118,8 @@ type RequestFailure = {
   error: string
 }
 
+type BodyParseError = typeof HTML_RESPONSE_ERROR | typeof NON_JSON_RESPONSE_ERROR | typeof INVALID_JSON_ERROR
+
 function isServerData(value: unknown): value is ServerData {
   return Boolean(
     value &&
@@ -150,31 +153,75 @@ async function readJsonBody<T>(resp: Response): Promise<{ ok: true, data: T } | 
   }
 }
 
-async function requestData<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T | null> {
+function directApiBase() {
+  if (typeof window === 'undefined') {
+    return `http://127.0.0.1:${DIRECT_API_PORT}${API}`
+  }
+  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
+  const hostname = window.location.hostname || '127.0.0.1'
+  return `${protocol}//${hostname}:${DIRECT_API_PORT}${API}`
+}
+
+function isApiPath(input: RequestInfo | URL): input is string {
+  return typeof input === 'string' && input.startsWith(API)
+}
+
+function fallbackApiInput(input: RequestInfo | URL): string | null {
+  if (!isApiPath(input)) return null
+  return `${directApiBase()}${input.slice(API.length)}`
+}
+
+async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<
+  | { ok: true, data: T }
+  | { ok: false, kind: 'parse' | 'network'; error?: BodyParseError }
+> {
   try {
     const resp = await fetch(input, init)
-    if (!resp.ok) return null
     const parsed = await readJsonBody<T>(resp)
-    return parsed.ok ? parsed.data : null
+    return parsed.ok ? parsed : { ok: false, kind: 'parse', error: parsed.error as BodyParseError }
   } catch {
-    return null
+    return { ok: false, kind: 'network' }
   }
 }
 
+function shouldTryDirectApi(result: { ok: false, kind: 'parse' | 'network'; error?: BodyParseError }) {
+  return result.kind === 'network' || result.error === HTML_RESPONSE_ERROR
+}
+
+async function requestData<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T | null> {
+  const first = await fetchJson<T>(input, init)
+  if (first.ok) return first.data
+
+  const fallback = shouldTryDirectApi(first) ? fallbackApiInput(input) : null
+  if (!fallback) return null
+
+  const second = await fetchJson<T>(fallback, init)
+  return second.ok ? second.data : null
+}
+
 async function requestResult<T extends { ok: boolean }>(input: RequestInfo | URL, init?: RequestInit): Promise<T | RequestFailure> {
-  try {
-    const resp = await fetch(input, init)
-    const parsed = await readJsonBody<T>(resp)
-    if (!parsed.ok) {
-      return { ok: false, reason: 'invalidResponse', error: parsed.error }
-    }
-    if (!isResultPayload(parsed.data)) {
+  const first = await fetchJson<T>(input, init)
+  if (first.ok) {
+    if (isResultPayload(first.data)) return first.data
+    return { ok: false, reason: 'invalidResponse', error: INVALID_JSON_ERROR }
+  }
+
+  const fallback = shouldTryDirectApi(first) ? fallbackApiInput(input) : null
+  if (fallback) {
+    const second = await fetchJson<T>(fallback, init)
+    if (second.ok) {
+      if (isResultPayload(second.data)) return second.data
       return { ok: false, reason: 'invalidResponse', error: INVALID_JSON_ERROR }
     }
-    return parsed.data
-  } catch {
+    if (second.kind === 'parse' && second.error) {
+      return { ok: false, reason: 'invalidResponse', error: second.error }
+    }
+  }
+
+  if (first.kind === 'network') {
     return { ok: false, reason: 'network', error: SERVER_UNAVAILABLE_ERROR }
   }
+  return { ok: false, reason: 'invalidResponse', error: first.error ?? NON_JSON_RESPONSE_ERROR }
 }
 
 function encodePath(value: string | number) {
@@ -391,7 +438,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
 
 export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): (() => void) | null {
   if (typeof EventSource === 'undefined') return null
-  const source = new EventSource(`${API}/events`)
+  const source = new EventSource(`${directApiBase()}/events`)
   const handleMessage = (message: MessageEvent) => {
     try {
       const parsed = JSON.parse(message.data) as Partial<ServerEvent>

@@ -1174,6 +1174,37 @@ HttpResponsePtr jsonResponse(const Value &json, drogon::HttpStatusCode status = 
     return response;
 }
 
+bool isApiRequest(const HttpRequestPtr &request) {
+    return request->path().rfind("/api/v2", 0) == 0;
+}
+
+void addCorsHeaders(const HttpRequestPtr &request, const HttpResponsePtr &response) {
+    const auto &origin = request->getHeader("Origin");
+    response->addHeader("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
+    response->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    response->addHeader("Access-Control-Max-Age", "86400");
+    response->addHeader("Vary", "Origin");
+}
+
+void setupCors() {
+    drogon::app().registerSyncAdvice([](const HttpRequestPtr &request) -> HttpResponsePtr {
+        if (!isApiRequest(request) || request->method() != drogon::Options) {
+            return nullptr;
+        }
+        auto response = drogon::HttpResponse::newHttpResponse();
+        response->setStatusCode(drogon::k204NoContent);
+        addCorsHeaders(request, response);
+        return response;
+    });
+
+    drogon::app().registerPostHandlingAdvice([](const HttpRequestPtr &request, const HttpResponsePtr &response) {
+        if (isApiRequest(request)) {
+            addCorsHeaders(request, response);
+        }
+    });
+}
+
 } // namespace
 
 int main() {
@@ -1184,6 +1215,7 @@ int main() {
         : "backend-cpp/data/teamassistant.sqlite3";
 
     auto db = std::make_shared<SqliteDb>(dbPath);
+    setupCors();
 
     drogon::app().registerHandler("/api/v2/version",
         [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
