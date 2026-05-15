@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const rootDir = resolve(import.meta.dirname, '..')
@@ -11,6 +11,7 @@ const viteCli = resolve(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
 const cppServerCandidates = [
   resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend.exe'),
   resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend'),
+  resolve(rootDir, 'backend-cpp', 'build', 'Debug', 'teamassistant_backend.exe'),
   resolve(rootDir, 'backend-cpp', 'build', 'Release', 'teamassistant_backend.exe'),
 ]
 const children = new Set()
@@ -90,8 +91,8 @@ if (await isApiReady()) {
   if (cppServer) {
     serverProcess = spawnProcess('server', cppServer, [], rootDir)
   } else {
-    process.stdout.write('[server] 未找到 backend-cpp 构建产物，回落 legacy-node/server.js\n')
-    serverProcess = spawnProcess('server', process.execPath, [join('legacy-node', 'server.js')], rootDir)
+    process.stderr.write('[server] 未找到 backend-cpp 构建产物，请先运行 npm run backend:configure && npm run backend:build\n')
+    process.exit(1)
   }
   startedServer = true
   await waitForApi(serverProcess)

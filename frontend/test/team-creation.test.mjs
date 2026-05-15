@@ -7,7 +7,7 @@ import {
   createTeamFromGuide,
   normalizeCreateTeamReserveCount,
 } from '../src/teamCreation.ts'
-import { normalizeHydratableData as normalizeServerHydratableData, validateSnapshotData } from '../../legacy-node/server/data-store.js'
+import { validateSnapshotData } from '../src/dataStore.ts'
 
 const now = new Date('2026-05-09T10:00:00+08:00')
 
@@ -52,7 +52,7 @@ test('createTeamFromGuide imports selected presets and applies initial slot limi
   assert.equal(team.slots[0].status, 'reserved')
 })
 
-test('team weekStart survives client and server hydration and drives subsidy targets', () => {
+test('team weekStart survives hydration and drives subsidy targets', () => {
   const team = createTeamFromGuide(createGuide({ quickReserve: false }), presets, now)
   const snapshot = {
     teams: [team],
@@ -67,9 +67,9 @@ test('team weekStart survives client and server hydration and drives subsidy tar
   }
 
   assert.equal(normalizeClientHydratableData(snapshot).teams[0].weekStart, '2026-05-11')
-  const serverHydrated = normalizeServerHydratableData(snapshot)
-  assert.equal(serverHydrated.teams[0].weekStart, '2026-05-11')
-  assert.equal(validateSnapshotData(serverHydrated), true)
+  const hydrated = normalizeClientHydratableData(snapshot)
+  assert.equal(hydrated.teams[0].weekStart, '2026-05-11')
+  assert.equal(validateSnapshotData(hydrated), true)
 
   const targets = createSubsidyTargets(snapshot.teams, snapshot.archivedTeams, '10001', '2026-05-04')
   assert.deepEqual(targets.map(target => target.weekStart), ['2026-05-11', '2026-05-18'])

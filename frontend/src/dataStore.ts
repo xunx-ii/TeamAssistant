@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, SubsidyType, Team, UserProfiles } from './types'
+import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, Slot, SubsidyType, Team, UserProfiles } from './types'
 import { normalizeTeamName } from './teamName'
 import { normalizeWeekStartKey } from './week'
 
@@ -234,6 +234,239 @@ function getQuickReserveOrder(reserveType: 'T' | '治疗' | 'boss', slotCount: n
     .filter(index => index < slotCount)
   const prioritySet = new Set(priority)
   return [...priority, ...allSlots.filter(index => !prioritySet.has(index))]
+}
+
+function normalizeSnapshotData(data: unknown): Snapshot {
+  const source = isPlainObject(data) ? data : {}
+  return {
+    teams: Array.isArray(source.teams) ? source.teams as Team[] : [],
+    cancellations: Array.isArray(source.cancellations) ? source.cancellations as Cancellation[] : [],
+    archivedTeams: Array.isArray(source.archivedTeams) ? source.archivedTeams as ArchivedTeam[] : [],
+    logs: Array.isArray(source.logs) ? source.logs as OperationLog[] : [],
+    userProfiles: isPlainObject(source.userProfiles) ? source.userProfiles as UserProfiles : {},
+  }
+}
+
+function isSlotIndex(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 25
+}
+
+function isValidMember(member: unknown): member is Member {
+  return Boolean(
+    isPlainObject(member) &&
+    typeof member.qq === 'string' &&
+    typeof member.martialArtIndex === 'string' &&
+    typeof member.gearScore === 'string' &&
+    typeof member.characterId === 'string' &&
+    typeof member.note === 'string' &&
+    (!Object.prototype.hasOwnProperty.call(member, 'hasOrangeWeapon') || typeof member.hasOrangeWeapon === 'boolean'),
+  )
+}
+
+function isValidSlot(slot: unknown, index: number): slot is Slot {
+  if (
+    !isPlainObject(slot) ||
+    slot.index !== index ||
+    !['empty', 'occupied', 'reserved', 'fixed'].includes(toText(slot.status)) ||
+    !(slot.member === null || isValidMember(slot.member)) ||
+    !(slot.fixedRole === null || ['T', '治疗', 'DPS'].includes(toText(slot.fixedRole))) ||
+    !(slot.fixedMartialArtIndex === null || Number.isInteger(slot.fixedMartialArtIndex))
+  ) {
+    return false
+  }
+
+  if (slot.status === 'occupied') {
+    return isValidMember(slot.member)
+  }
+
+  return slot.member === null
+}
+
+function isValidTeamConfig(config: unknown) {
+  return Boolean(
+    isPlainObject(config) &&
+    Array.isArray(config.reservedSlots) &&
+    config.reservedSlots.every(isSlotIndex) &&
+    typeof config.locked === 'boolean',
+  )
+}
+
+function isValidWeekStart(weekStart: unknown) {
+  return weekStart === undefined || (typeof weekStart === 'string' && normalizeWeekStart(weekStart) === weekStart)
+}
+
+function isValidSubsidyTypes(subsidyTypes: unknown) {
+  if (subsidyTypes === undefined) return true
+  return Array.isArray(subsidyTypes) && subsidyTypes.every(type => (
+    isPlainObject(type) &&
+    typeof type.id === 'string' &&
+    typeof type.name === 'string' &&
+    Array.isArray(type.levels) &&
+    type.levels.every(level => (
+      isPlainObject(level) &&
+      typeof level.name === 'string' &&
+      Number.isFinite(level.gold)
+    ))
+  ))
+}
+
+function isValidMemberSubsidies(memberSubsidies: unknown) {
+  if (memberSubsidies === undefined) return true
+  return isPlainObject(memberSubsidies) && Object.values(memberSubsidies).every(selections => (
+    Array.isArray(selections) &&
+    selections.every(selection => (
+      isPlainObject(selection) &&
+      typeof selection.typeId === 'string' &&
+      typeof selection.levelName === 'string' &&
+      (!Object.prototype.hasOwnProperty.call(selection, 'weekStart') || isValidWeekStart(selection.weekStart))
+    ))
+  ))
+}
+
+function isValidSnapshotTeam(team: unknown): team is Team {
+  return Boolean(
+    isPlainObject(team) &&
+    typeof team.id === 'string' &&
+    typeof team.name === 'string' &&
+    typeof team.note === 'string' &&
+    isValidWeekStart(team.weekStart) &&
+    isValidTeamConfig(team.config) &&
+    Array.isArray(team.slots) &&
+    team.slots.length === 25 &&
+    team.slots.every((slot, index) => isValidSlot(slot, index)) &&
+    isValidSubsidyTypes(team.subsidyTypes) &&
+    isValidMemberSubsidies(team.memberSubsidies),
+  )
+}
+
+function isValidArchivedTeam(archive: unknown): archive is ArchivedTeam {
+  return Boolean(
+    isPlainObject(archive) &&
+    typeof archive.id === 'string' &&
+    Number.isFinite(archive.archivedAt) &&
+    typeof archive.archivedBy === 'string' &&
+    isValidSnapshotTeam(archive.team),
+  )
+}
+
+function isValidUserProfiles(userProfiles: unknown) {
+  return isPlainObject(userProfiles) && Object.values(userProfiles).every(profile => (
+    isPlainObject(profile) &&
+    typeof profile.nickname === 'string' &&
+    normalizeNickname(profile.nickname) === profile.nickname &&
+    Array.from(profile.nickname).length <= 20
+  ))
+}
+
+export function validateSnapshotData(data: unknown) {
+  const snapshot = normalizeSnapshotData(data)
+  return (
+    snapshot.teams.length > 0 &&
+    snapshot.teams.every(isValidSnapshotTeam) &&
+    snapshot.archivedTeams.every(isValidArchivedTeam) &&
+    isValidUserProfiles(snapshot.userProfiles)
+  )
+}
+
+export function validateDataReplacement(currentData: unknown, incomingData: unknown, { allowReplace = false } = {}) {
+  const current = normalizeSnapshotData(currentData)
+  const incoming = normalizeSnapshotData(incomingData)
+
+  if (incoming.teams.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Refusing to save an empty team snapshot',
+    }
+  }
+
+  if (!validateSnapshotData(incoming)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Invalid team snapshot',
+    }
+  }
+
+  if (current.teams.length > 0 && !allowReplace) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'Full data replacement requires explicit confirmation',
+    }
+  }
+
+  return {
+    ok: true,
+    data: incoming,
+    shouldBackup: current.teams.length > 0,
+  }
+}
+
+export function validateExpectedSlotMember(
+  data: unknown,
+  teamId: string,
+  slotIndex: number,
+  expectedMemberQq?: string | null,
+) {
+  const team = getTeamOrThrow(normalizeSnapshotData(data), teamId)
+  const slot = team.slots[slotIndex]
+  if (!slot) {
+    throw new Error(`Slot not found: ${slotIndex}`)
+  }
+  const currentMemberQq = slot.member?.qq ?? null
+  if (currentMemberQq !== (expectedMemberQq ?? null)) {
+    return {
+      ok: false,
+      reason: 'slotChanged',
+      currentMemberQq,
+    }
+  }
+  return { ok: true }
+}
+
+interface SlotMutationLockOptions {
+  slotLocks: Map<string, { qq: string; timestamp: number }>
+  teamLocks: Map<string, number>
+  teamId?: string
+  slotIndex?: number | null
+  qq?: string
+  lockTimestamp?: number | null
+  lockTimeout: number
+  ignoreTeamLock?: boolean
+  now?: number
+}
+
+export function validateSlotMutationLock({
+  slotLocks,
+  teamLocks,
+  teamId,
+  slotIndex,
+  qq,
+  lockTimestamp,
+  lockTimeout,
+  ignoreTeamLock = false,
+  now = Date.now(),
+}: SlotMutationLockOptions) {
+  if (!teamId || slotIndex == null || !qq || !lockTimestamp) {
+    return { ok: false, reason: 'missingFields' }
+  }
+
+  const teamLockTime = teamLocks.get(teamId)
+  if (!ignoreTeamLock && teamLockTime && teamLockTime > lockTimestamp) {
+    return { ok: false, reason: 'teamLocked', lockedAt: teamLockTime }
+  }
+
+  const existing = slotLocks.get(`${teamId}:${slotIndex}`)
+  if (!existing || existing.qq !== qq) {
+    return { ok: false, reason: 'expired' }
+  }
+
+  if (now - existing.timestamp > lockTimeout) {
+    return { ok: false, reason: 'expired' }
+  }
+
+  return { ok: true }
 }
 
 export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot {

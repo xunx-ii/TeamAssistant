@@ -3,14 +3,16 @@ import assert from 'node:assert/strict'
 
 import {
   applyMutation,
-  normalizeHydratableData,
+  applyMutation as applyClientMutation,
   validateDataReplacement,
   validateExpectedSlotMember,
   validateSnapshotData,
   validateSlotMutationLock,
-} from '../../legacy-node/server/data-store.js'
-import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
-import { normalizeHydratableData as normalizeClientHydratableData } from '../src/dataHydration.ts'
+} from '../src/dataStore.ts'
+import {
+  normalizeHydratableData,
+  normalizeHydratableData as normalizeClientHydratableData,
+} from '../src/dataHydration.ts'
 import { createSubsidyTargets, getSubsidyWeekOptions } from '../src/subsidy.ts'
 import { formatWeekRange } from '../src/week.ts'
 

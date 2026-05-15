@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:vite": "vite --config frontend/vite.config.ts --host 127.0.0.1",
-    "dev:legacy": "node legacy-node/server.js",
     "backend:configure": "cmake -S backend-cpp -B backend-cpp/build",
     "backend:build": "cmake --build backend-cpp/build",
     "backend:serve": "node scripts/serve-backend-cpp.mjs",
@@ -14,8 +13,7 @@
     "serve": "node scripts/serve-backend-cpp.mjs",
     "lint": "eslint -c frontend/eslint.config.js frontend",
     "preview": "vite preview --config frontend/vite.config.ts",
-    "test": "node --import tsx --test frontend/test/*.test.mjs",
-    "test:e2e": "node frontend/test/slot-grid-playwright.mjs"
+    "test": "node --import tsx --test frontend/test/*.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -25,8 +23,6 @@
     "@tailwindcss/vite": "^4.2.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "express": "^5.2.1",
-    "level": "^10.0.0",
     "lucide-react": "^1.14.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
@@ -44,7 +40,6 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
-    "playwright": "^1.59.1",
     "tsx": "^4.21.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",

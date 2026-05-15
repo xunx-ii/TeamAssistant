@@ -3,8 +3,8 @@
 ## Directory Migration
 
 - Move the React/Vite app into `frontend/`.
-- Move the current Node backend into `legacy-node/` as the reference implementation.
 - Add the new Drogon/SQLite backend under `backend-cpp/`.
+- Remove the old Node backend after the C++ API covers the required runtime and backup compatibility paths.
 
 ## Data Migration
 

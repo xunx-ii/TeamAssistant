@@ -6,6 +6,7 @@ const rootDir = resolve(import.meta.dirname, '..')
 const candidates = [
   resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend.exe'),
   resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend'),
+  resolve(rootDir, 'backend-cpp', 'build', 'Debug', 'teamassistant_backend.exe'),
   resolve(rootDir, 'backend-cpp', 'build', 'Release', 'teamassistant_backend.exe'),
 ]
 
