@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const frontendRoot = fileURLToPath(new URL('.', import.meta.url))
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:23219'
+const devHost = process.env.VITE_HOST ?? '0.0.0.0'
 const devPort = Number(process.env.VITE_PORT ?? 5173)
 
 export default defineConfig({
@@ -12,7 +13,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: './',
   server: {
-    host: '127.0.0.1',
+    host: devHost,
     port: devPort,
     strictPort: true,
     proxy: {

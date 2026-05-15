@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 const rootDir = resolve(import.meta.dirname, '..')
 const frontendDir = resolve(rootDir, 'frontend')
 const apiUrl = 'http://127.0.0.1:23219/api/v2/version'
+const viteHost = process.env.VITE_HOST ?? '0.0.0.0'
 const vitePort = process.env.VITE_PORT ?? '5173'
 const viteCli = resolve(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
 const cppServerCandidates = [
@@ -111,7 +112,7 @@ if (await isApiReady()) {
 const viteProcess = spawnProcess('vite', process.execPath, [
   viteCli,
   '--host',
-  '127.0.0.1',
+  viteHost,
   '--port',
   vitePort,
   '--strictPort',
