@@ -10,6 +10,7 @@
     "backend:build": "cmake --build backend-cpp/build",
     "backend:serve": "node scripts/serve-backend-cpp.mjs",
     "build": "tsc -b frontend && vite build --config frontend/vite.config.ts",
+    "start:all": "npm run backend:configure && npm run backend:build && npm run build && npm run dev",
     "serve": "node scripts/serve-backend-cpp.mjs",
     "lint": "eslint -c frontend/eslint.config.js frontend",
     "preview": "vite preview --config frontend/vite.config.ts",
