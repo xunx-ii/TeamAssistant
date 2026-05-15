@@ -67,6 +67,7 @@ All admin operations must be validated on the backend using `actorQq`.
 - `PUT /api/v2/archives/{archiveId}/subsidies/{qq}`
 - `GET /api/v2/backups`
 - `POST /api/v2/backups`
+- `GET /api/v2/backups/{name}/download`
 - `POST /api/v2/backups/{name}/restore`
 - `DELETE /api/v2/backups/{name}`
 - `POST /api/v2/backups/import`

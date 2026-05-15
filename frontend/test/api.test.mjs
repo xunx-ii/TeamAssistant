@@ -17,6 +17,17 @@ function createHtmlResponse(body = '<!doctype html><html><body>index</body></htm
   })
 }
 
+function createBlobResponse(body = 'backup', init = {}) {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/gzip',
+      'Content-Disposition': 'attachment; filename="backup.json.gz"',
+    },
+    ...init,
+  })
+}
+
 async function withMockedFetch(mock, run) {
   const originalFetch = globalThis.fetch
   globalThis.fetch = mock
@@ -275,6 +286,9 @@ test('backup API helpers use the backup endpoints', async () => {
         data: { teams: [], cancellations: [], archivedTeams: [], logs: [] },
       })
     }
+    if (String(input).endsWith('/download')) {
+      return createBlobResponse()
+    }
     return createJsonResponse({
       ok: true,
       backups: [{ name: 'backup-2026-01-01T00-00-00-000Z.json.gz', createdAt: '2026-01-01T00:00:00.000Z', size: 12 }],
@@ -292,6 +306,11 @@ test('backup API helpers use the backup endpoints', async () => {
     const restored = await mod.restoreBackup('backup-2026-01-01T00-00-00-000Z.json.gz')
     assert.equal(restored.ok, true)
 
+    const downloaded = await mod.downloadBackup('backup-2026-01-01T00-00-00-000Z.json.gz')
+    assert.equal(downloaded.ok, true)
+    assert.equal(downloaded.filename, 'backup.json.gz')
+    assert.equal(await downloaded.blob.text(), 'backup')
+
     const deleted = await mod.deleteBackup('backup-2026-01-01T00-00-00-000Z.json.gz')
     assert.equal(deleted.ok, true)
 
@@ -306,10 +325,34 @@ test('backup API helpers use the backup endpoints', async () => {
   assert.equal(calls[0].input, '/api/v2/backups')
   assert.equal(calls[1].init.method, 'POST')
   assert.equal(calls[2].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz/restore')
-  assert.equal(calls[3].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz')
-  assert.equal(calls[3].init.method, 'DELETE')
-  assert.equal(calls[4].input, '/api/v2/backups/import')
-  assert.equal(calls[4].init.headers['Content-Type'], 'application/octet-stream')
+  assert.equal(calls[3].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz/download')
+  assert.equal(calls[4].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz')
+  assert.equal(calls[4].init.method, 'DELETE')
+  assert.equal(calls[5].input, '/api/v2/backups/import')
+  assert.equal(calls[5].init.headers['Content-Type'], 'application/octet-stream')
+})
+
+test('downloadBackup falls back to direct backend when proxy returns html', async () => {
+  const calls = []
+  await withMockedFetch(async input => {
+    calls.push(String(input))
+    if (calls.length === 1) return createHtmlResponse()
+    return createBlobResponse('direct-backup', {
+      headers: {
+        'Content-Type': 'application/gzip',
+        'Content-Disposition': 'attachment; filename="direct.json.gz"',
+      },
+    })
+  }, async () => {
+    const { downloadBackup } = await import(`../src/api.ts?case=${Date.now()}-download-fallback`)
+    const result = await downloadBackup('backup-1.json.gz')
+    assert.equal(result.ok, true)
+    assert.equal(result.filename, 'direct.json.gz')
+    assert.equal(await result.blob.text(), 'direct-backup')
+  })
+
+  assert.equal(calls[0], '/api/v2/backups/backup-1.json.gz/download')
+  assert.match(calls[1], /^http:\/\/127\.0\.0\.1:23219\/api\/v2\/backups\/backup-1\.json\.gz\/download$/)
 })
 
 test('subsidy preset API helpers use the preset endpoints', async () => {

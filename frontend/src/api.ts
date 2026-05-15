@@ -8,6 +8,7 @@ const SERVER_UNAVAILABLE_ERROR = '无法连接到报名服务，请确认后端�
 const HTML_RESPONSE_ERROR = '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api/v2 代理'
 const NON_JSON_RESPONSE_ERROR = '接口返回了非 JSON 响应，请确认后端服务是否正常'
 const INVALID_JSON_ERROR = '接口返回的数据无法解析'
+const BACKUP_DOWNLOAD_ERROR = '下载备份失败'
 
 export interface ServerData {
   teams: Team[]
@@ -119,6 +120,10 @@ type RequestFailure = {
   error: string
 }
 
+export type BackupDownloadResult =
+  | { ok: true, blob: Blob, filename: string }
+  | RequestFailure
+
 type BodyParseError = typeof HTML_RESPONSE_ERROR | typeof NON_JSON_RESPONSE_ERROR | typeof INVALID_JSON_ERROR
 
 function isServerData(value: unknown): value is ServerData {
@@ -223,6 +228,47 @@ async function requestResult<T extends { ok: boolean }>(input: RequestInfo | URL
     return { ok: false, reason: 'network', error: SERVER_UNAVAILABLE_ERROR }
   }
   return { ok: false, reason: 'invalidResponse', error: first.error ?? NON_JSON_RESPONSE_ERROR }
+}
+
+async function requestBlob(input: RequestInfo | URL, init?: RequestInit): Promise<BackupDownloadResult> {
+  const fetchBlob = async (target: RequestInfo | URL) => {
+    const response = await fetch(target, init)
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    if (contentType.includes('text/html')) {
+      return { ok: false as const, kind: 'html' as const, error: HTML_RESPONSE_ERROR }
+    }
+    if (!response.ok) {
+      return { ok: false as const, kind: 'status' as const, error: BACKUP_DOWNLOAD_ERROR }
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('content-disposition') ?? ''
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? ''
+    return { ok: true as const, blob, filename }
+  }
+
+  let first: Awaited<ReturnType<typeof fetchBlob>> | { ok: false, kind: 'network' }
+  try {
+    first = await fetchBlob(input)
+  } catch {
+    first = { ok: false, kind: 'network' }
+  }
+  if (first.ok) return first
+
+  const fallback = first.kind === 'network' || first.kind === 'html' ? fallbackApiInput(input) : null
+  if (fallback) {
+    try {
+      const second = await fetchBlob(fallback)
+      if (second.ok) return second
+      return { ok: false, reason: 'invalidResponse', error: second.error }
+    } catch {
+      return { ok: false, reason: 'network', error: SERVER_UNAVAILABLE_ERROR }
+    }
+  }
+
+  if (first.kind === 'network') {
+    return { ok: false, reason: 'network', error: SERVER_UNAVAILABLE_ERROR }
+  }
+  return { ok: false, reason: 'invalidResponse', error: first.error }
 }
 
 function encodePath(value: string | number) {
@@ -554,6 +600,14 @@ export async function createBackup(): Promise<BackupActionResult> {
 
 export async function restoreBackup(name: string): Promise<BackupActionResult> {
   return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}/restore`, jsonRequest('POST'))
+}
+
+export async function downloadBackup(name: string): Promise<BackupDownloadResult> {
+  const result = await requestBlob(`${API}/backups/${encodePath(name)}/download`, noCache)
+  if (result.ok && !result.filename) {
+    return { ...result, filename: name }
+  }
+  return result
 }
 
 export async function deleteBackup(name: string): Promise<BackupActionResult> {

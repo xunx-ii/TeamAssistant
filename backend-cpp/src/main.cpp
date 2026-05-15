@@ -1209,6 +1209,15 @@ public:
         return result;
     }
 
+    std::optional<std::filesystem::path> backupDownloadPath(const std::string &name) {
+        std::lock_guard lock(mutex_);
+        const auto path = resolveBackupPath(name);
+        if (!std::filesystem::exists(path) || !std::filesystem::is_regular_file(path)) {
+            return std::nullopt;
+        }
+        return path;
+    }
+
     Value importBackup(const std::string &body) {
         std::lock_guard lock(mutex_);
         ensureSchema();
@@ -3123,6 +3132,33 @@ int main() {
             }
         },
         {drogon::Post});
+
+    drogon::app().registerHandler("/api/v2/backups/{1}/download",
+        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+             const std::string &name) {
+            try {
+                const auto path = db->backupDownloadPath(name);
+                if (!path.has_value()) {
+                    Value notFound;
+                    notFound["ok"] = false;
+                    notFound["reason"] = "notFound";
+                    notFound["error"] = "Backup not found";
+                    callback(jsonResponse(notFound, drogon::k404NotFound));
+                    return;
+                }
+                const auto filename = path->filename().string();
+                auto response = drogon::HttpResponse::newFileResponse(
+                    path->string(),
+                    filename,
+                    drogon::CT_CUSTOM,
+                    filename.ends_with(".gz") ? "application/gzip" : "application/json");
+                response->addHeader("Cache-Control", "no-store");
+                callback(response);
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/backups/{1}",
         [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,

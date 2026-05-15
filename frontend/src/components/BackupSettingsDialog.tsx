@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createBackup,
   deleteBackup,
+  downloadBackup,
   fetchBackups,
   importBackupFile,
   restoreBackup,
@@ -166,6 +167,26 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
     setBusy(false)
   }
 
+  const handleDownload = async (name: string) => {
+    setBusy(true)
+    setMessage('')
+    const result = await downloadBackup(name)
+    if (result.ok) {
+      const url = URL.createObjectURL(result.blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.filename || name
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      setMessage('已下载')
+    } else {
+      setMessage(result.error ?? '下载失败')
+    }
+    setBusy(false)
+  }
+
   const handleImport = async (file: File | undefined) => {
     if (!file) return
     const shouldBackupCurrent = await requestConfirm({
@@ -252,6 +273,14 @@ export function BackupSettingsDialog({ open, onRestored, onClose }: Props) {
                     {formatShanghaiMonthDayTimeMinute(backup.createdAt)} · {formatSize(backup.size)}
                   </p>
                 </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => { void handleDownload(backup.name) }}
+                >
+                  下载
+                </Button>
                 <Button
                   size="xs"
                   variant="outline"
