@@ -1,16 +1,23 @@
+import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const rootDir = resolve(import.meta.dirname, '..')
-const apiUrl = 'http://127.0.0.1:23219/api/data'
+const frontendDir = resolve(rootDir, 'frontend')
+const apiUrl = 'http://127.0.0.1:23219/api/v2/version'
 const viteCli = resolve(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
+const cppServerCandidates = [
+  resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend.exe'),
+  resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend'),
+  resolve(rootDir, 'backend-cpp', 'build', 'Release', 'teamassistant_backend.exe'),
+]
 const children = new Set()
 
-function spawnProcess(label, command, args) {
+function spawnProcess(label, command, args, cwd = rootDir) {
   const child = spawn(command, args, {
-    cwd: rootDir,
+    cwd,
     env: { ...process.env, BROWSER: 'none' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -79,12 +86,18 @@ let serverProcess = null
 if (await isApiReady()) {
   process.stdout.write('[server] 使用已运行的 http://127.0.0.1:23219\n')
 } else {
-  serverProcess = spawnProcess('server', process.execPath, ['server.js'])
+  const cppServer = cppServerCandidates.find(candidate => existsSync(candidate))
+  if (cppServer) {
+    serverProcess = spawnProcess('server', cppServer, [], rootDir)
+  } else {
+    process.stdout.write('[server] 未找到 backend-cpp 构建产物，回落 legacy-node/server.js\n')
+    serverProcess = spawnProcess('server', process.execPath, [join('legacy-node', 'server.js')], rootDir)
+  }
   startedServer = true
   await waitForApi(serverProcess)
 }
 
-const viteProcess = spawnProcess('vite', process.execPath, [viteCli, '--host', '127.0.0.1'])
+const viteProcess = spawnProcess('vite', process.execPath, [viteCli, '--host', '127.0.0.1'], frontendDir)
 
 viteProcess.once('exit', code => {
   void (async () => {

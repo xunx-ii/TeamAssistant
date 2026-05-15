@@ -7,7 +7,7 @@ import {
   createTeamFromGuide,
   normalizeCreateTeamReserveCount,
 } from '../src/teamCreation.ts'
-import { normalizeHydratableData as normalizeServerHydratableData, validateSnapshotData } from '../server/data-store.js'
+import { normalizeHydratableData as normalizeServerHydratableData, validateSnapshotData } from '../../legacy-node/server/data-store.js'
 
 const now = new Date('2026-05-09T10:00:00+08:00')
 

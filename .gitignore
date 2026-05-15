@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+build
 *.local
 
 # Editor directories and files
@@ -28,3 +29,5 @@ leveldb
 backup
 *.tmp
 .storage.lock
+backend-cpp/build
+backend-cpp/data

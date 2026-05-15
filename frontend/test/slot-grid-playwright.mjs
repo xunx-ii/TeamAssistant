@@ -8,7 +8,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { gzipSync } from 'node:zlib'
 import { chromium } from 'playwright'
 
-const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const frontendDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const rootDir = resolve(frontendDir, '..')
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 5179)
 const baseUrl = `http://127.0.0.1:${port}`
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? 23229)
@@ -95,8 +96,8 @@ function toPersistentData(data) {
 }
 
 async function writeServerData(data) {
-  const response = await fetch(`${apiBaseUrl}/api/data`, {
-    method: 'POST',
+  const response = await fetch(`${apiBaseUrl}/api/v2/data`, {
+    method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
       'x-teamassistant-replace': '1',
@@ -113,7 +114,7 @@ async function writeServerData(data) {
 }
 
 async function writeLockState(lockState) {
-  const response = await fetch(`${apiBaseUrl}/api/lock`, {
+  const response = await fetch(`${apiBaseUrl}/api/v2/slot-locks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(lockState),
@@ -221,8 +222,9 @@ async function prepareServerRoot() {
   const dir = resolve(rootDir, 'node_modules', '.tmp', `teamassistant-e2e-server-${runId}`)
   await rm(dir, { recursive: true, force: true })
   await mkdir(dir, { recursive: true })
-  await cp(resolve(rootDir, 'server.js'), join(dir, 'server.js'))
-  await cp(resolve(rootDir, 'server'), join(dir, 'server'), { recursive: true })
+  await cp(resolve(rootDir, 'legacy-node', 'server.js'), join(dir, 'server.js'))
+  await cp(resolve(rootDir, 'legacy-node', 'server'), join(dir, 'server'), { recursive: true })
+  await cp(resolve(rootDir, 'legacy-node', 'admin.json'), join(dir, 'admin.json'))
   return dir
 }
 
@@ -237,7 +239,7 @@ try {
   startedApiServer = true
   apiServer.stdout.on('data', chunk => { apiOutput += chunk.toString() })
   apiServer.stderr.on('data', chunk => { apiOutput += chunk.toString() })
-  await waitForHttp(apiServer, `${apiBaseUrl}/api/data`, 'backend server')
+  await waitForHttp(apiServer, `${apiBaseUrl}/api/v2/bootstrap`, 'backend server')
 
   await writeServerData(createServerData(createTeam()))
   await writeLockState({ teamId: `team-${runId}`, slotIndex: 3, qq: '10001' })
@@ -256,7 +258,7 @@ try {
     process.execPath,
     [viteCli, '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
     {
-      cwd: rootDir,
+      cwd: frontendDir,
       env: { ...process.env, BROWSER: 'none', VITE_API_PROXY_TARGET: apiBaseUrl },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

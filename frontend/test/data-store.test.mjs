@@ -8,7 +8,7 @@ import {
   validateExpectedSlotMember,
   validateSnapshotData,
   validateSlotMutationLock,
-} from '../server/data-store.js'
+} from '../../legacy-node/server/data-store.js'
 import { applyMutation as applyClientMutation } from '../src/dataStore.ts'
 import { normalizeHydratableData as normalizeClientHydratableData } from '../src/dataHydration.ts'
 import { createSubsidyTargets, getSubsidyWeekOptions } from '../src/subsidy.ts'

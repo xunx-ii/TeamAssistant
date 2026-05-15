@@ -1,10 +1,10 @@
 import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team, UserProfiles } from './types'
 import type { Mutation } from './dataStore'
 
-const API = '/api'
+const API = '/api/v2'
 const noCache = { cache: 'no-store' as const }
 const SERVER_UNAVAILABLE_ERROR = '无法连接到报名服务，请确认后端已启动'
-const HTML_RESPONSE_ERROR = '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api 代理'
+const HTML_RESPONSE_ERROR = '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api/v2 代理'
 const NON_JSON_RESPONSE_ERROR = '接口返回了非 JSON 响应，请确认后端服务是否正常'
 const INVALID_JSON_ERROR = '接口返回的数据无法解析'
 
@@ -68,6 +68,7 @@ export interface AcquireResult {
   lockedAt?: number
   reason?: string
   timestamp?: number
+  lockToken?: number | string
   error?: string
 }
 
@@ -81,6 +82,9 @@ export interface ValidateResult {
 export interface MutationResult {
   ok: boolean
   data?: ServerData
+  dataVersion?: number
+  lockVersion?: number
+  patch?: unknown
   reason?: string
   lockedAt?: number
   currentMemberQq?: string | null
@@ -173,13 +177,162 @@ async function requestResult<T extends { ok: boolean }>(input: RequestInfo | URL
   }
 }
 
+function encodePath(value: string | number) {
+  return encodeURIComponent(String(value))
+}
+
+function jsonRequest(method: string, body?: unknown): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }
+}
+
+function routeMutation(mutation: Mutation): { url: string; init: RequestInit } {
+  switch (mutation.type) {
+    case 'createTeam':
+      return { url: `${API}/teams`, init: jsonRequest('POST', { team: mutation.team }) }
+
+    case 'deleteTeam':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}`,
+        init: jsonRequest('DELETE', { fallbackTeam: mutation.fallbackTeam }),
+      }
+
+    case 'archiveTeam':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/archive`,
+        init: jsonRequest('POST', {
+          archivedBy: mutation.archivedBy,
+          archivedAt: mutation.archivedAt,
+          fallbackTeam: mutation.fallbackTeam,
+        }),
+      }
+
+    case 'restoreArchivedTeam':
+      return {
+        url: `${API}/archives/${encodePath(mutation.archiveId)}/restore`,
+        init: jsonRequest('POST', { actorQq: mutation.actorQq, restoredAt: mutation.restoredAt }),
+      }
+
+    case 'renameTeam':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}`,
+        init: jsonRequest('PATCH', { name: mutation.name }),
+      }
+
+    case 'updateTeamWeekStart':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}`,
+        init: jsonRequest('PATCH', { weekStart: mutation.weekStart }),
+      }
+
+    case 'updateTeamNote':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}`,
+        init: jsonRequest('PATCH', { note: mutation.note }),
+      }
+
+    case 'reorderTeams':
+      return { url: `${API}/teams/reorder`, init: jsonRequest('POST', { ids: mutation.ids }) }
+
+    case 'toggleTeamConfigLock':
+    case 'setTeamLockState':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/lock-state`,
+        init: jsonRequest('PATCH', { locked: mutation.locked }),
+      }
+
+    case 'setSlotRole':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/role`,
+        init: jsonRequest('PUT', {
+          role: mutation.role,
+          martialArtIndex: mutation.martialArtIndex,
+          assignQQ: mutation.assignQQ,
+          actorQq: mutation.actorQq,
+        }),
+      }
+
+    case 'quickReserve':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/quick-reserve`,
+        init: jsonRequest('POST', { reserveType: mutation.reserveType, count: mutation.count }),
+      }
+
+    case 'signupSlot':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/member`,
+        init: jsonRequest('PUT', {
+          qq: mutation.member.qq,
+          actorQq: mutation.actorQq,
+          member: mutation.member,
+          lockToken: mutation.lockTimestamp,
+          expectedMemberQq: mutation.expectedMemberQq,
+        }),
+      }
+
+    case 'cancelSlot':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/cancel`,
+        init: jsonRequest('POST', {
+          reason: mutation.reason,
+          cancelledBy: mutation.cancelledBy,
+          timestamp: mutation.timestamp,
+          actorQq: mutation.actorQq,
+          lockToken: mutation.lockTimestamp,
+          expectedMemberQq: mutation.expectedMemberQq,
+        }),
+      }
+
+    case 'leaveSlot':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/slots/${encodePath(mutation.slotIndex)}/member`,
+        init: jsonRequest('DELETE', {
+          actorQq: mutation.actorQq,
+          lockToken: mutation.lockTimestamp,
+          expectedMemberQq: mutation.expectedMemberQq,
+        }),
+      }
+
+    case 'dismissCancellation':
+      return {
+        url: `${API}/cancellations/${encodePath(mutation.qq)}/${encodePath(mutation.timestamp)}`,
+        init: jsonRequest('DELETE'),
+      }
+
+    case 'updateNickname':
+      return {
+        url: `${API}/user-profiles/${encodePath(mutation.qq)}`,
+        init: jsonRequest('PUT', { nickname: mutation.nickname }),
+      }
+
+    case 'updateTeamSubsidyTypes':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}/subsidy-types`,
+        init: jsonRequest('PUT', { subsidyTypes: mutation.subsidyTypes }),
+      }
+
+    case 'registerMemberSubsidies': {
+      const target = mutation.archiveId
+        ? `${API}/archives/${encodePath(mutation.archiveId)}/subsidies/${encodePath(mutation.qq)}`
+        : `${API}/teams/${encodePath(mutation.teamId ?? '')}/subsidies/${encodePath(mutation.qq)}`
+      return {
+        url: target,
+        init: jsonRequest('PUT', { selections: mutation.selections, weekStart: mutation.weekStart }),
+      }
+    }
+  }
+}
+
 export async function checkServer(): Promise<boolean> {
   const version = await fetchServerVersion()
   return Boolean(version)
 }
 
 export async function fetchData(): Promise<ServerData | null> {
-  const data = await requestData<unknown>(`${API}/data`, noCache)
+  const data = await requestData<unknown>(`${API}/bootstrap`, noCache)
   return isServerData(data) ? data : null
 }
 
@@ -205,7 +358,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
   if (typeof dataVersion === 'number') params.set('dataVersion', String(dataVersion))
   if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
   const suffix = params.toString() ? `?${params}` : ''
-  const data = await requestData<unknown>(`${API}/changes${suffix}`, noCache)
+  const data = await requestData<unknown>(`${API}/sync${suffix}`, noCache)
   if (
     data &&
     typeof data === 'object' &&
@@ -263,36 +416,29 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): ((
 }
 
 export async function pushData(data: Partial<ServerData>): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/data`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
+  const result = await requestResult<{ ok: boolean }>(`${API}/data`, jsonRequest('PUT', data))
   return result.ok
 }
 
 export async function mutateData(mutation: Mutation): Promise<MutationResult> {
-  return requestResult<MutationResult>(`${API}/mutate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mutation }),
-  })
+  const route = routeMutation(mutation)
+  return requestResult<MutationResult>(route.url, route.init)
 }
 
 export async function acquireSlotLock(teamId: string, slotIndex: number, qq: string): Promise<AcquireResult> {
-  return requestResult<AcquireResult>(`${API}/lock`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ teamId, slotIndex, qq }),
-  })
+  const result = await requestResult<AcquireResult>(`${API}/slot-locks`, jsonRequest('POST', { teamId, slotIndex, qq }))
+  if (result.ok && result.lockToken != null && result.timestamp == null) {
+    const numericToken = Number(result.lockToken)
+    return { ...result, timestamp: Number.isFinite(numericToken) ? numericToken : Date.now() }
+  }
+  return result
 }
 
 export async function releaseSlotLock(teamId: string, slotIndex: number, qq: string, lockTimestamp?: number): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/lock`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
-  })
+  const result = await requestResult<{ ok: boolean }>(
+    `${API}/slot-locks/${encodePath(teamId)}/${encodePath(slotIndex)}`,
+    jsonRequest('DELETE', { qq, lockToken: lockTimestamp }),
+  )
   return result.ok
 }
 
@@ -319,29 +465,23 @@ export async function fetchLockStateOrNull(): Promise<LockState | null> {
 }
 
 export async function lockTeam(teamId: string): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/team-lock`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ teamId }),
-  })
+  const result = await requestResult<{ ok: boolean }>(`${API}/team-locks`, jsonRequest('POST', { teamId }))
   return result.ok
 }
 
 export async function unlockTeam(teamId: string): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/team-lock`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ teamId }),
-  })
+  const result = await requestResult<{ ok: boolean }>(
+    `${API}/team-locks/${encodePath(teamId)}`,
+    jsonRequest('DELETE'),
+  )
   return result.ok
 }
 
 export async function validateLock(teamId: string, slotIndex: number, qq: string, lockTimestamp: number): Promise<ValidateResult> {
-  return requestResult<ValidateResult>(`${API}/validate-lock`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ teamId, slotIndex, qq, lockTimestamp }),
-  })
+  return requestResult<ValidateResult>(
+    `${API}/slot-locks/validate`,
+    jsonRequest('POST', { teamId, slotIndex, qq, lockToken: lockTimestamp }),
+  )
 }
 
 
@@ -351,11 +491,7 @@ export async function fetchSubsidyPresets(): Promise<SubsidyType[] | null> {
 }
 
 export async function pushSubsidyPresets(presets: SubsidyType[]): Promise<boolean> {
-  const result = await requestResult<{ ok: boolean }>(`${API}/subsidy-presets`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ presets }),
-  })
+  const result = await requestResult<{ ok: boolean }>(`${API}/subsidy-presets`, jsonRequest('PUT', { presets }))
   return result.ok
 }
 export async function fetchBackups(): Promise<BackupListResult> {
@@ -369,19 +505,11 @@ export async function createBackup(): Promise<BackupActionResult> {
 }
 
 export async function restoreBackup(name: string): Promise<BackupActionResult> {
-  return requestResult<BackupActionResult>(`${API}/backups/restore`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
+  return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}/restore`, jsonRequest('POST'))
 }
 
 export async function deleteBackup(name: string): Promise<BackupActionResult> {
-  return requestResult<BackupActionResult>(`${API}/backups`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
+  return requestResult<BackupActionResult>(`${API}/backups/${encodePath(name)}`, jsonRequest('DELETE'))
 }
 
 export async function importBackupFile(file: File): Promise<BackupActionResult> {

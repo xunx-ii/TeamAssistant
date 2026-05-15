@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
-import { acquireSlotLock, releaseSlotLock, validateLock } from '../api'
+import { acquireSlotLock, releaseSlotLock } from '../api'
 import { ChevronsUpDown, Search, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
@@ -157,17 +157,6 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     savingRef.current = true
     setSaving(true)
 
-    if (teamId && slotInfo != null && shouldLock) {
-      const validation = await validateLock(teamId, slotInfo.index, lockQq, lockTimestamp)
-      if (!validation.ok) {
-        if (validation.reason === 'teamLocked') setError('表格已被管理员锁定，无法保存')
-        else if (validation.reason === 'network' || validation.error) setError(validation.error || '无法连接到报名服务，请稍后重试')
-        else setError('该位置已被其他人抢占，请重新选择')
-        savingRef.current = false
-        if (mountedRef.current) setSaving(false)
-        return
-      }
-    }
     const maIdx = parseInt(textMartialArt)
     const ma = martialArts[maIdx]
     if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing && !isBossSlot) {

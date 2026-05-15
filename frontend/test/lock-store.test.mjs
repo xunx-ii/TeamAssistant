@@ -13,8 +13,8 @@ import {
   removeTeamLock,
   setTeamLock,
   writeLockData,
-} from '../server/lock-store.js'
-import { withFileLock } from '../server/shared-file-lock.js'
+} from '../../legacy-node/server/lock-store.js'
+import { withFileLock } from '../../legacy-node/server/shared-file-lock.js'
 
 async function withTempDir(run) {
   const dir = await mkdtemp(join(tmpdir(), 'teamassistant-locks-'))

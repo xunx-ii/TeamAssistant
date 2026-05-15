@@ -5,14 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:vite": "vite",
-    "dev:server": "node server.js",
-    "build": "tsc -b && vite build",
-    "serve": "node server.js",
-    "lint": "eslint .",
-    "preview": "vite preview",
-    "test": "node --import tsx --test test/*.test.mjs",
-    "test:e2e": "node test/slot-grid-playwright.mjs"
+    "dev:vite": "vite --config frontend/vite.config.ts --host 127.0.0.1",
+    "dev:legacy": "node legacy-node/server.js",
+    "backend:configure": "cmake -S backend-cpp -B backend-cpp/build",
+    "backend:build": "cmake --build backend-cpp/build",
+    "backend:serve": "node scripts/serve-backend-cpp.mjs",
+    "build": "tsc -b frontend && vite build --config frontend/vite.config.ts",
+    "serve": "node scripts/serve-backend-cpp.mjs",
+    "lint": "eslint -c frontend/eslint.config.js frontend",
+    "preview": "vite preview --config frontend/vite.config.ts",
+    "test": "node --import tsx --test frontend/test/*.test.mjs",
+    "test:e2e": "node frontend/test/slot-grid-playwright.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

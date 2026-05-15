@@ -11,9 +11,9 @@ import {
   createLevelStore,
   decodeFromLevelValue,
   encodeForLevelValue,
-} from '../server/level-store.js'
-import { normalizeData, normalizeHydratableData, validateSnapshotData } from '../server/data-store.js'
-import { normalizeLockData } from '../server/lock-store.js'
+} from '../../legacy-node/server/level-store.js'
+import { normalizeData, normalizeHydratableData, validateSnapshotData } from '../../legacy-node/server/data-store.js'
+import { normalizeLockData } from '../../legacy-node/server/lock-store.js'
 
 const gunzipAsync = promisify(gunzip)
 const gzipAsync = promisify(gzip)

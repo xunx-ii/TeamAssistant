@@ -27,7 +27,7 @@ async function withMockedFetch(mock, run) {
   }
 }
 
-test('checkServer returns false when /api/version responds with html', async () => {
+test('checkServer returns false when /api/v2/version responds with html', async () => {
   await withMockedFetch(async () => createHtmlResponse(), async () => {
     const { checkServer } = await import(`../src/api.ts?case=${Date.now()}-html-check`)
     const ok = await checkServer()
@@ -53,7 +53,7 @@ test('mutateData reports html fallback response instead of generic network error
     const result = await mutateData({ type: 'renameTeam', teamId: 'team-1', name: '一团' })
     assert.equal(result.ok, false)
     assert.equal(result.reason, 'invalidResponse')
-    assert.equal(result.error, '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api 代理')
+    assert.equal(result.error, '接口返回了页面内容，请确认后端已启动，或已为开发环境配置 /api/v2 代理')
   })
 })
 
@@ -94,7 +94,7 @@ test('checkServer uses the lightweight version endpoint', async () => {
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].input, '/api/version')
+  assert.equal(calls[0].input, '/api/v2/version')
 })
 
 test('fetchLockState returns slot and team locks from one request', async () => {
@@ -117,7 +117,7 @@ test('fetchLockState returns slot and team locks from one request', async () => 
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].input, '/api/locks')
+  assert.equal(calls[0].input, '/api/v2/locks')
 })
 
 test('fetchLockState preserves lock version when provided', async () => {
@@ -150,7 +150,7 @@ test('fetchServerVersion reads the lightweight version endpoint', async () => {
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].input, '/api/version')
+  assert.equal(calls[0].input, '/api/v2/version')
 })
 
 test('fetchServerChanges requests only version deltas and parses changed payloads', async () => {
@@ -180,7 +180,7 @@ test('fetchServerChanges requests only version deltas and parses changed payload
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].input, '/api/changes?dataVersion=3&lockVersion=7')
+  assert.equal(calls[0].input, '/api/v2/sync?dataVersion=3&lockVersion=7')
 })
 
 test('subscribeServerEvents parses server sent version events', async () => {
@@ -209,7 +209,7 @@ test('subscribeServerEvents parses server sent version events', async () => {
     const { subscribeServerEvents } = await import(`../src/api.ts?case=${Date.now()}-events`)
     const unsubscribe = subscribeServerEvents(event => events.push(event))
 
-    assert.equal(instances[0].url, '/api/events')
+    assert.equal(instances[0].url, '/api/v2/events')
     instances[0].emit('version', { ok: true, type: 'data', dataVersion: 5, lockVersion: 9 })
     assert.equal(events.length, 1)
     assert.equal(events[0].dataVersion, 5)
@@ -226,7 +226,7 @@ test('backup API helpers use the backup endpoints', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {
     calls.push({ input: String(input), init })
-    if (String(input).endsWith('/backups/restore')) {
+    if (String(input).endsWith('/restore')) {
       return createJsonResponse({
         ok: true,
         data: { teams: [], cancellations: [], archivedTeams: [], logs: [] },
@@ -267,12 +267,12 @@ test('backup API helpers use the backup endpoints', async () => {
     assert.equal(imported.name, 'backup-imported.json.gz')
   })
 
-  assert.equal(calls[0].input, '/api/backups')
+  assert.equal(calls[0].input, '/api/v2/backups')
   assert.equal(calls[1].init.method, 'POST')
-  assert.equal(calls[2].input, '/api/backups/restore')
-  assert.equal(calls[3].input, '/api/backups')
+  assert.equal(calls[2].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz/restore')
+  assert.equal(calls[3].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz')
   assert.equal(calls[3].init.method, 'DELETE')
-  assert.equal(calls[4].input, '/api/backups/import')
+  assert.equal(calls[4].input, '/api/v2/backups/import')
   assert.equal(calls[4].init.headers['Content-Type'], 'application/octet-stream')
 })
 
@@ -295,7 +295,49 @@ test('subsidy preset API helpers use the preset endpoints', async () => {
     assert.equal(pushed, true)
   })
 
-  assert.equal(calls[0].input, '/api/subsidy-presets')
-  assert.equal(calls[1].input, '/api/subsidy-presets')
-  assert.equal(calls[1].init.method, 'POST')
+  assert.equal(calls[0].input, '/api/v2/subsidy-presets')
+  assert.equal(calls[1].input, '/api/v2/subsidy-presets')
+  assert.equal(calls[1].init.method, 'PUT')
+})
+
+test('mutateData routes slot signup to atomic v2 member endpoint', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({ ok: true, dataVersion: 2, lockVersion: 3, patch: { type: 'signupSlot' } })
+  }, async () => {
+    const { mutateData } = await import(`../src/api.ts?case=${Date.now()}-atomic-signup`)
+    const result = await mutateData({
+      type: 'signupSlot',
+      teamId: 'team-1',
+      slotIndex: 4,
+      actorQq: '10001',
+      lockTimestamp: 123456,
+      expectedMemberQq: null,
+      member: {
+        qq: '10001',
+        martialArtIndex: '1',
+        gearScore: '1200',
+        characterId: '角色A',
+        note: '',
+      },
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(calls[0].input, '/api/v2/teams/team-1/slots/4/member')
+    assert.equal(calls[0].init.method, 'PUT')
+    assert.deepEqual(JSON.parse(calls[0].init.body), {
+      qq: '10001',
+      actorQq: '10001',
+      member: {
+        qq: '10001',
+        martialArtIndex: '1',
+        gearScore: '1200',
+        characterId: '角色A',
+        note: '',
+      },
+      lockToken: 123456,
+      expectedMemberQq: null,
+    })
+  })
 })

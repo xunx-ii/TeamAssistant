@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from '../src/subsidy.ts'
-import { createSubsidyStatRows, getSubsidyStatUserLines } from '../src/components/SubsidyStats.tsx'
+import { createSubsidyStatRows, getSubsidyStatUserLines } from '../src/subsidyStats.ts'
 
 function createTeam(id, name, weekStart) {
   return {

@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createRuntimeState } from '../server/runtime-state.js'
-import { normalizeData, validateSnapshotData } from '../server/data-store.js'
-import { normalizeLockData } from '../server/lock-store.js'
+import { createRuntimeState } from '../../legacy-node/server/runtime-state.js'
+import { normalizeData, validateSnapshotData } from '../../legacy-node/server/data-store.js'
+import { normalizeLockData } from '../../legacy-node/server/lock-store.js'
 
 function createSnapshot() {
   return {

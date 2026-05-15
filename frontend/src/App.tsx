@@ -313,8 +313,14 @@ function App() {
     }
 
     const result = await mutateData(mutation)
-    if (result.ok && result.data) {
-      syncServerData(result.data)
+    if (result.ok) {
+      if (result.data) {
+        syncServerData(result.data)
+      } else {
+        applyLocalMutation(mutation)
+        if (typeof result.dataVersion === 'number') dataVersionRef.current = result.dataVersion
+        if (typeof result.lockVersion === 'number') lockVersionRef.current = result.lockVersion
+      }
       return result
     }
 
@@ -588,7 +594,7 @@ function App() {
     }
   }
 
-  const handleLeave = async (slotIndex: number, lockTimestamp?: number) => {
+  const handleLeave = useCallback(async (slotIndex: number, lockTimestamp?: number) => {
     if (!activeTeam || !qq) return
     const expectedMemberQq = activeTeam.slots[slotIndex]?.member?.qq ?? null
     const result = await runMutation({
@@ -602,7 +608,12 @@ function App() {
     if (result.ok) {
       clearModals()
     }
-  }
+  }, [activeTeam, qq, runMutation])
+
+  const handleEditSlotLeave = useCallback((lockTimestamp?: number) => {
+    if (editSlot === null) return
+    void handleLeave(editSlot, lockTimestamp)
+  }, [editSlot, handleLeave])
 
   const getTakenMartialArts = (excludeSlot?: number): number[] => {
     if (!activeTeam) return []
@@ -831,6 +842,7 @@ function App() {
       />
 
       {editSlot !== null && activeTeam && (() => {
+        const editSlotIndex = editSlot
         const existingMember = activeTeam.slots[editSlot]?.member ?? undefined
         const isOwnSlot = existingMember?.qq === qq
         const isAdminEdit = isAdmin && !isOwnSlot
@@ -853,8 +865,8 @@ function App() {
             takenMartialArts={getTakenMartialArts(editSlot)}
             onConfirm={handleSignupConfirm}
             onClose={() => setEditSlot(null)}
-            onLeave={!isAdminEdit ? (lockTimestamp) => { void handleLeave(editSlot, lockTimestamp) } : undefined}
-            onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlot); setEditSlot(null) } : undefined}
+            onLeave={!isAdminEdit ? handleEditSlotLeave : undefined}
+            onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlotIndex); setEditSlot(null) } : undefined}
           />
         )
       })()}

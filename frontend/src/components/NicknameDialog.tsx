@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
@@ -18,7 +18,7 @@ interface Props {
 }
 
 export function NicknameDialog({ open, qq, nickname, required = false, errorMessage = '', onConfirm, onClose, onLogout }: Props) {
-  const [value, setValue] = useState(nickname)
+  const [value, setValue] = useState(() => nickname)
   const [localError, setLocalError] = useState('')
   const error = localError || errorMessage
   const inputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
@@ -28,12 +28,6 @@ export function NicknameDialog({ open, qq, nickname, required = false, errorMess
       setLocalError('')
     },
   })
-
-  useEffect(() => {
-    if (!open) return
-    setValue(nickname)
-    setLocalError('')
-  }, [nickname, open])
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -54,6 +48,7 @@ export function NicknameDialog({ open, qq, nickname, required = false, errorMess
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        key={`${qq}-${nickname}-${open ? 'open' : 'closed'}`}
         className="max-w-sm"
         hideClose={required}
         onPointerDownOutside={event => {
