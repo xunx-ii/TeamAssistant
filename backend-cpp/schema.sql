@@ -5,6 +5,8 @@ PRAGMA busy_timeout = 3000;
 PRAGMA temp_store = MEMORY;
 PRAGMA wal_autocheckpoint = 1000;
 PRAGMA cache_size = -20000;
+PRAGMA mmap_size = 268435456;
+PRAGMA journal_size_limit = 67108864;
 
 CREATE TABLE IF NOT EXISTS meta_versions (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -86,3 +88,7 @@ CREATE TABLE IF NOT EXISTS subsidy_preset_levels (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_team_timestamp ON operation_logs(team_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON operation_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_teams_sort_order ON teams(sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_archives_archived_at ON archives(archived_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cancellations_timestamp ON cancellations(timestamp DESC);

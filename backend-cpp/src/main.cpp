@@ -252,6 +252,8 @@ public:
         exec("PRAGMA temp_store=MEMORY;");
         exec("PRAGMA wal_autocheckpoint=1000;");
         exec("PRAGMA cache_size=-20000;");
+        exec("PRAGMA mmap_size=268435456;");
+        exec("PRAGMA journal_size_limit=67108864;");
         ensureSchema();
         dataVersionCache_.store(readDataVersionUnlocked(), std::memory_order_relaxed);
     }
@@ -324,9 +326,7 @@ public:
     }
 
     Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion, bool isAdmin = false) {
-        std::lock_guard lock(mutex_);
-        ensureSchema();
-        Value current = versionsUnlocked();
+        Value current = versionSnapshot();
         const auto currentData = current["dataVersion"].asInt64();
         const auto currentLocks = current["lockVersion"].asInt64();
         const bool dataChanged = !dataVersion.has_value() || *dataVersion != currentData;
@@ -336,12 +336,21 @@ public:
         json["dataChanged"] = dataChanged;
         json["lockChanged"] = lockChanged;
         if (dataChanged) {
-            Value data = bootstrapUnlocked();
+            Value data;
+            {
+                std::lock_guard lock(mutex_);
+                ensureSchema();
+                data = bootstrapUnlocked();
+            }
             data["isAdmin"] = isAdmin;
             json["data"] = data;
+            json["dataVersion"] = data["dataVersion"];
+            json["lockVersion"] = data["lockVersion"];
         }
         if (lockChanged) {
-            json["locks"] = publicLocksSnapshot();
+            Value locks = publicLocksSnapshot();
+            json["locks"] = locks;
+            json["lockVersion"] = locks["lockVersion"];
         }
         return json;
     }
@@ -393,6 +402,16 @@ public:
         const std::string &lockToken,
         std::optional<std::string> expectedMemberQq
     ) {
+        Value normalizedMember = normalizeMember(member);
+        if (!normalizedMember.isObject() || !normalizedMember["qq"].isString() || normalizedMember["qq"].asString().empty()) {
+            return errorJson("Invalid member");
+        }
+
+        Value preflightLockCheck = validateMutationSlotLock(teamId, slotIndex, actorQq, lockToken);
+        if (!preflightLockCheck["ok"].asBool()) {
+            return preflightLockCheck;
+        }
+
         std::lock_guard lock(mutex_);
         ensureSchema();
         const auto now = nowMs();
@@ -418,12 +437,6 @@ public:
                 Value conflict = conflictJson("slotChanged");
                 conflict["currentMemberQq"] = currentMemberQq.has_value() ? Value(*currentMemberQq) : Value(Json::nullValue);
                 return conflict;
-            }
-
-            Value normalizedMember = normalizeMember(member);
-            if (!normalizedMember.isObject() || !normalizedMember["qq"].isString() || normalizedMember["qq"].asString().empty()) {
-                exec("ROLLBACK;");
-                return errorJson("Invalid member");
             }
 
             sqlite3_stmt *stmt = nullptr;
@@ -459,6 +472,11 @@ public:
         const std::string &lockToken,
         std::optional<std::string> expectedMemberQq
     ) {
+        Value preflightLockCheck = validateMutationSlotLock(teamId, slotIndex, actorQq, lockToken);
+        if (!preflightLockCheck["ok"].asBool()) {
+            return preflightLockCheck;
+        }
+
         std::lock_guard lock(mutex_);
         ensureSchema();
         const auto now = nowMs();
@@ -518,6 +536,11 @@ public:
         const std::string &lockToken,
         std::optional<std::string> expectedMemberQq
     ) {
+        Value preflightLockCheck = validateMutationSlotLock(teamId, slotIndex, actorQq, lockToken);
+        if (!preflightLockCheck["ok"].asBool()) {
+            return preflightLockCheck;
+        }
+
         std::lock_guard lock(mutex_);
         ensureSchema();
         const auto now = nowMs();
@@ -623,7 +646,7 @@ public:
         ensureSchema();
         Value result;
         result["ok"] = true;
-        result["presets"] = bootstrapUnlocked()["subsidyPresets"];
+        result["presets"] = readSubsidyPresetsUnlocked();
         return result;
     }
 
@@ -1347,6 +1370,7 @@ private:
     const long long lockTimeoutMs_ = 30'000;
     RuntimeLockState runtimeLocks_;
     std::atomic<long long> dataVersionCache_{1};
+    std::atomic<long long> lockVersionCache_{1};
     std::uint64_t nextLockToken_ = 1;
 
     static long long nowMs() {
@@ -2001,12 +2025,12 @@ private:
     }
 
     long long runtimeLockVersion() {
-        std::lock_guard lock(runtimeMutex_);
-        return runtimeLocks_.version;
+        return lockVersionCache_.load(std::memory_order_relaxed);
     }
 
     void bumpLockVersionLocked() {
         runtimeLocks_.version += 1;
+        lockVersionCache_.store(runtimeLocks_.version, std::memory_order_relaxed);
     }
 
     void replaceSubsidyPresetsUnlocked(const Value &presets) {
@@ -2446,6 +2470,33 @@ private:
         return json;
     }
 
+    Value readSubsidyPresetsUnlocked() {
+        Value presets(Json::arrayValue);
+        sqlite3_stmt *stmt = nullptr;
+        prepare("SELECT id, name FROM subsidy_presets ORDER BY id", &stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Value preset;
+            const std::string presetId = textColumn(stmt, 0);
+            preset["id"] = presetId;
+            preset["name"] = textColumn(stmt, 1);
+            preset["levels"] = Value(Json::arrayValue);
+
+            sqlite3_stmt *levelStmt = nullptr;
+            prepare("SELECT name, gold FROM subsidy_preset_levels WHERE preset_id = ? ORDER BY level_index", &levelStmt);
+            bindString(levelStmt, 1, presetId);
+            while (sqlite3_step(levelStmt) == SQLITE_ROW) {
+                Value level;
+                level["name"] = textColumn(levelStmt, 0);
+                level["gold"] = sqlite3_column_double(levelStmt, 1);
+                preset["levels"].append(level);
+            }
+            sqlite3_finalize(levelStmt);
+            presets.append(preset);
+        }
+        sqlite3_finalize(stmt);
+        return presets;
+    }
+
     Value bootstrapUnlocked() {
         Value json = versionsUnlocked();
         json["teams"] = Value(Json::arrayValue);
@@ -2566,31 +2617,12 @@ private:
         }
         sqlite3_finalize(stmt);
 
-        prepare("SELECT id, name FROM subsidy_presets ORDER BY id", &stmt);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            Value preset;
-            const std::string presetId = textColumn(stmt, 0);
-            preset["id"] = presetId;
-            preset["name"] = textColumn(stmt, 1);
-            preset["levels"] = Value(Json::arrayValue);
-
-            sqlite3_stmt *levelStmt = nullptr;
-            prepare("SELECT name, gold FROM subsidy_preset_levels WHERE preset_id = ? ORDER BY level_index", &levelStmt);
-            bindString(levelStmt, 1, presetId);
-            while (sqlite3_step(levelStmt) == SQLITE_ROW) {
-                Value level;
-                level["name"] = textColumn(levelStmt, 0);
-                level["gold"] = sqlite3_column_double(levelStmt, 1);
-                preset["levels"].append(level);
-            }
-            sqlite3_finalize(levelStmt);
-            json["subsidyPresets"].append(preset);
-        }
-        sqlite3_finalize(stmt);
+        json["subsidyPresets"] = readSubsidyPresetsUnlocked();
 
         Value locks = publicLocksSnapshot();
         json["locks"] = locks["slots"];
         json["teamLocks"] = locks["teams"];
+        json["lockVersion"] = locks["lockVersion"];
         return json;
     }
 };
