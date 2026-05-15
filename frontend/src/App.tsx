@@ -345,12 +345,6 @@ function App() {
       pendingServerEventRef.current = event
       void syncServerChanges(event)
     })
-    if (unsubscribe) {
-      return () => {
-        unsubscribe()
-      }
-    }
-
     const poll = async () => {
       if (pendingServerEventRef.current) {
         return syncServerChanges()
@@ -366,11 +360,13 @@ function App() {
       return syncServerChanges(version)
     }
     const controller = startAdaptivePoll(poll, {
-      baseDelayMs: 2_000,
-      hiddenDelayMs: 15_000,
-      maxDelayMs: 20_000,
+      baseDelayMs: 1_500,
+      hiddenDelayMs: 10_000,
+      maxDelayMs: 15_000,
+      runImmediately: false,
     })
     return () => {
+      unsubscribe?.()
       controller.stop()
     }
   }, [serverMode, syncServerChanges])

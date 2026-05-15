@@ -27,7 +27,7 @@ This document defines the contract used by the split React frontend and the new 
   - When the caller is only behind by recent slot save operations, the response may include `patches` instead of a full `data` snapshot. Clients must apply patches in order and fall back to `data` whenever it is present.
 - `GET /api/v2/events`
   - Persistent server-sent events. Sends `hello` once, then `version` events with `{ ok, type, dataVersion, lockVersion }`.
-  - Browsers that support `EventSource` should use this as the primary sync trigger and call `/sync` only after receiving version changes. Version polling is only a compatibility fallback when SSE is unavailable.
+  - Browsers that support `EventSource` should use this as the primary sync trigger. The frontend still keeps a lightweight `/version` poll as a fallback, so delayed or buffered event streams can recover without a full page refresh.
 
 ## Slot Lock And Save
 
