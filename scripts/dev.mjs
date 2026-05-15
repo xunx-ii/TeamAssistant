@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 const rootDir = resolve(import.meta.dirname, '..')
 const frontendDir = resolve(rootDir, 'frontend')
 const apiUrl = 'http://127.0.0.1:23219/api/v2/version'
+const vitePort = process.env.VITE_PORT ?? '5173'
 const viteCli = resolve(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
 const cppServerCandidates = [
   resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend.exe'),
@@ -33,7 +34,16 @@ function spawnProcess(label, command, args, cwd = rootDir) {
 async function isApiReady() {
   try {
     const response = await fetch(apiUrl, { cache: 'no-store' })
-    return response.ok
+    if (!response.ok) return false
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    if (!contentType.includes('json')) return false
+    const payload = await response.json()
+    return Boolean(
+      payload &&
+      typeof payload === 'object' &&
+      typeof payload.dataVersion === 'number' &&
+      typeof payload.lockVersion === 'number',
+    )
   } catch {
     return false
   }
@@ -98,7 +108,14 @@ if (await isApiReady()) {
   await waitForApi(serverProcess)
 }
 
-const viteProcess = spawnProcess('vite', process.execPath, [viteCli, '--host', '127.0.0.1'], frontendDir)
+const viteProcess = spawnProcess('vite', process.execPath, [
+  viteCli,
+  '--host',
+  '127.0.0.1',
+  '--port',
+  vitePort,
+  '--strictPort',
+], frontendDir)
 
 viteProcess.once('exit', code => {
   void (async () => {

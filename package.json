@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:vite": "vite --config frontend/vite.config.ts --host 127.0.0.1",
+    "dev:vite": "vite --config frontend/vite.config.ts",
     "backend:configure": "cmake -S backend-cpp -B backend-cpp/build",
     "backend:build": "cmake --build backend-cpp/build",
     "backend:serve": "node scripts/serve-backend-cpp.mjs",

@@ -19,6 +19,7 @@ npm run dev
 ```
 
 `npm run dev` 会启动 `backend-cpp` 构建产物，并启动 Vite。前端会把 `/api/v2` 代理到 `http://127.0.0.1:23219`。
+默认前端地址是 `http://127.0.0.1:5173`。如果 5173 已被占用，先停掉旧服务，或用 `VITE_PORT=其他端口 npm run dev` 指定端口。
 
 ## 验证
 

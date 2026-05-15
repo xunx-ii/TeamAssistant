@@ -4,14 +4,24 @@ import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath } from 'node:url'
 
 const frontendRoot = fileURLToPath(new URL('.', import.meta.url))
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:23219'
+const devPort = Number(process.env.VITE_PORT ?? 5173)
 
 export default defineConfig({
   root: frontendRoot,
   plugins: [react(), tailwindcss()],
   base: './',
   server: {
+    host: '127.0.0.1',
+    port: devPort,
+    strictPort: true,
     proxy: {
-      '/api/v2': process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:23219',
+      '/api/v2': apiProxyTarget,
+    },
+  },
+  preview: {
+    proxy: {
+      '/api/v2': apiProxyTarget,
     },
   },
 })
