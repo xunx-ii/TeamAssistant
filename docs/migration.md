@@ -45,5 +45,5 @@ The `locks` field remains accepted for backup compatibility, but runtime locks a
 - 30 concurrent saves to different team/slot pairs complete successfully.
 - 30 concurrent lock attempts against one slot produce one winner and fast conflict responses.
 - Successful member saves release the corresponding slot lock.
-- SSE/version/sync notify other clients without requiring full snapshot writes.
+- Persistent SSE/version/sync notify other clients without requiring full snapshot writes or timer-based version polling.
 - Backup import accepts the current `.json.gz` format.

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { martialArts, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
 import { acquireSlotLock, releaseSlotLock } from '../api'
@@ -8,7 +8,6 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { useImeSafeInputHandlers } from './ui/imeInput'
 import { Label } from './ui/label'
-import { startAdaptivePoll } from '../polling'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
@@ -22,6 +21,7 @@ interface Props {
   isBossSlot?: boolean
   teamId?: string
   requireLock?: boolean
+  lockRetrySignal?: string | number
   takenMartialArts: number[]
   readOnly?: boolean
   onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void | Promise<void>
@@ -32,7 +32,7 @@ interface Props {
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, lockRetrySignal = 0, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
@@ -48,6 +48,8 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const gearScoreRef = useRef<HTMLInputElement>(null)
   const mountedRef = useRef(false)
   const savingRef = useRef(false)
+  const lockScopeRef = useRef(0)
+  const requestingLockRef = useRef(false)
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
   const shouldLock = requireLock && !readOnly
@@ -71,41 +73,42 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     }
   }, [])
 
-  // Lock management
-  useEffect(() => {
+  const tryAcquireLock = useCallback(async () => {
     if (!open || !teamId || slotIndex == null || !shouldLock) return
-    let active = true
-    const lock = async () => {
-      const result = await acquireSlotLock(teamId, slotIndex, lockQq)
-      if (!active) {
-        if (result.ok && result.timestamp) {
-          void releaseSlotLock(teamId, slotIndex, lockQq, result.timestamp)
-        }
-        return true
-      }
+    if (lockTimestampRef.current > 0 || requestingLockRef.current) return
+    const scope = lockScopeRef.current
+    requestingLockRef.current = true
+    const result = await acquireSlotLock(teamId, slotIndex, lockQq)
+    requestingLockRef.current = false
+    if (scope !== lockScopeRef.current) {
       if (result.ok && result.timestamp) {
-        lockTimestampRef.current = result.timestamp
-        setLockTimestamp(result.timestamp)
-        onLockAcquired?.({ teamId, slotIndex, qq: lockQq, timestamp: result.timestamp, lockVersion: result.lockVersion })
-        setError('')
-        return true
-      } else if (result.reason === 'teamLocked') {
-        setError('表格已被管理员锁定')
-      } else if (result.lockedBy && result.lockedBy !== lockQq) {
-        setError(`该位置已被 ${result.lockedBy} 先点击`)
-      } else {
-        setError(result.error || '无法锁定该位置，请稍后重试')
+        void releaseSlotLock(teamId, slotIndex, lockQq, result.timestamp)
       }
-      return false
+      return
     }
-    const controller = startAdaptivePoll(lock, {
-      baseDelayMs: 15_000,
-      hiddenDelayMs: 20_000,
-      maxDelayMs: 30_000,
-    })
+    if (result.ok && result.timestamp) {
+      lockTimestampRef.current = result.timestamp
+      setLockTimestamp(result.timestamp)
+      onLockAcquired?.({ teamId, slotIndex, qq: lockQq, timestamp: result.timestamp, lockVersion: result.lockVersion })
+      setError('')
+      return
+    }
+    if (result.reason === 'teamLocked') {
+      setError('表格已被管理员锁定')
+    } else if (result.lockedBy && result.lockedBy !== lockQq) {
+      setError(`该位置已被 ${result.lockedBy} 先点击`)
+    } else {
+      setError(result.error || '无法锁定该位置，请稍后重试')
+    }
+  }, [lockQq, onLockAcquired, open, shouldLock, slotIndex, teamId])
+
+  useEffect(() => {
+    lockScopeRef.current += 1
+    if (!open || !teamId || slotIndex == null || !shouldLock) return
+    queueMicrotask(() => { void tryAcquireLock() })
     return () => {
-      active = false
-      controller.stop()
+      lockScopeRef.current += 1
+      requestingLockRef.current = false
       const currentLockTimestamp = lockTimestampRef.current
       lockTimestampRef.current = 0
       if (currentLockTimestamp > 0) {
@@ -117,7 +120,12 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       savingRef.current = false
       setSaving(false)
     }
-  }, [open, teamId, slotIndex, lockQq, shouldLock, onLockAcquired, onLockReleased])
+  }, [open, teamId, slotIndex, lockQq, shouldLock, onLockReleased, tryAcquireLock])
+
+  useEffect(() => {
+    if (!open || !teamId || slotIndex == null || !shouldLock || lockTimestampRef.current > 0) return
+    queueMicrotask(() => { void tryAcquireLock() })
+  }, [lockRetrySignal, open, shouldLock, slotIndex, teamId, tryAcquireLock])
 
   const handleClose = () => {
     const currentLockTimestamp = lockTimestampRef.current

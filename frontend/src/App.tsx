@@ -104,6 +104,7 @@ function App() {
   const [loadingMessage] = useState(pickLoadingMessage)
   const [locks, setLocks] = useState<SlotLock[]>([])
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
+  const [lockRetrySignal, setLockRetrySignal] = useState(0)
   const [mutationError, setMutationError] = useState('')
   const [confirmOptions, setConfirmOptions] = useState<AppConfirmOptions | null>(null)
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
@@ -157,15 +158,24 @@ function App() {
     if (snapshot.teams.length === 0) return false
     const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
     const canApplyLocks = incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
+    const previousLockVersion = lockVersionRef.current
     if (canApplyLocks && data.locks) setLocks(data.locks)
     if (canApplyLocks && data.teamLocks) setTeamLocks(data.teamLocks)
     if (typeof data.dataVersion === 'number') dataVersionRef.current = data.dataVersion
-    if (typeof data.lockVersion === 'number' && canApplyLocks) lockVersionRef.current = data.lockVersion
+    if (typeof data.lockVersion === 'number' && canApplyLocks) {
+      lockVersionRef.current = data.lockVersion
+      if (previousLockVersion !== data.lockVersion) {
+        setLockRetrySignal(value => value + 1)
+      }
+    } else if (canApplyLocks && (data.locks || data.teamLocks)) {
+      setLockRetrySignal(value => value + 1)
+    }
     syncSnapshot(snapshot)
     return true
   }, [syncSnapshot, syncSubsidyPresets])
 
   const syncLockState = useCallback((state: LockState) => {
+    const previousLockVersion = lockVersionRef.current
     if (
       typeof state.lockVersion === 'number' &&
       typeof lockVersionRef.current === 'number' &&
@@ -175,7 +185,14 @@ function App() {
     }
     setLocks(state.slots)
     setTeamLocks(state.teams)
-    if (typeof state.lockVersion === 'number') lockVersionRef.current = state.lockVersion
+    if (typeof state.lockVersion === 'number') {
+      lockVersionRef.current = state.lockVersion
+      if (previousLockVersion !== state.lockVersion) {
+        setLockRetrySignal(value => value + 1)
+      }
+    } else {
+      setLockRetrySignal(value => value + 1)
+    }
   }, [])
 
   const applyAcquiredSlotLock = useCallback((lock: SlotLock & { lockVersion?: number }) => {
@@ -188,7 +205,13 @@ function App() {
         timestamp: lock.timestamp,
       }]
     })
-    if (typeof lock.lockVersion === 'number') lockVersionRef.current = lock.lockVersion
+    if (typeof lock.lockVersion === 'number') {
+      const previousLockVersion = lockVersionRef.current
+      lockVersionRef.current = lock.lockVersion
+      if (previousLockVersion !== lock.lockVersion) {
+        setLockRetrySignal(value => value + 1)
+      }
+    }
   }, [])
 
   const applyReleasedSlotLock = useCallback((lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => {
@@ -301,6 +324,12 @@ function App() {
       pendingServerEventRef.current = event
       void syncServerChanges(event)
     })
+    if (unsubscribe) {
+      return () => {
+        unsubscribe()
+      }
+    }
+
     const poll = async () => {
       if (pendingServerEventRef.current) {
         return syncServerChanges()
@@ -316,12 +345,11 @@ function App() {
       return syncServerChanges(version)
     }
     const controller = startAdaptivePoll(poll, {
-      baseDelayMs: unsubscribe ? 10_000 : 2_000,
+      baseDelayMs: 2_000,
       hiddenDelayMs: 15_000,
       maxDelayMs: 20_000,
     })
     return () => {
-      unsubscribe?.()
       controller.stop()
     }
   }, [serverMode, syncServerChanges])
@@ -876,6 +904,7 @@ function App() {
         slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
         teamId={activeTeam?.id}
         requireLock={serverMode}
+        lockRetrySignal={lockRetrySignal}
         isAdminEditing={false}
         isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
         takenMartialArts={getTakenMartialArts()}
@@ -903,6 +932,7 @@ function App() {
             slotInfo={activeTeam.slots[editSlot]}
             teamId={activeTeam.id}
             requireLock={serverMode}
+            lockRetrySignal={lockRetrySignal}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
             isAdminEditing={isAdminEdit}
             readOnly={isViewOnly}

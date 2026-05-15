@@ -20,6 +20,7 @@
 #include <ctime>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <zlib.h>
@@ -54,6 +55,111 @@ struct BackupEntry {
     std::string name;
     std::string createdAt;
     std::uintmax_t size = 0;
+};
+
+class VersionEventHub {
+public:
+    int subscribe(drogon::ResponseStreamPtr stream, const Value &initialVersion) {
+        int id = 0;
+        auto sharedStream = std::shared_ptr<drogon::ResponseStream>{std::move(stream)};
+        {
+            std::lock_guard lock(mutex_);
+            id = nextId_++;
+            streams_[id] = sharedStream;
+        }
+        sendTo(id, "hello", initialVersion);
+        return id;
+    }
+
+    void publish(const Value &version, const std::string &type = "version") {
+        std::vector<std::pair<int, std::shared_ptr<drogon::ResponseStream>>> streams;
+        {
+            std::lock_guard lock(mutex_);
+            streams.reserve(streams_.size());
+            for (const auto &[id, stream] : streams_) {
+                streams.emplace_back(id, stream);
+            }
+        }
+
+        std::vector<int> stale;
+        for (const auto &[id, stream] : streams) {
+            if (!send(stream, type, version)) {
+                stale.push_back(id);
+            }
+        }
+
+        if (!stale.empty()) {
+            std::lock_guard lock(mutex_);
+            for (int id : stale) {
+                streams_.erase(id);
+            }
+        }
+    }
+
+    void heartbeat() {
+        publishRaw(": keep-alive\n\n");
+    }
+
+private:
+    std::mutex mutex_;
+    int nextId_ = 1;
+    std::unordered_map<int, std::shared_ptr<drogon::ResponseStream>> streams_;
+
+    static std::string eventPayload(const std::string &event, const Value &data) {
+        Json::StreamWriterBuilder builder;
+        builder["indentation"] = "";
+        Value payload = data;
+        if (!payload["type"].isString()) {
+            payload["type"] = event;
+        }
+        return "event: " + event + "\ndata: " + Json::writeString(builder, payload) + "\n\n";
+    }
+
+    static bool send(const std::shared_ptr<drogon::ResponseStream> &stream, const std::string &event, const Value &data) {
+        return stream && stream->send(eventPayload(event, data));
+    }
+
+    void publishRaw(const std::string &payload) {
+        std::vector<std::pair<int, std::shared_ptr<drogon::ResponseStream>>> streams;
+        {
+            std::lock_guard lock(mutex_);
+            streams.reserve(streams_.size());
+            for (const auto &[id, stream] : streams_) {
+                streams.emplace_back(id, stream);
+            }
+        }
+
+        std::vector<int> stale;
+        for (const auto &[id, stream] : streams) {
+            if (!stream || !stream->send(payload)) {
+                stale.push_back(id);
+            }
+        }
+
+        if (!stale.empty()) {
+            std::lock_guard lock(mutex_);
+            for (int id : stale) {
+                streams_.erase(id);
+            }
+        }
+    }
+
+    void sendTo(int id, const std::string &event, const Value &data) {
+        std::shared_ptr<drogon::ResponseStream> stream;
+        {
+            std::lock_guard lock(mutex_);
+            const auto iterator = streams_.find(id);
+            if (iterator == streams_.end()) {
+                return;
+            }
+            stream = iterator->second;
+        }
+        if (send(stream, event, data)) {
+            return;
+        }
+        std::lock_guard lock(mutex_);
+        streams_.erase(id);
+    }
 };
 
 class SqliteDb {
@@ -134,6 +240,11 @@ public:
         std::lock_guard lock(mutex_);
         cleanExpiredLocksUnlocked();
         return publicLocksUnlocked();
+    }
+
+    bool expireRuntimeLocks() {
+        std::lock_guard lock(mutex_);
+        return cleanExpiredLocksUnlocked();
     }
 
     Value bootstrap() {
@@ -1511,7 +1622,7 @@ private:
         return false;
     }
 
-    void cleanExpiredLocksUnlocked(long long now = nowMs()) {
+    bool cleanExpiredLocksUnlocked(long long now = nowMs()) {
         bool changed = false;
         for (auto iterator = slotLocks_.begin(); iterator != slotLocks_.end();) {
             if (now - iterator->second.timestamp > lockTimeoutMs_) {
@@ -1524,6 +1635,7 @@ private:
         if (changed) {
             bumpLockVersionUnlocked();
         }
+        return changed;
     }
 
     static std::string computeResetStatus(const SlotRecord &slot, int slotIndex) {
@@ -2462,7 +2574,32 @@ int main() {
         : "backend-cpp/data/teamassistant.sqlite3";
 
     auto db = std::make_shared<SqliteDb>(dbPath);
+    auto events = std::make_shared<VersionEventHub>();
     setupCors();
+
+    auto publishVersion = [db, events]() {
+        events->publish(db->versions());
+    };
+    auto respondMutation = [publishVersion](std::function<void(const HttpResponsePtr &)> &&callback, const Value &result) {
+        callback(jsonResponse(result, statusForResult(result)));
+        if (result["ok"].asBool()) {
+            publishVersion();
+        }
+    };
+    auto respondOkMutation = [publishVersion](std::function<void(const HttpResponsePtr &)> &&callback, const Value &result) {
+        callback(jsonResponse(result));
+        if (result["ok"].asBool()) {
+            publishVersion();
+        }
+    };
+    drogon::app().getLoop()->runEvery(5.0, [db, publishVersion]() {
+        if (db->expireRuntimeLocks()) {
+            publishVersion();
+        }
+    });
+    drogon::app().getLoop()->runEvery(15.0, [events]() {
+        events->heartbeat();
+    });
 
     drogon::app().registerHandler("/api/v2/version",
         [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
@@ -2477,14 +2614,14 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/data",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing data"), drogon::k400BadRequest));
                 return;
             }
             try {
-                callback(jsonResponse(db->replaceData(*json)));
+                respondOkMutation(std::move(callback), db->replaceData(*json));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2500,14 +2637,16 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/events",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
-            auto response = drogon::HttpResponse::newHttpResponse();
-            response->setContentTypeCode(drogon::CT_TEXT_PLAIN);
-            response->addHeader("Content-Type", "text/event-stream; charset=utf-8");
+        [db, events](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback) {
+            auto response = drogon::HttpResponse::newAsyncStreamResponse(
+                [db, events](drogon::ResponseStreamPtr stream) {
+                    events->subscribe(std::move(stream), db->versions());
+                },
+                true);
+            response->setContentTypeCodeAndCustomString(drogon::CT_TEXT_PLAIN, "text/event-stream; charset=utf-8");
             response->addHeader("Cache-Control", "no-cache, no-transform");
-            Json::StreamWriterBuilder builder;
-            const auto body = std::string("event: hello\ndata: ") + Json::writeString(builder, db->versions()) + "\n\n";
-            response->setBody(body);
+            response->addHeader("Connection", "keep-alive");
+            response->addHeader("X-Accel-Buffering", "no");
             callback(response);
         },
         {drogon::Get});
@@ -2519,7 +2658,7 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/teams",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["team"].isObject()) {
                 callback(jsonResponse(errorJson("Missing team"), drogon::k400BadRequest));
@@ -2527,7 +2666,7 @@ int main() {
             }
             try {
                 const auto result = db->createTeam((*json)["team"]);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2535,7 +2674,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/reorder",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing ids"), drogon::k400BadRequest));
@@ -2543,7 +2682,7 @@ int main() {
             }
             try {
                 const auto result = db->reorderTeams((*json)["ids"]);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2551,7 +2690,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2560,7 +2699,7 @@ int main() {
             }
             try {
                 const auto result = db->patchTeam(teamId, *json);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2568,12 +2707,12 @@ int main() {
         {drogon::Patch});
 
     drogon::app().registerHandler("/api/v2/teams/{1}",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             try {
                 const auto result = db->deleteTeam(teamId, json == nullptr ? Value(Json::nullValue) : (*json)["fallbackTeam"]);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2581,7 +2720,7 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/archive",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2594,7 +2733,7 @@ int main() {
                     (*json)["archivedBy"].isString() ? (*json)["archivedBy"].asString() : "",
                     toInt64((*json)["archivedAt"]),
                     (*json)["fallbackTeam"]);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2602,7 +2741,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/archives/{1}/restore",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &archiveId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2614,7 +2753,7 @@ int main() {
                     archiveId,
                     (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "",
                     toInt64((*json)["restoredAt"]));
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2622,7 +2761,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/lock-state",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["locked"].isBool()) {
@@ -2631,7 +2770,7 @@ int main() {
             }
             try {
                 const auto result = db->setTeamConfigLock(teamId, (*json)["locked"].asBool());
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2639,17 +2778,17 @@ int main() {
         {drogon::Patch});
 
     drogon::app().registerHandler("/api/v2/slot-locks",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["teamId"].isString() || !(*json)["qq"].isString()) {
                 callback(jsonResponse(errorJson("Missing fields"), drogon::k400BadRequest));
                 return;
             }
             try {
-                callback(jsonResponse(db->acquireSlotLock(
+                respondOkMutation(std::move(callback), db->acquireSlotLock(
                     (*json)["teamId"].asString(),
                     static_cast<int>(toInt64((*json)["slotIndex"])),
-                    (*json)["qq"].asString())));
+                    (*json)["qq"].asString()));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2657,7 +2796,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/slot-locks/{1}/{2}",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["qq"].isString()) {
@@ -2668,7 +2807,7 @@ int main() {
                 db->releaseSlotLock(teamId, slotIndex, (*json)["qq"].asString(), optionalInt64((*json)["lockToken"]));
                 Value ok;
                 ok["ok"] = true;
-                callback(jsonResponse(ok));
+                respondOkMutation(std::move(callback), ok);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2696,7 +2835,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/member",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["member"].isObject()) {
@@ -2714,7 +2853,7 @@ int main() {
                     (*json)["member"],
                     toInt64((*json)["lockToken"]),
                     optionalBodyString((*json)["expectedMemberQq"]));
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2722,7 +2861,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/member",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2736,7 +2875,7 @@ int main() {
                     (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "",
                     toInt64((*json)["lockToken"]),
                     optionalBodyString((*json)["expectedMemberQq"]));
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2744,7 +2883,7 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/cancel",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2762,7 +2901,7 @@ int main() {
                     (*json)["reason"].isString() ? (*json)["reason"].asString() : "",
                     toInt64((*json)["lockToken"]),
                     optionalBodyString((*json)["expectedMemberQq"]));
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2770,7 +2909,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/role",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2785,7 +2924,7 @@ int main() {
                     (*json)["martialArtIndex"],
                     (*json)["assignQQ"].isString() ? (*json)["assignQQ"].asString() : "",
                     (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "");
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2793,7 +2932,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/quick-reserve",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["reserveType"].isString()) {
@@ -2805,7 +2944,7 @@ int main() {
                     teamId,
                     (*json)["reserveType"].asString(),
                     static_cast<int>(toInt64((*json)["count"])));
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2813,11 +2952,11 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/cancellations/{1}/{2}",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &qq, long long timestamp) {
             try {
                 const auto result = db->dismissCancellation(qq, timestamp);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2825,14 +2964,14 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/team-locks",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["teamId"].isString()) {
                 callback(jsonResponse(errorJson("Missing teamId"), drogon::k400BadRequest));
                 return;
             }
             try {
-                callback(jsonResponse(db->setTeamLock((*json)["teamId"].asString())));
+                respondOkMutation(std::move(callback), db->setTeamLock((*json)["teamId"].asString()));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2840,10 +2979,10 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/team-locks/{1}",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondOkMutation](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             try {
-                callback(jsonResponse(db->removeTeamLock(teamId)));
+                respondOkMutation(std::move(callback), db->removeTeamLock(teamId));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2851,7 +2990,7 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/user-profiles/{1}",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["nickname"].isString()) {
@@ -2860,7 +2999,7 @@ int main() {
             }
             try {
                 const auto result = db->updateUserProfile(qq, (*json)["nickname"].asString());
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2878,14 +3017,14 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/subsidy-presets",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing presets"), drogon::k400BadRequest));
                 return;
             }
             try {
-                callback(jsonResponse(db->updateSubsidyPresets((*json)["presets"])));
+                respondOkMutation(std::move(callback), db->updateSubsidyPresets((*json)["presets"]));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2893,7 +3032,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidy-types",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2902,7 +3041,7 @@ int main() {
             }
             try {
                 const auto result = db->updateTeamSubsidyTypes(teamId, (*json)["subsidyTypes"]);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2910,7 +3049,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidies/{2}",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2924,7 +3063,7 @@ int main() {
                     qq,
                     (*json)["selections"],
                     (*json)["weekStart"].isString() ? (*json)["weekStart"].asString() : "");
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2932,7 +3071,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/archives/{1}/subsidies/{2}",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &archiveId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -2946,7 +3085,7 @@ int main() {
                     qq,
                     (*json)["selections"],
                     (*json)["weekStart"].isString() ? (*json)["weekStart"].asString() : "");
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2974,11 +3113,11 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/backups/{1}/restore",
-        [db](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation](const HttpRequestPtr &, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &name) {
             try {
                 const auto result = db->restoreBackup(name);
-                callback(jsonResponse(result, statusForResult(result)));
+                respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -2997,10 +3136,10 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/backups/import",
-        [db](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondOkMutation](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             try {
                 const auto body = request->body();
-                callback(jsonResponse(db->importBackup(std::string(body.data(), body.size()))));
+                respondOkMutation(std::move(callback), db->importBackup(std::string(body.data(), body.size())));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }

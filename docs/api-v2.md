@@ -25,7 +25,8 @@ This document defines the contract used by the split React frontend and the new 
 - `GET /api/v2/sync?dataVersion=&lockVersion=`
   - Returns changed data and/or locks only when the caller versions are stale.
 - `GET /api/v2/events`
-  - Server-sent events. Sends `hello` once, then `version` events with `{ ok, type, dataVersion, lockVersion }`.
+  - Persistent server-sent events. Sends `hello` once, then `version` events with `{ ok, type, dataVersion, lockVersion }`.
+  - Browsers that support `EventSource` should use this as the primary sync trigger and call `/sync` only after receiving version changes. Version polling is only a compatibility fallback when SSE is unavailable.
 
 ## Slot Lock And Save
 

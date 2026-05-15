@@ -452,13 +452,13 @@ export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): ((
         })
       }
     } catch {
-      // Ignore malformed event payloads; polling remains as fallback.
+      // Ignore malformed event payloads.
     }
   }
   source.addEventListener('hello', handleMessage)
   source.addEventListener('version', handleMessage)
   source.onerror = () => {
-    // EventSource reconnects automatically; adaptive polling is the safety net.
+    // EventSource reconnects automatically.
   }
   return () => source.close()
 }
