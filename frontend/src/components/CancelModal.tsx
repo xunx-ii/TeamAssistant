@@ -15,9 +15,11 @@ interface Props {
   requireLock?: boolean
   onConfirm: (reason: string, lockTimestamp?: number) => void
   onClose: () => void
+  onLockAcquired?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp: number; lockVersion?: number }) => void
+  onLockReleased?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => void
 }
 
-export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLock = false, onConfirm, onClose }: Props) {
+export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLock = false, onConfirm, onClose, onLockAcquired, onLockReleased }: Props) {
   const [reason, setReason] = useState('')
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [error, setError] = useState('')
@@ -33,6 +35,7 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
       if (result.ok && result.timestamp) {
         lockTimestampRef.current = result.timestamp
         setLockTimestamp(result.timestamp)
+        onLockAcquired?.({ teamId, slotIndex, qq, timestamp: result.timestamp, lockVersion: result.lockVersion })
         setError('')
       } else if (result.reason === 'teamLocked') {
         setError('表格已被管理员锁定')
@@ -49,13 +52,14 @@ export function CancelModal({ open, memberName, qq, teamId, slotIndex, requireLo
       const currentLockTimestamp = lockTimestampRef.current
       lockTimestampRef.current = 0
       if (currentLockTimestamp > 0) {
+        onLockReleased?.({ teamId, slotIndex, qq, timestamp: currentLockTimestamp })
         void releaseSlotLock(teamId, slotIndex, qq, currentLockTimestamp)
       }
       setLockTimestamp(0)
       setError('')
       setReason('')
     }
-  }, [open, qq, teamId, slotIndex, shouldLock])
+  }, [open, qq, teamId, slotIndex, shouldLock, onLockAcquired, onLockReleased])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

@@ -155,18 +155,49 @@ function App() {
       syncSubsidyPresets(data.subsidyPresets)
     }
     if (snapshot.teams.length === 0) return false
-    if (data.locks) setLocks(data.locks)
-    if (data.teamLocks) setTeamLocks(data.teamLocks)
+    const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
+    const canApplyLocks = incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
+    if (canApplyLocks && data.locks) setLocks(data.locks)
+    if (canApplyLocks && data.teamLocks) setTeamLocks(data.teamLocks)
     if (typeof data.dataVersion === 'number') dataVersionRef.current = data.dataVersion
-    if (typeof data.lockVersion === 'number') lockVersionRef.current = data.lockVersion
+    if (typeof data.lockVersion === 'number' && canApplyLocks) lockVersionRef.current = data.lockVersion
     syncSnapshot(snapshot)
     return true
   }, [syncSnapshot, syncSubsidyPresets])
 
   const syncLockState = useCallback((state: LockState) => {
+    if (
+      typeof state.lockVersion === 'number' &&
+      typeof lockVersionRef.current === 'number' &&
+      state.lockVersion < lockVersionRef.current
+    ) {
+      return
+    }
     setLocks(state.slots)
     setTeamLocks(state.teams)
     if (typeof state.lockVersion === 'number') lockVersionRef.current = state.lockVersion
+  }, [])
+
+  const applyAcquiredSlotLock = useCallback((lock: SlotLock & { lockVersion?: number }) => {
+    setLocks(current => {
+      const withoutSlot = current.filter(item => item.teamId !== lock.teamId || item.slotIndex !== lock.slotIndex)
+      return [...withoutSlot, {
+        teamId: lock.teamId,
+        slotIndex: lock.slotIndex,
+        qq: lock.qq,
+        timestamp: lock.timestamp,
+      }]
+    })
+    if (typeof lock.lockVersion === 'number') lockVersionRef.current = lock.lockVersion
+  }, [])
+
+  const applyReleasedSlotLock = useCallback((lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => {
+    setLocks(current => current.filter(item => (
+      item.teamId !== lock.teamId ||
+      item.slotIndex !== lock.slotIndex ||
+      item.qq !== lock.qq ||
+      (typeof lock.timestamp === 'number' && item.timestamp !== lock.timestamp)
+    )))
   }, [])
 
   const syncServerChanges = useCallback(async (event?: ServerEvent | null) => {
@@ -321,6 +352,17 @@ function App() {
         if (typeof result.dataVersion === 'number') dataVersionRef.current = result.dataVersion
         if (typeof result.lockVersion === 'number') lockVersionRef.current = result.lockVersion
       }
+      if (
+        (mutation.type === 'signupSlot' || mutation.type === 'cancelSlot' || mutation.type === 'leaveSlot') &&
+        typeof mutation.lockTimestamp === 'number'
+      ) {
+        applyReleasedSlotLock({
+          teamId: mutation.teamId,
+          slotIndex: mutation.slotIndex,
+          qq: mutation.type === 'signupSlot' ? (mutation.actorQq ?? mutation.member.qq) : (mutation.actorQq ?? qq ?? ''),
+          timestamp: mutation.lockTimestamp,
+        })
+      }
       return result
     }
 
@@ -339,7 +381,7 @@ function App() {
     }
 
     return result
-  }, [applyLocalMutation, serverMode, syncServerData])
+  }, [applyLocalMutation, applyReleasedSlotLock, qq, serverMode, syncServerData])
 
   const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
   const handleBackupRestored = (data: ServerData) => {
@@ -839,6 +881,8 @@ function App() {
         takenMartialArts={getTakenMartialArts()}
         onConfirm={handleSignupConfirm}
         onClose={() => setSignupSlot(null)}
+        onLockAcquired={applyAcquiredSlotLock}
+        onLockReleased={applyReleasedSlotLock}
       />
 
       {editSlot !== null && activeTeam && (() => {
@@ -865,6 +909,8 @@ function App() {
             takenMartialArts={getTakenMartialArts(editSlot)}
             onConfirm={handleSignupConfirm}
             onClose={() => setEditSlot(null)}
+            onLockAcquired={applyAcquiredSlotLock}
+            onLockReleased={applyReleasedSlotLock}
             onLeave={!isAdminEdit ? handleEditSlotLeave : undefined}
             onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlotIndex); setEditSlot(null) } : undefined}
           />
@@ -880,6 +926,8 @@ function App() {
         requireLock={serverMode}
         onConfirm={(reason, lockTimestamp) => { void handleCancelConfirm(reason, lockTimestamp) }}
         onClose={() => setCancelSlot(null)}
+        onLockAcquired={applyAcquiredSlotLock}
+        onLockReleased={applyReleasedSlotLock}
       />
 
       {setRoleSlot !== null && activeTeam && (

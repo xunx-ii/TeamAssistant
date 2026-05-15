@@ -26,11 +26,13 @@ interface Props {
   readOnly?: boolean
   onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: number) => void | Promise<void>
   onClose: () => void
+  onLockAcquired?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp: number; lockVersion?: number }) => void
+  onLockReleased?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => void
   onLeave?: (lockTimestamp?: number) => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
@@ -84,6 +86,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       if (result.ok && result.timestamp) {
         lockTimestampRef.current = result.timestamp
         setLockTimestamp(result.timestamp)
+        onLockAcquired?.({ teamId, slotIndex, qq: lockQq, timestamp: result.timestamp, lockVersion: result.lockVersion })
         setError('')
         return true
       } else if (result.reason === 'teamLocked') {
@@ -106,6 +109,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       const currentLockTimestamp = lockTimestampRef.current
       lockTimestampRef.current = 0
       if (currentLockTimestamp > 0) {
+        onLockReleased?.({ teamId, slotIndex, qq: lockQq, timestamp: currentLockTimestamp })
         void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
       }
       setLockTimestamp(0)
@@ -113,12 +117,13 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       savingRef.current = false
       setSaving(false)
     }
-  }, [open, teamId, slotIndex, lockQq, qq, shouldLock])
+  }, [open, teamId, slotIndex, lockQq, shouldLock, onLockAcquired, onLockReleased])
 
   const handleClose = () => {
     const currentLockTimestamp = lockTimestampRef.current
     lockTimestampRef.current = 0
     if (teamId && slotIndex != null && currentLockTimestamp > 0) {
+      onLockReleased?.({ teamId, slotIndex, qq: lockQq, timestamp: currentLockTimestamp })
       void releaseSlotLock(teamId, slotIndex, lockQq, currentLockTimestamp)
     }
     onClose()

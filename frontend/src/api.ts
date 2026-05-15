@@ -70,6 +70,7 @@ export interface AcquireResult {
   reason?: string
   timestamp?: number
   lockToken?: number | string
+  lockVersion?: number
   error?: string
 }
 

@@ -194,6 +194,7 @@ public:
         ok["ok"] = true;
         ok["timestamp"] = static_cast<Json::Int64>(now);
         ok["lockToken"] = static_cast<Json::Int64>(now);
+        ok["lockVersion"] = static_cast<Json::Int64>(lockVersion_);
         return ok;
     }
 
