@@ -20,6 +20,7 @@ npm run dev
 
 `npm run dev` 会启动 `backend-cpp` 构建产物，并启动 Vite。前端会把 `/api/v2` 代理到 `http://127.0.0.1:23219`。
 默认前端监听 `0.0.0.0:5173`，同机访问 `http://127.0.0.1:5173`，局域网访问 `http://服务器IP:5173`。如果 5173 已被占用，先停掉旧服务，或用 `VITE_PORT=其他端口 npm run dev` 指定端口；如果只想本机访问，可用 `VITE_HOST=127.0.0.1 npm run dev`。
+通过域名访问 Vite 开发服务器时，默认已允许 `team.hk.xunx.cc`；其它域名可用 `VITE_ALLOWED_HOSTS=域名1,域名2 npm run dev` 增加。
 
 ## 验证
 

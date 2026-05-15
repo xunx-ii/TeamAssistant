@@ -7,6 +7,13 @@ const frontendRoot = fileURLToPath(new URL('.', import.meta.url))
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:23219'
 const devHost = process.env.VITE_HOST ?? '0.0.0.0'
 const devPort = Number(process.env.VITE_PORT ?? 5173)
+const allowedHosts = [
+  'team.hk.xunx.cc',
+  ...(process.env.VITE_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map(host => host.trim())
+    .filter(Boolean),
+]
 
 export default defineConfig({
   root: frontendRoot,
@@ -14,6 +21,7 @@ export default defineConfig({
   base: './',
   server: {
     host: devHost,
+    allowedHosts,
     port: devPort,
     strictPort: true,
     proxy: {
