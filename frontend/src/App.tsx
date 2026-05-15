@@ -798,11 +798,6 @@ function App() {
                 <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyStats(true)}>
                   补贴统计
                 </Button>
-                {serverMode && (
-                  <span className="pixel-badge bg-blue-100 text-blue-700">
-                    SYNC
-                  </span>
-                )}
                 <Button
                   variant="outline"
                   size="sm"
