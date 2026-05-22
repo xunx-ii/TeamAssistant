@@ -300,6 +300,28 @@ test('setTeamLockState updates team config lock flag', () => {
   assert.equal(unlocked.teams[0].config.locked, false)
 })
 
+test('updateTeamSignupRules toggles team signup rule flags', () => {
+  const snapshot = createSnapshot()
+
+  const enabled = applyMutation(snapshot, {
+    type: 'updateTeamSignupRules',
+    teamId: 'team-1',
+    onlyTnSignup: true,
+    uniqueQqSignup: true,
+  })
+  assert.equal(enabled.teams[0].config.onlyTnSignup, true)
+  assert.equal(enabled.teams[0].config.uniqueQqSignup, true)
+
+  const disabled = applyMutation(enabled, {
+    type: 'updateTeamSignupRules',
+    teamId: 'team-1',
+    onlyTnSignup: false,
+    uniqueQqSignup: false,
+  })
+  assert.equal(disabled.teams[0].config.onlyTnSignup, false)
+  assert.equal(disabled.teams[0].config.uniqueQqSignup, false)
+})
+
 test('updateTeamWeekStart stores valid team week values', () => {
   for (const apply of [applyMutation, applyClientMutation]) {
     const next = apply(createSnapshot(), {

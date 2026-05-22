@@ -53,6 +53,8 @@ export interface Cancellation {
 export interface TeamConfig {
   reservedSlots: number[]
   locked: boolean
+  onlyTnSignup: boolean
+  uniqueQqSignup: boolean
 }
 
 export interface Team {
@@ -97,6 +99,8 @@ export interface SubsidyTarget {
 export const DEFAULT_TEAM_CONFIG: TeamConfig = {
   reservedSlots: [],
   locked: false,
+  onlyTnSignup: false,
+  uniqueQqSignup: false,
 }
 
 export const TOTAL_SLOTS = 25

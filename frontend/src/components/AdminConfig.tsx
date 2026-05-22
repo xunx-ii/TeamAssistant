@@ -12,17 +12,20 @@ interface Props {
   note: string
   serverMode: boolean
   locked: boolean
+  onlyTnSignup: boolean
+  uniqueQqSignup: boolean
   onRename: (name: string) => void
   onSaveWeekStart: (weekStart: string) => void
   onUpdateNote: (note: string) => void
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
   onToggleLock: () => void
+  onUpdateSignupRules: (rules: { onlyTnSignup: boolean; uniqueQqSignup: boolean }) => void
   onViewLogs: () => void
   onArchive: () => void
   onOpenSubsidyConfig: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -115,6 +118,29 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
                   <Button size="xs" variant="outline" onClick={() => { onQuickReserve(item.type, item.val); item.set(0) }}>预留</Button>
                 </div>
               ))}
+            </div>
+          </div>
+          <div>
+            <h3 className="text-sm font-medium text-foreground mb-2">报名规则</h3>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-primary"
+                  checked={onlyTnSignup}
+                  onChange={e => onUpdateSignupRules({ onlyTnSignup: e.target.checked, uniqueQqSignup })}
+                />
+                仅限TN报名
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-primary"
+                  checked={uniqueQqSignup}
+                  onChange={e => onUpdateSignupRules({ onlyTnSignup, uniqueQqSignup: e.target.checked })}
+                />
+                每人仅报名一次
+              </label>
             </div>
           </div>
           <div>

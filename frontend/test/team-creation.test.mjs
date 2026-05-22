@@ -43,6 +43,8 @@ test('createTeamFromGuide imports selected presets and applies initial slot limi
   assert.equal(team.name, '下周补贴团')
   assert.equal(team.weekStart, '2026-05-11')
   assert.deepEqual(team.subsidyTypes, [presets[0]])
+  assert.equal(team.config.onlyTnSignup, false)
+  assert.equal(team.config.uniqueQqSignup, false)
   assert.deepEqual(team.config.reservedSlots, [0])
   assert.equal(team.slots[20].status, 'fixed')
   assert.equal(team.slots[20].fixedRole, 'T')
@@ -50,6 +52,24 @@ test('createTeamFromGuide imports selected presets and applies initial slot limi
   assert.equal(team.slots[15].fixedRole, '治疗')
   assert.equal(team.slots[16].fixedRole, '治疗')
   assert.equal(team.slots[0].status, 'reserved')
+})
+
+test('createTeamFromGuide stores signup rule switches', () => {
+  const team = createTeamFromGuide(createGuide({
+    onlyTnSignup: true,
+    uniqueQqSignup: true,
+    quickReserve: false,
+  }), presets, now)
+
+  assert.equal(team.config.onlyTnSignup, true)
+  assert.equal(team.config.uniqueQqSignup, true)
+  assert.equal(validateSnapshotData({
+    teams: [team],
+    cancellations: [],
+    archivedTeams: [],
+    logs: [],
+    userProfiles: {},
+  }), true)
 })
 
 test('team weekStart survives hydration and drives subsidy targets', () => {

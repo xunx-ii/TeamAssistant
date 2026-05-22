@@ -25,6 +25,7 @@ interface Props {
   teamId?: string
   requireLock?: boolean
   lockRetrySignal?: string | number
+  onlyTnSignup?: boolean
   takenMartialArts: number[]
   readOnly?: boolean
   onConfirm: (data: Omit<Member, 'qq'>, lockTimestamp?: LockToken) => void | Promise<void>
@@ -35,7 +36,7 @@ interface Props {
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, lockRetrySignal = 0, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, lockRetrySignal = 0, onlyTnSignup = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
@@ -203,6 +204,11 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       setError('请选择心法')
       return
     }
+    const selectedMartialArt = martialArts[parseInt(textMartialArt)]
+    if (onlyTnSignup && selectedMartialArt?.role === 'DPS') {
+      setError('当前团队仅限T/奶报名')
+      return
+    }
     if (!textGearScore) {
       setError(isDPS ? '请填写装分' : '请填写层数')
       return
@@ -225,7 +231,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     setSaving(true)
 
     const maIdx = parseInt(textMartialArt)
-    const ma = martialArts[maIdx]
+    const ma = selectedMartialArt
     if (ma && (ma.role === 'T' || ma.role === '治疗') && !existing && !isBossSlot) {
       if (takenMartialArts.includes(maIdx)) {
         setError(`${ma.school}·${ma.name} 已有他人报名`)
@@ -254,13 +260,16 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
         list = martialArts.filter(ma => ma.role === slotInfo.fixedRole)
       }
     }
+    if (onlyTnSignup) {
+      list = list.filter(ma => ma.role === 'T' || ma.role === '治疗')
+    }
     if (!maSearch.trim()) return list
     const q = maSearch.trim().toLowerCase()
     return list.filter(ma => {
       const label = getMartialArtLabel(ma).toLowerCase()
       return label.includes(q) || ma.school.toLowerCase().includes(q) || ma.name.toLowerCase().includes(q)
     })
-  }, [slotInfo, maSearch])
+  }, [slotInfo, maSearch, onlyTnSignup])
 
   useEffect(() => {
     if (!showMaDropdown) return

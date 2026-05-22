@@ -28,6 +28,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
   const [weekTouched, setWeekTouched] = useState(false)
   const [presetDraftIds, setPresetDraftIds] = useState<Set<string>>(() => new Set())
   const [loadedPresetIds, setLoadedPresetIds] = useState<string[]>([])
+  const [onlyTnSignup, setOnlyTnSignup] = useState(false)
+  const [uniqueQqSignup, setUniqueQqSignup] = useState(false)
   const [quickReserve, setQuickReserve] = useState(false)
   const [reserveT, setReserveT] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
   const [reserveHealer, setReserveHealer] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
@@ -52,6 +54,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     setWeekTouched(false)
     setPresetDraftIds(new Set())
     setLoadedPresetIds([])
+    setOnlyTnSignup(false)
+    setUniqueQqSignup(false)
     setQuickReserve(false)
     setReserveT(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
     setReserveHealer(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
@@ -67,6 +71,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
       name: trimmed,
       weekStart: resolvedWeekStart,
       subsidyPresetIds: loadedPresetIds,
+      onlyTnSignup,
+      uniqueQqSignup,
       quickReserve,
       reserveT,
       reserveHealer,
@@ -135,6 +141,24 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
                 ))}
               </div>
             )}
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-primary"
+                checked={onlyTnSignup}
+                onChange={e => setOnlyTnSignup(e.target.checked)}
+              />
+              仅限TN报名
+            </label>
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-primary"
+                checked={uniqueQqSignup}
+                onChange={e => setUniqueQqSignup(e.target.checked)}
+              />
+              每人仅报名一次
+            </label>
             <label className="flex items-center gap-2 text-sm font-medium">
               <input
                 type="checkbox"

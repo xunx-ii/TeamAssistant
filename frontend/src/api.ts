@@ -365,6 +365,15 @@ function routeMutation(mutation: Mutation, actorQq?: string | null): { url: stri
         init: jsonRequest('PATCH', withActor({ note: mutation.note }, actorQq)),
       }
 
+    case 'updateTeamSignupRules':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}`,
+        init: jsonRequest('PATCH', withActor({
+          onlyTnSignup: mutation.onlyTnSignup,
+          uniqueQqSignup: mutation.uniqueQqSignup,
+        }, actorQq)),
+      }
+
     case 'reorderTeams':
       return { url: `${API}/teams/reorder`, init: jsonRequest('POST', withActor({ ids: mutation.ids }, actorQq)) }
 

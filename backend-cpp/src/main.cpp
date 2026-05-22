@@ -46,6 +46,8 @@ struct SlotRecord {
     bool exists = false;
     std::string teamName;
     Value reservedSlots = Value(Json::arrayValue);
+    bool onlyTnSignup = false;
+    bool uniqueQqSignup = false;
     std::string status;
     Value member = Value(Json::nullValue);
     std::optional<std::string> fixedRole;
@@ -445,6 +447,22 @@ public:
                 Value conflict = conflictJson("slotChanged");
                 conflict["currentMemberQq"] = currentMemberQq.has_value() ? Value(*currentMemberQq) : Value(Json::nullValue);
                 return conflict;
+            }
+
+            const std::string normalizedMemberQq = normalizedMember["qq"].asString();
+            if (slot.onlyTnSignup && !isTnMember(normalizedMember)) {
+                exec("ROLLBACK;");
+                return conflictJson("onlyTnSignup");
+            }
+            if (slot.uniqueQqSignup) {
+                if (normalizedMemberQq != actorQq) {
+                    exec("ROLLBACK;");
+                    return conflictJson("selfSignupOnly");
+                }
+                if (teamHasMemberQqInAnotherSlotUnlocked(teamId, normalizedMemberQq, slotIndex)) {
+                    exec("ROLLBACK;");
+                    return conflictJson("uniqueQqSignup");
+                }
             }
 
             sqlite3_stmt *stmt = nullptr;
@@ -935,6 +953,25 @@ public:
                 stepDone(stmt);
                 sqlite3_finalize(stmt);
             }
+            if (body.isMember("onlyTnSignup") || body.isMember("uniqueQqSignup")) {
+                Value team = readTeamUnlocked(teamId);
+                if (!team.isObject()) {
+                    exec("ROLLBACK;");
+                    return conflictJson("notFound");
+                }
+                const bool onlyTnSignup = body["onlyTnSignup"].isBool()
+                    ? body["onlyTnSignup"].asBool()
+                    : team["config"]["onlyTnSignup"].asBool();
+                const bool uniqueQqSignup = body["uniqueQqSignup"].isBool()
+                    ? body["uniqueQqSignup"].asBool()
+                    : team["config"]["uniqueQqSignup"].asBool();
+                prepare("UPDATE teams SET only_tn_signup = ?, unique_qq_signup = ? WHERE id = ?", &stmt);
+                sqlite3_bind_int(stmt, 1, onlyTnSignup ? 1 : 0);
+                sqlite3_bind_int(stmt, 2, uniqueQqSignup ? 1 : 0);
+                bindString(stmt, 3, teamId);
+                stepDone(stmt);
+                sqlite3_finalize(stmt);
+            }
             if (!teamExistsUnlocked(teamId)) {
                 exec("ROLLBACK;");
                 return conflictJson("notFound");
@@ -1046,6 +1083,23 @@ public:
             Value &slot = team["slots"][slotIndex];
             Value reserved = arrayOrEmpty(team["config"]["reservedSlots"]);
             const std::string roleText = role.isString() ? role.asString() : "";
+            const bool onlyTnSignup = team["config"]["onlyTnSignup"].asBool();
+            const bool uniqueQqSignup = team["config"]["uniqueQqSignup"].asBool();
+
+            if (onlyTnSignup && roleText != "boss" && isDpsSlotRule(roleText, martialArtIndex)) {
+                exec("ROLLBACK;");
+                return conflictJson("onlyTnSignup");
+            }
+            if (uniqueQqSignup && !assignQq.empty()) {
+                if (assignQq != actorQq) {
+                    exec("ROLLBACK;");
+                    return conflictJson("selfSignupOnly");
+                }
+                if (teamHasMemberQqInAnotherSlotUnlocked(teamId, assignQq, slotIndex)) {
+                    exec("ROLLBACK;");
+                    return conflictJson("uniqueQqSignup");
+                }
+            }
 
             if (roleText == "boss") {
                 reserved = addReservedSlot(reserved, slotIndex);
@@ -1687,6 +1741,58 @@ private:
         return std::nullopt;
     }
 
+    static std::optional<int> martialArtIndexFromValue(const Value &value) {
+        if (value.isInt()) {
+            return value.asInt();
+        }
+        if (!value.isString()) {
+            return std::nullopt;
+        }
+        const std::string text = value.asString();
+        if (text.empty()) {
+            return std::nullopt;
+        }
+        try {
+            std::size_t parsed = 0;
+            const int index = std::stoi(text, &parsed);
+            if (parsed == text.size()) {
+                return index;
+            }
+        } catch (...) {
+        }
+        return std::nullopt;
+    }
+
+    static bool isTnMartialArtIndex(int index) {
+        switch (index) {
+            case 1:
+            case 4:
+            case 8:
+            case 10:
+            case 12:
+            case 16:
+            case 19:
+            case 21:
+            case 27:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static bool isTnMember(const Value &member) {
+        const auto index = martialArtIndexFromValue(member["martialArtIndex"]);
+        return index.has_value() && isTnMartialArtIndex(*index);
+    }
+
+    static bool isDpsSlotRule(const std::string &roleText, const Value &martialArtIndex) {
+        if (roleText == "DPS") {
+            return true;
+        }
+        const auto index = martialArtIndexFromValue(martialArtIndex);
+        return index.has_value() && !isTnMartialArtIndex(*index);
+    }
+
     static Value normalizeMember(const Value &member) {
         if (!member.isObject()) {
             return Value(Json::nullValue);
@@ -1921,6 +2027,8 @@ private:
             }
         }
         normalized["config"]["locked"] = config["locked"].asBool();
+        normalized["config"]["onlyTnSignup"] = config["onlyTnSignup"].asBool();
+        normalized["config"]["uniqueQqSignup"] = config["uniqueQqSignup"].asBool();
         normalized["config"]["reservedSlots"] = reserved;
         normalized["slots"] = Value(Json::arrayValue);
         for (int index = 0; index < 25; ++index) {
@@ -1983,7 +2091,8 @@ private:
         SlotRecord record;
         sqlite3_stmt *stmt = nullptr;
         prepare(
-            "SELECT t.name, t.reserved_slots_json, s.status, s.member_json, s.fixed_role, s.fixed_martial_art_index "
+            "SELECT t.name, t.reserved_slots_json, t.only_tn_signup, t.unique_qq_signup, "
+            "s.status, s.member_json, s.fixed_role, s.fixed_martial_art_index "
             "FROM teams t JOIN slots s ON s.team_id = t.id "
             "WHERE t.id = ? AND s.slot_index = ?",
             &stmt);
@@ -1993,15 +2102,17 @@ private:
             record.exists = true;
             record.teamName = textColumn(stmt, 0);
             record.reservedSlots = parseJson(textColumn(stmt, 1), Value(Json::arrayValue));
-            record.status = textColumn(stmt, 2);
-            record.member = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+            record.onlyTnSignup = sqlite3_column_int(stmt, 2) != 0;
+            record.uniqueQqSignup = sqlite3_column_int(stmt, 3) != 0;
+            record.status = textColumn(stmt, 4);
+            record.member = sqlite3_column_type(stmt, 5) == SQLITE_NULL
                 ? Value(Json::nullValue)
-                : parseJson(textColumn(stmt, 3), Value(Json::nullValue));
-            if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
-                record.fixedRole = textColumn(stmt, 4);
+                : parseJson(textColumn(stmt, 5), Value(Json::nullValue));
+            if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+                record.fixedRole = textColumn(stmt, 6);
             }
-            if (sqlite3_column_type(stmt, 5) != SQLITE_NULL) {
-                record.fixedMartialArtIndex = sqlite3_column_int(stmt, 5);
+            if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+                record.fixedMartialArtIndex = sqlite3_column_int(stmt, 7);
             }
         }
         sqlite3_finalize(stmt);
@@ -2015,6 +2126,30 @@ private:
         const bool exists = sqlite3_step(stmt) == SQLITE_ROW;
         sqlite3_finalize(stmt);
         return exists;
+    }
+
+    bool teamHasMemberQqInAnotherSlotUnlocked(const std::string &teamId, const std::string &qq, int slotIndex) {
+        if (qq.empty()) {
+            return false;
+        }
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "SELECT member_json FROM slots "
+            "WHERE team_id = ? AND slot_index <> ? AND member_json IS NOT NULL",
+            &stmt);
+        bindString(stmt, 1, teamId);
+        sqlite3_bind_int(stmt, 2, slotIndex);
+        bool found = false;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const Value member = parseJson(textColumn(stmt, 0), Value(Json::nullValue));
+            const auto existingQq = memberQq(member);
+            if (existingQq.has_value() && *existingQq == qq) {
+                found = true;
+                break;
+            }
+        }
+        sqlite3_finalize(stmt);
+        return found;
     }
 
     int teamCountUnlocked() {
@@ -2054,7 +2189,8 @@ private:
     Value readTeamUnlocked(const std::string &teamId) {
         sqlite3_stmt *stmt = nullptr;
         prepare(
-            "SELECT id, name, note, week_start, locked, reserved_slots_json, subsidy_types_json, member_subsidies_json "
+            "SELECT id, name, note, week_start, locked, only_tn_signup, unique_qq_signup, "
+            "reserved_slots_json, subsidy_types_json, member_subsidies_json "
             "FROM teams WHERE id = ?",
             &stmt);
         bindString(stmt, 1, teamId);
@@ -2072,13 +2208,15 @@ private:
         }
         Value config;
         config["locked"] = sqlite3_column_int(stmt, 4) != 0;
-        config["reservedSlots"] = parseJson(textColumn(stmt, 5), Value(Json::arrayValue));
+        config["onlyTnSignup"] = sqlite3_column_int(stmt, 5) != 0;
+        config["uniqueQqSignup"] = sqlite3_column_int(stmt, 6) != 0;
+        config["reservedSlots"] = parseJson(textColumn(stmt, 7), Value(Json::arrayValue));
         team["config"] = config;
-        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-            team["subsidyTypes"] = parseJson(textColumn(stmt, 6), Value(Json::arrayValue));
+        if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
+            team["subsidyTypes"] = parseJson(textColumn(stmt, 8), Value(Json::arrayValue));
         }
-        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            team["memberSubsidies"] = parseJson(textColumn(stmt, 7), Value(Json::objectValue));
+        if (sqlite3_column_type(stmt, 9) != SQLITE_NULL) {
+            team["memberSubsidies"] = parseJson(textColumn(stmt, 9), Value(Json::objectValue));
         }
         sqlite3_finalize(stmt);
 
@@ -2490,18 +2628,21 @@ private:
         sqlite3_stmt *stmt = nullptr;
         prepare(
             "INSERT OR REPLACE INTO teams("
-            "id, name, note, week_start, locked, sort_order, reserved_slots_json, subsidy_types_json, member_subsidies_json"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "id, name, note, week_start, locked, only_tn_signup, unique_qq_signup, sort_order, "
+            "reserved_slots_json, subsidy_types_json, member_subsidies_json"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             &stmt);
         bindString(stmt, 1, teamId);
         bindString(stmt, 2, team["name"].isString() ? team["name"].asString() : "默认团队");
         bindString(stmt, 3, team["note"].isString() ? team["note"].asString() : "");
         bindOptionalString(stmt, 4, optionalString(team["weekStart"]));
         sqlite3_bind_int(stmt, 5, config["locked"].asBool() ? 1 : 0);
-        sqlite3_bind_int(stmt, 6, sortOrder);
-        bindString(stmt, 7, writeJson(reservedSlots));
-        bindOptionalString(stmt, 8, team["subsidyTypes"].isArray() ? std::optional<std::string>(writeJson(normalizedSubsidyTypes)) : std::nullopt);
-        bindOptionalString(stmt, 9, team["memberSubsidies"].isObject() ? std::optional<std::string>(writeJson(memberSubsidies)) : std::nullopt);
+        sqlite3_bind_int(stmt, 6, config["onlyTnSignup"].asBool() ? 1 : 0);
+        sqlite3_bind_int(stmt, 7, config["uniqueQqSignup"].asBool() ? 1 : 0);
+        sqlite3_bind_int(stmt, 8, sortOrder);
+        bindString(stmt, 9, writeJson(reservedSlots));
+        bindOptionalString(stmt, 10, team["subsidyTypes"].isArray() ? std::optional<std::string>(writeJson(normalizedSubsidyTypes)) : std::nullopt);
+        bindOptionalString(stmt, 11, team["memberSubsidies"].isObject() ? std::optional<std::string>(writeJson(memberSubsidies)) : std::nullopt);
         stepDone(stmt);
         sqlite3_finalize(stmt);
 
@@ -2936,6 +3077,16 @@ private:
         } catch (...) {
             // Existing databases created after the split already have this column.
         }
+        try {
+            exec("ALTER TABLE teams ADD COLUMN only_tn_signup INTEGER NOT NULL DEFAULT 0;");
+        } catch (...) {
+            // Existing databases created after this feature already have this column.
+        }
+        try {
+            exec("ALTER TABLE teams ADD COLUMN unique_qq_signup INTEGER NOT NULL DEFAULT 0;");
+        } catch (...) {
+            // Existing databases created after this feature already have this column.
+        }
         schemaReady_ = true;
     }
 
@@ -3023,7 +3174,8 @@ private:
         std::unordered_map<std::string, Json::ArrayIndex> teamIndexById;
         sqlite3_stmt *stmt = nullptr;
         prepare(
-            "SELECT id, name, note, week_start, locked, reserved_slots_json, subsidy_types_json, member_subsidies_json "
+            "SELECT id, name, note, week_start, locked, only_tn_signup, unique_qq_signup, "
+            "reserved_slots_json, subsidy_types_json, member_subsidies_json "
             "FROM teams ORDER BY sort_order, id",
             &stmt);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3170,13 +3322,15 @@ private:
         }
         Value config;
         config["locked"] = sqlite3_column_int(stmt, 4) != 0;
-        config["reservedSlots"] = parseJson(textColumn(stmt, 5), Value(Json::arrayValue));
+        config["onlyTnSignup"] = sqlite3_column_int(stmt, 5) != 0;
+        config["uniqueQqSignup"] = sqlite3_column_int(stmt, 6) != 0;
+        config["reservedSlots"] = parseJson(textColumn(stmt, 7), Value(Json::arrayValue));
         team["config"] = config;
-        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-            team["subsidyTypes"] = parseJson(textColumn(stmt, 6), Value(Json::arrayValue));
+        if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
+            team["subsidyTypes"] = parseJson(textColumn(stmt, 8), Value(Json::arrayValue));
         }
-        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            team["memberSubsidies"] = parseJson(textColumn(stmt, 7), Value(Json::objectValue));
+        if (sqlite3_column_type(stmt, 9) != SQLITE_NULL) {
+            team["memberSubsidies"] = parseJson(textColumn(stmt, 9), Value(Json::objectValue));
         }
         team["slots"] = Value(Json::arrayValue);
         for (int index = 0; index < 25; ++index) {
@@ -3246,7 +3400,14 @@ drogon::HttpStatusCode statusForResult(const Value &json) {
         return drogon::k200OK;
     }
     const std::string reason = json["reason"].isString() ? json["reason"].asString() : "";
-    if (reason == "teamLocked" || reason == "expired" || reason == "slotChanged") {
+    if (
+        reason == "teamLocked" ||
+        reason == "expired" ||
+        reason == "slotChanged" ||
+        reason == "onlyTnSignup" ||
+        reason == "uniqueQqSignup" ||
+        reason == "selfSignupOnly"
+    ) {
         return drogon::k409Conflict;
     }
     if (reason == "forbidden") {

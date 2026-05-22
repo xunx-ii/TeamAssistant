@@ -9,6 +9,8 @@ export interface CreateTeamGuideValues {
   name: string
   weekStart: string
   subsidyPresetIds: string[]
+  onlyTnSignup: boolean
+  uniqueQqSignup: boolean
   quickReserve: boolean
   reserveT: number
   reserveHealer: number
@@ -40,7 +42,7 @@ export function createDefaultTeam(name = '默认团队', options: { weekStart?: 
     id: generateId(),
     name: normalizeTeamName(textName, '默认团队'),
     note: '',
-    config: { reservedSlots: [], locked: false },
+    config: { reservedSlots: [], locked: false, onlyTnSignup: false, uniqueQqSignup: false },
     slots: createEmptySlots(),
   }
   const weekStart = normalizeWeekStartKey(options.weekStart)
@@ -56,6 +58,8 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
     weekStart: normalizeWeekStartKey(values.weekStart, getWeekStartKey(now)),
     subsidyTypes: selectedSubsidyPresets,
   })
+  team.config.onlyTnSignup = values.onlyTnSignup === true
+  team.config.uniqueQqSignup = values.uniqueQqSignup === true
 
   if (!values.quickReserve) return team
 

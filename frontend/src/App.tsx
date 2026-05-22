@@ -435,6 +435,12 @@ function App() {
         setMutationError('该位置已被其他人抢占，请刷新后重试')
       } else if (result.reason === 'slotChanged') {
         setMutationError('该位置内容已变更，请刷新后重试')
+      } else if (result.reason === 'onlyTnSignup') {
+        setMutationError('当前团队仅限T/奶报名')
+      } else if (result.reason === 'uniqueQqSignup') {
+        setMutationError('该QQ已在当前团队报名')
+      } else if (result.reason === 'selfSignupOnly') {
+        setMutationError('该团队每人仅能报名一次，不能代报名')
       } else if (result.error) {
         setMutationError(result.error)
       } else {
@@ -599,6 +605,21 @@ function App() {
     const slotIndex = setRoleSlot
     if (slotIndex === null || !activeTeam) return
     const assignedQq = normalizeTextInput(assignQQ ?? '', { maxLength: TEXT_INPUT_LIMITS.qq }) || undefined
+    const assignedMartialArt = martialArtIndex != null ? martialArts[martialArtIndex] : null
+    if (activeTeam.config.onlyTnSignup && (role === 'DPS' || assignedMartialArt?.role === 'DPS')) {
+      setMutationError('当前团队仅限T/奶报名')
+      return
+    }
+    if (activeTeam.config.uniqueQqSignup && assignedQq) {
+      if (assignedQq !== qq) {
+        setMutationError('该团队每人仅能报名一次，不能代报名')
+        return
+      }
+      if (activeTeam.slots.some(slot => slot.index !== slotIndex && slot.member?.qq === assignedQq)) {
+        setMutationError('该QQ已在当前团队报名')
+        return
+      }
+    }
     const result = await runMutation({
       type: 'setSlotRole',
       teamId: activeTeam.id,
@@ -616,6 +637,16 @@ function App() {
   const handleQuickReserve = (type: 'T' | '治疗' | 'boss', count: number) => {
     if (!activeTeam) return
     void runMutation({ type: 'quickReserve', teamId: activeTeam.id, reserveType: type, count })
+  }
+
+  const handleUpdateSignupRules = (rules: { onlyTnSignup: boolean; uniqueQqSignup: boolean }) => {
+    if (!activeTeam) return
+    void runMutation({
+      type: 'updateTeamSignupRules',
+      teamId: activeTeam.id,
+      onlyTnSignup: rules.onlyTnSignup,
+      uniqueQqSignup: rules.uniqueQqSignup,
+    })
   }
 
   const handleSaveSubsidyTypes = (subsidyTypes: SubsidyType[]) => {
@@ -661,7 +692,22 @@ function App() {
       hasOrangeWeapon: data.hasOrangeWeapon,
     }
     if (!memberData.martialArtIndex || !memberData.gearScore || !memberData.characterId) return
+    const selectedMartialArt = martialArts[parseInt(memberData.martialArtIndex)]
+    if (activeTeam.config.onlyTnSignup && selectedMartialArt?.role === 'DPS') {
+      setMutationError('当前团队仅限T/奶报名')
+      return
+    }
     const member: Member = { qq: memberQq, ...memberData }
+    if (activeTeam.config.uniqueQqSignup) {
+      if (memberQq !== qq) {
+        setMutationError('该团队每人仅能报名一次，不能代报名')
+        return
+      }
+      if (activeTeam.slots.some(slot => slot.index !== slotIndex && slot.member?.qq === memberQq)) {
+        setMutationError('该QQ已在当前团队报名')
+        return
+      }
+    }
     const result = await runMutation({
       type: 'signupSlot',
       teamId: activeTeam.id,
@@ -873,6 +919,8 @@ function App() {
                   note={activeTeam.note}
                   serverMode={serverMode}
                   locked={activeTeam.config.locked}
+                  onlyTnSignup={activeTeam.config.onlyTnSignup}
+                  uniqueQqSignup={activeTeam.config.uniqueQqSignup}
                   onRename={handleAdminRename}
                   onSaveWeekStart={handleUpdateWeekStart}
                   onUpdateNote={handleUpdateNote}
@@ -882,6 +930,7 @@ function App() {
                     const newLocked = !activeTeam.config.locked
                     await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
                   }}
+                  onUpdateSignupRules={handleUpdateSignupRules}
                   onViewLogs={() => setShowLogs(true)}
                   onArchive={handleArchiveTeam}
                   onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
@@ -936,6 +985,7 @@ function App() {
         lockRetrySignal={lockRetrySignal}
         isAdminEditing={false}
         isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
+        onlyTnSignup={activeTeam?.config.onlyTnSignup}
         takenMartialArts={getTakenMartialArts()}
         onConfirm={handleSignupConfirm}
         onClose={() => setSignupSlot(null)}
@@ -963,6 +1013,7 @@ function App() {
             requireLock={serverMode}
             lockRetrySignal={lockRetrySignal}
             isBossSlot={activeTeam.config.reservedSlots.includes(editSlot)}
+            onlyTnSignup={activeTeam.config.onlyTnSignup}
             isAdminEditing={isAdminEdit}
             readOnly={isViewOnly}
             takenMartialArts={getTakenMartialArts(editSlot)}

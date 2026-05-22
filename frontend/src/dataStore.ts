@@ -23,6 +23,7 @@ export type Mutation =
   | { type: 'reorderTeams'; ids: string[] }
   | { type: 'toggleTeamConfigLock'; teamId: string; locked: boolean }
   | { type: 'setTeamLockState'; teamId: string; locked: boolean }
+  | { type: 'updateTeamSignupRules'; teamId: string; onlyTnSignup: boolean; uniqueQqSignup: boolean }
   | {
       type: 'setSlotRole'
       teamId: string
@@ -289,7 +290,9 @@ function isValidTeamConfig(config: unknown) {
     isPlainObject(config) &&
     Array.isArray(config.reservedSlots) &&
     config.reservedSlots.every(isSlotIndex) &&
-    typeof config.locked === 'boolean',
+    typeof config.locked === 'boolean' &&
+    (!Object.prototype.hasOwnProperty.call(config, 'onlyTnSignup') || typeof config.onlyTnSignup === 'boolean') &&
+    (!Object.prototype.hasOwnProperty.call(config, 'uniqueQqSignup') || typeof config.uniqueQqSignup === 'boolean'),
   )
 }
 
@@ -558,6 +561,13 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
     case 'setTeamLockState': {
       const team = getTeamOrThrow(next, mutation.teamId)
       team.config.locked = mutation.locked
+      return next
+    }
+
+    case 'updateTeamSignupRules': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      team.config.onlyTnSignup = mutation.onlyTnSignup
+      team.config.uniqueQqSignup = mutation.uniqueQqSignup
       return next
     }
 

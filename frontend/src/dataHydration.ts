@@ -65,6 +65,8 @@ function normalizeConfig(config: unknown): TeamConfig {
   return {
     reservedSlots,
     locked: typeof source.locked === 'boolean' ? source.locked : false,
+    onlyTnSignup: typeof source.onlyTnSignup === 'boolean' ? source.onlyTnSignup : false,
+    uniqueQqSignup: typeof source.uniqueQqSignup === 'boolean' ? source.uniqueQqSignup : false,
   }
 }
 

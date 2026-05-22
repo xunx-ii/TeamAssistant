@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS teams (
   note TEXT NOT NULL DEFAULT '',
   week_start TEXT,
   locked INTEGER NOT NULL DEFAULT 0,
+  only_tn_signup INTEGER NOT NULL DEFAULT 0,
+  unique_qq_signup INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   reserved_slots_json TEXT NOT NULL DEFAULT '[]',
   subsidy_types_json TEXT,
