@@ -54,6 +54,12 @@ interface AppConfirmOptions {
   destructive?: boolean
 }
 
+interface AppAlertOptions {
+  title: string
+  message: string
+  closeText: string
+}
+
 const LOADING_MESSAGES = [
   '正在猛猛敲门...',
   '别急，团长还在找钥匙开门...',
@@ -109,6 +115,7 @@ function App() {
   const [lockRetrySignal, setLockRetrySignal] = useState(0)
   const [mutationError, setMutationError] = useState('')
   const [confirmOptions, setConfirmOptions] = useState<AppConfirmOptions | null>(null)
+  const [alertOptions, setAlertOptions] = useState<AppAlertOptions | null>(null)
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const dataVersionRef = useRef<number | null>(null)
   const lockVersionRef = useRef<number | null>(null)
@@ -379,6 +386,7 @@ function App() {
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
+    setAlertOptions(null)
   }
 
   const applyLocalMutation = useCallback((mutation: Mutation) => {
@@ -438,6 +446,11 @@ function App() {
       } else if (result.reason === 'onlyTnSignup') {
         setMutationError('当前团队仅限T/奶报名')
       } else if (result.reason === 'uniqueQqSignup') {
+        setAlertOptions({
+          title: '已报名',
+          message: '该团队已开启每人仅报名一次，该QQ已在当前团队报名，不能再报名其他格子。',
+          closeText: '知道了',
+        })
         setMutationError('该QQ已在当前团队报名')
       } else if (result.reason === 'selfSignupOnly') {
         setMutationError('该团队每人仅能报名一次，不能代报名')
@@ -501,16 +514,31 @@ function App() {
   }
 
   const handleShowCreateTeam = useCallback(() => setShowCreateTeam(true), [])
-  const handleSignupSlot = useCallback((idx: number) => setSignupSlot(idx), [])
+  const openSignupSlot = useCallback((idx: number) => {
+    if (activeTeam?.config.uniqueQqSignup && qq) {
+      const existingSlot = activeTeam.slots.find(slot => slot.index !== idx && slot.member?.qq === qq)
+      if (existingSlot) {
+        setAlertOptions({
+          title: '已报名',
+          message: `该团队已开启每人仅报名一次，你已经报名了 #${existingSlot.index + 1}，不能再报名其他格子。`,
+          closeText: '知道了',
+        })
+        return false
+      }
+    }
+    setSignupSlot(idx)
+    return true
+  }, [activeTeam, qq])
+  const handleSignupSlot = useCallback((idx: number) => { openSignupSlot(idx) }, [openSignupSlot])
   const handleEditSlot = useCallback((idx: number) => setEditSlot(idx), [])
   const handleViewSlot = useCallback((idx: number) => setEditSlot(idx), [])
   const handleSetRoleSlotClick = useCallback((idx: number) => setSetRoleSlot(idx), [])
   const handleSignupFromRole = useCallback(() => {
     if (setRoleSlot !== null) {
-      setSignupSlot(setRoleSlot)
+      openSignupSlot(setRoleSlot)
       setSetRoleSlot(null)
     }
-  }, [setRoleSlot])
+  }, [openSignupSlot, setRoleSlot])
 
   const handleAdminRename = useCallback((name: string) => {
     if (activeTeam) {
@@ -703,7 +731,13 @@ function App() {
         setMutationError('该团队每人仅能报名一次，不能代报名')
         return
       }
-      if (activeTeam.slots.some(slot => slot.index !== slotIndex && slot.member?.qq === memberQq)) {
+      const existingSlot = activeTeam.slots.find(slot => slot.index !== slotIndex && slot.member?.qq === memberQq)
+      if (existingSlot) {
+        setAlertOptions({
+          title: '已报名',
+          message: `该团队已开启每人仅报名一次，你已经报名了 #${existingSlot.index + 1}，不能再报名其他格子。`,
+          closeText: '知道了',
+        })
         setMutationError('该QQ已在当前团队报名')
         return
       }
@@ -937,9 +971,25 @@ function App() {
                 />
               )}
               <div className="mb-3 pixel-card p-3">
-                <div className="flex items-center gap-2">
-                  <PixelHeart size={16} />
-                  <h2 className="text-sm font-bold text-foreground break-all">{activeTeam.name}</h2>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <PixelHeart size={16} className="shrink-0" />
+                    <h2 className="min-w-0 break-all text-sm font-bold text-foreground">{activeTeam.name}</h2>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                    {activeTeam.config.onlyTnSignup || activeTeam.config.uniqueQqSignup ? (
+                      <>
+                        {activeTeam.config.onlyTnSignup && (
+                          <span className="pixel-badge bg-emerald-100 text-emerald-700">仅TN</span>
+                        )}
+                        {activeTeam.config.uniqueQqSignup && (
+                          <span className="pixel-badge bg-sky-100 text-sky-700">每人一次</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="pixel-badge bg-secondary text-muted-foreground">限制：无</span>
+                    )}
+                  </div>
                 </div>
               </div>
               <SlotGrid
@@ -1157,6 +1207,21 @@ function App() {
               onClick={() => resolveConfirm(true)}
             >
               {confirmOptions?.confirmText}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!alertOptions} onOpenChange={(value) => { if (!value) setAlertOptions(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">{alertOptions?.title}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap">
+              {alertOptions?.message}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" size="sm" onClick={() => setAlertOptions(null)}>
+              {alertOptions?.closeText}
             </Button>
           </DialogFooter>
         </DialogContent>
