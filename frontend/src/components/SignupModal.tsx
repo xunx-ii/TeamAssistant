@@ -32,17 +32,19 @@ interface Props {
   onClose: () => void
   onLockAcquired?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp: number; lockVersion?: number }) => void
   onLockReleased?: (lock: { teamId: string; slotIndex: number; qq: string; timestamp?: number }) => void
+  onLockExpired?: () => void
   onLeave?: (lockTimestamp?: LockToken) => void
   onCancelMember?: () => void
 }
 
-export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, lockRetrySignal = 0, onlyTnSignup = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLeave, onCancelMember }: Props) {
+export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdminEditing, slotInfo, isBossSlot, teamId, requireLock = false, lockRetrySignal = 0, onlyTnSignup = false, takenMartialArts, readOnly = false, onConfirm, onClose, onLockAcquired, onLockReleased, onLockExpired, onLeave, onCancelMember }: Props) {
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
   const [note, setNote] = useState(sanitizeTextInput(existing?.note ?? '', { maxLength: TEXT_INPUT_LIMITS.note }))
   const [hasOrangeWeapon, setHasOrangeWeapon] = useState(existing?.hasOrangeWeapon ?? false)
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
+  const [lockExpiresAt, setLockExpiresAt] = useState(0)
   const [lockRemainingMs, setLockRemainingMs] = useState(0)
   const [lockToken, setLockToken] = useState<LockToken | undefined>(undefined)
   const [error, setError] = useState('')
@@ -57,15 +59,16 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const savingRef = useRef(false)
   const lockScopeRef = useRef(0)
   const requestingLockRef = useRef(false)
+  const lockExpiredNotifiedRef = useRef(false)
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
   const shouldLock = requireLock && !readOnly
-  const currentLockRemainingMs = lockTimestamp > 0
-    ? Math.max(0, lockRemainingMs || lockTimestamp + SLOT_LOCK_TIMEOUT_MS - Date.now())
+  const currentLockRemainingMs = lockExpiresAt > 0
+    ? Math.max(0, lockRemainingMs || lockExpiresAt - Date.now())
     : 0
   const lockRemainingSeconds = Math.ceil(currentLockRemainingMs / 1000)
   const lockProgress = Math.max(0, Math.min(100, (currentLockRemainingMs / SLOT_LOCK_TIMEOUT_MS) * 100))
-  const lockExpired = shouldLock && lockTimestamp > 0 && currentLockRemainingMs <= 0
+  const lockExpired = shouldLock && lockExpiresAt > 0 && currentLockRemainingMs <= 0
   const lockCountdownTone = lockExpired
     ? 'bg-destructive'
     : lockRemainingSeconds <= 10
@@ -117,10 +120,14 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     }
     if (result.ok && result.timestamp) {
       const token = result.lockToken ?? result.timestamp
+      const localExpiresAt = Date.now() + SLOT_LOCK_TIMEOUT_MS
       lockTimestampRef.current = result.timestamp
       lockTokenRef.current = token
+      lockExpiredNotifiedRef.current = false
       setLockTimestamp(result.timestamp)
       setLockToken(token)
+      setLockExpiresAt(localExpiresAt)
+      setLockRemainingMs(SLOT_LOCK_TIMEOUT_MS)
       onLockAcquired?.({ teamId, slotIndex, qq: lockQq, timestamp: result.timestamp, lockVersion: result.lockVersion })
       setError('')
       return
@@ -152,6 +159,8 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       }
       setLockTimestamp(0)
       setLockToken(undefined)
+      setLockExpiresAt(0)
+      setLockRemainingMs(0)
       setError('')
       savingRef.current = false
       setSaving(false)
@@ -164,17 +173,38 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   }, [lockRetrySignal, open, shouldLock, slotIndex, teamId, tryAcquireLock])
 
   useEffect(() => {
-    if (!open || !shouldLock || lockTimestamp <= 0) {
+    if (!open || !shouldLock || lockExpiresAt <= 0) {
       setLockRemainingMs(0)
       return
     }
     const updateRemaining = () => {
-      setLockRemainingMs(Math.max(0, lockTimestamp + SLOT_LOCK_TIMEOUT_MS - Date.now()))
+      const remaining = Math.max(0, lockExpiresAt - Date.now())
+      setLockRemainingMs(remaining)
+      if (remaining > 0 || lockExpiredNotifiedRef.current) {
+        return
+      }
+      lockExpiredNotifiedRef.current = true
+      const currentLockTimestamp = lockTimestampRef.current
+      const currentLockToken = lockTokenRef.current
+      lockTimestampRef.current = 0
+      lockTokenRef.current = undefined
+      if (teamId && slotIndex != null && currentLockTimestamp > 0) {
+        onLockReleased?.({ teamId, slotIndex, qq: lockQq, timestamp: currentLockTimestamp })
+        void releaseSlotLock(teamId, slotIndex, lockQq, currentLockToken ?? currentLockTimestamp)
+      }
+      setLockTimestamp(0)
+      setLockToken(undefined)
+      setLockExpiresAt(0)
+      setError('')
+      savingRef.current = false
+      setSaving(false)
+      onClose()
+      onLockExpired?.()
     }
     updateRemaining()
     const interval = window.setInterval(updateRemaining, 250)
     return () => window.clearInterval(interval)
-  }, [lockTimestamp, open, shouldLock])
+  }, [lockExpiresAt, lockQq, onClose, onLockExpired, onLockReleased, open, shouldLock, slotIndex, teamId])
 
   const handleClose = () => {
     const currentLockTimestamp = lockTimestampRef.current
@@ -185,6 +215,8 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       onLockReleased?.({ teamId, slotIndex, qq: lockQq, timestamp: currentLockTimestamp })
       void releaseSlotLock(teamId, slotIndex, lockQq, currentLockToken ?? currentLockTimestamp)
     }
+    setLockExpiresAt(0)
+    setLockRemainingMs(0)
     onClose()
   }
 
@@ -222,7 +254,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       setError('正在锁定该位置，请稍后再提交')
       return
     }
-    if (shouldLock && lockTimestamp > 0 && Date.now() - lockTimestamp > SLOT_LOCK_TIMEOUT_MS) {
+    if (shouldLock && lockExpiresAt > 0 && Date.now() >= lockExpiresAt) {
       setError('锁定已过期，请重新打开窗体')
       return
     }
@@ -308,7 +340,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        {shouldLock && lockTimestamp > 0 && (
+        {shouldLock && lockExpiresAt > 0 && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
               <span className={lockExpired ? 'text-destructive' : 'text-muted-foreground'}>
@@ -318,8 +350,8 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-muted">
               <div
-                className={`h-full rounded-full transition-[width] duration-200 ${lockCountdownTone}`}
-                style={{ width: `${lockProgress}%` }}
+                className={`h-full w-full origin-left rounded-full transition-transform duration-200 ${lockCountdownTone}`}
+                style={{ transform: `scaleX(${lockProgress / 100})` }}
               />
             </div>
           </div>

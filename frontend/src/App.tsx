@@ -543,6 +543,13 @@ function App() {
     return true
   }, [activeTeam, qq])
   const handleSignupSlot = useCallback((idx: number) => { openSignupSlot(idx) }, [openSignupSlot])
+  const handleSignupLockExpired = useCallback(() => {
+    setAlertOptions({
+      title: '报名超时',
+      message: '报名锁定已超时，请重新选择格子报名。',
+      closeText: '知道了',
+    })
+  }, [])
   const handleEditSlot = useCallback((idx: number) => setEditSlot(idx), [])
   const handleViewSlot = useCallback((idx: number) => setEditSlot(idx), [])
   const handleSetRoleSlotClick = useCallback((idx: number) => {
@@ -1063,6 +1070,7 @@ function App() {
         onClose={() => setSignupSlot(null)}
         onLockAcquired={applyAcquiredSlotLock}
         onLockReleased={applyReleasedSlotLock}
+        onLockExpired={handleSignupLockExpired}
       />
 
       {editSlot !== null && activeTeam && (() => {
@@ -1093,6 +1101,7 @@ function App() {
             onClose={() => setEditSlot(null)}
             onLockAcquired={applyAcquiredSlotLock}
             onLockReleased={applyReleasedSlotLock}
+            onLockExpired={handleSignupLockExpired}
             onLeave={!isAdminEdit ? handleEditSlotLeave : undefined}
             onCancelMember={isAdminEdit ? () => { setCancelSlot(editSlotIndex); setEditSlot(null) } : undefined}
           />
