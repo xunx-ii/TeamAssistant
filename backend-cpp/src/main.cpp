@@ -11,6 +11,7 @@
 #include <functional>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <ctime>
 #include <unordered_map>
@@ -32,6 +34,10 @@ namespace {
 using Json::Value;
 using drogon::HttpRequestPtr;
 using drogon::HttpResponsePtr;
+
+constexpr double kAutomaticBackupIntervalSeconds = 30.0 * 60.0;
+constexpr std::size_t kBackupHistoryLimit = 48;
+constexpr long long kSlotLockTimeoutMs = 60'000;
 
 long long toInt64(const Value &value, long long fallback = 0);
 Value errorJson(const std::string &message);
@@ -58,6 +64,7 @@ struct BackupEntry {
     std::string name;
     std::string createdAt;
     std::uintmax_t size = 0;
+    long long timestamp = 0;
 };
 
 struct RuntimeLockState {
@@ -1302,18 +1309,22 @@ public:
     Value createBackup() {
         std::lock_guard lock(mutex_);
         ensureSchema();
-        std::filesystem::create_directories(backupDir_);
-        Value payload = backupPayloadUnlocked();
-        const std::string createdAt = shanghaiTimestamp(nowMs());
-        const std::string name = "teamassistant-" + backupFileTimestamp(nowMs()) + ".json.gz";
-        const auto path = backupDir_ / name;
-        writeGzipFile(path, writeJson(payload));
+        const std::string name = createBackupUnlocked(nowMs());
+        pruneBackupsUnlocked();
 
         Value result;
         result["ok"] = true;
         result["name"] = name;
         result["backups"] = backupEntriesJson(listBackupsUnlocked());
         return result;
+    }
+
+    std::string createAutomaticBackup() {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        const std::string name = createBackupUnlocked(nowMs());
+        pruneBackupsUnlocked();
+        return name;
     }
 
     Value restoreBackup(const std::string &name) {
@@ -1565,7 +1576,7 @@ private:
     std::filesystem::path dataDir_;
     std::filesystem::path backupDir_;
     bool schemaReady_ = false;
-    const long long lockTimeoutMs_ = 30'000;
+    const long long lockTimeoutMs_ = kSlotLockTimeoutMs;
     RuntimeLockState runtimeLocks_;
     std::atomic<long long> dataVersionCache_{1};
     std::atomic<long long> lockVersionCache_{1};
@@ -2679,10 +2690,27 @@ private:
         }
     }
 
-    Value backupPayloadUnlocked() {
+    std::string createBackupUnlocked(long long timestamp) {
+        std::filesystem::create_directories(backupDir_);
+        const auto path = allocateBackupPathUnlocked(timestamp);
+        writeGzipFile(path, writeJson(backupPayloadUnlocked(timestamp)));
+        return path.filename().string();
+    }
+
+    std::filesystem::path allocateBackupPathUnlocked(long long timestamp) const {
+        for (int offset = 0; offset < 1000; ++offset) {
+            const auto path = backupDir_ / backupFileName(timestamp + offset);
+            if (!std::filesystem::exists(path)) {
+                return path;
+            }
+        }
+        throw std::runtime_error("Unable to allocate backup file name");
+    }
+
+    Value backupPayloadUnlocked(long long timestamp) {
         Value payload;
         payload["version"] = 1;
-        payload["createdAt"] = shanghaiTimestamp(nowMs());
+        payload["createdAt"] = shanghaiTimestamp(timestamp);
         Value snapshot = bootstrapDataUnlocked();
         Value data;
         data["teams"] = snapshot["teams"];
@@ -2730,6 +2758,10 @@ private:
         output << std::put_time(&tm, "%Y%m%d-%H%M%S");
         output << "-" << std::setw(3) << std::setfill('0') << (timestamp % 1000);
         return output.str();
+    }
+
+    static std::string backupFileName(long long timestamp) {
+        return "teamassistant-" + backupFileTimestamp(timestamp) + ".json.gz";
     }
 
     static std::tm utcTime(const std::time_t seconds) {
@@ -2829,6 +2861,18 @@ private:
         return backupDir_ / filename;
     }
 
+    void pruneBackupsUnlocked() {
+        const auto backups = listBackupsUnlocked();
+        if (backups.size() <= kBackupHistoryLimit) {
+            return;
+        }
+
+        for (std::size_t index = kBackupHistoryLimit; index < backups.size(); ++index) {
+            std::error_code error;
+            std::filesystem::remove(backupDir_ / backups[index].name, error);
+        }
+    }
+
     std::vector<BackupEntry> listBackupsUnlocked() {
         std::vector<BackupEntry> backups;
         std::filesystem::create_directories(backupDir_);
@@ -2848,10 +2892,14 @@ private:
             const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                 writeTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(systemTime.time_since_epoch()).count();
+            backup.timestamp = ms;
             backup.createdAt = shanghaiTimestamp(ms);
             backups.push_back(backup);
         }
         std::sort(backups.begin(), backups.end(), [](const BackupEntry &left, const BackupEntry &right) {
+            if (left.timestamp != right.timestamp) {
+                return left.timestamp > right.timestamp;
+            }
             return left.name > right.name;
         });
         return backups;
@@ -3316,6 +3364,17 @@ int main() {
     });
     drogon::app().getLoop()->runEvery(15.0, [events]() {
         events->heartbeat();
+    });
+    drogon::app().getLoop()->runEvery(kAutomaticBackupIntervalSeconds, [db]() {
+        std::thread([db]() {
+            try {
+                db->createAutomaticBackup();
+            } catch (const std::exception &error) {
+                std::cerr << "[backup] failed: " << error.what() << "\n";
+            } catch (...) {
+                std::cerr << "[backup] failed: unknown error\n";
+            }
+        }).detach();
     });
 
     drogon::app().registerHandler("/api/v2/version",

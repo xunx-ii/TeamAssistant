@@ -11,6 +11,8 @@ import { useImeSafeInputHandlers } from './ui/imeInput'
 import { Label } from './ui/label'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
+const SLOT_LOCK_TIMEOUT_MS = 60_000
+
 interface Props {
   open: boolean
   qq: string
@@ -40,6 +42,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const [note, setNote] = useState(sanitizeTextInput(existing?.note ?? '', { maxLength: TEXT_INPUT_LIMITS.note }))
   const [hasOrangeWeapon, setHasOrangeWeapon] = useState(existing?.hasOrangeWeapon ?? false)
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
+  const [lockRemainingMs, setLockRemainingMs] = useState(0)
   const [lockToken, setLockToken] = useState<LockToken | undefined>(undefined)
   const [error, setError] = useState('')
   const [maSearch, setMaSearch] = useState('')
@@ -56,6 +59,17 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const lockQq = lockOwnerQq ?? qq
   const slotIndex = slotInfo?.index ?? null
   const shouldLock = requireLock && !readOnly
+  const currentLockRemainingMs = lockTimestamp > 0
+    ? Math.max(0, lockRemainingMs || lockTimestamp + SLOT_LOCK_TIMEOUT_MS - Date.now())
+    : 0
+  const lockRemainingSeconds = Math.ceil(currentLockRemainingMs / 1000)
+  const lockProgress = Math.max(0, Math.min(100, (currentLockRemainingMs / SLOT_LOCK_TIMEOUT_MS) * 100))
+  const lockExpired = shouldLock && lockTimestamp > 0 && currentLockRemainingMs <= 0
+  const lockCountdownTone = lockExpired
+    ? 'bg-destructive'
+    : lockRemainingSeconds <= 10
+      ? 'bg-amber-500'
+      : 'bg-emerald-500'
   const maSearchInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value: martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch,
     onChange: e => {
@@ -148,6 +162,19 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     queueMicrotask(() => { void tryAcquireLock() })
   }, [lockRetrySignal, open, shouldLock, slotIndex, teamId, tryAcquireLock])
 
+  useEffect(() => {
+    if (!open || !shouldLock || lockTimestamp <= 0) {
+      setLockRemainingMs(0)
+      return
+    }
+    const updateRemaining = () => {
+      setLockRemainingMs(Math.max(0, lockTimestamp + SLOT_LOCK_TIMEOUT_MS - Date.now()))
+    }
+    updateRemaining()
+    const interval = window.setInterval(updateRemaining, 250)
+    return () => window.clearInterval(interval)
+  }, [lockTimestamp, open, shouldLock])
+
   const handleClose = () => {
     const currentLockTimestamp = lockTimestampRef.current
     const currentLockToken = lockTokenRef.current
@@ -187,6 +214,10 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     setError('')
     if (shouldLock && lockTimestamp <= 0) {
       setError('正在锁定该位置，请稍后再提交')
+      return
+    }
+    if (shouldLock && lockTimestamp > 0 && Date.now() - lockTimestamp > SLOT_LOCK_TIMEOUT_MS) {
+      setError('锁定已过期，请重新打开窗体')
       return
     }
 
@@ -252,6 +283,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const isFixedSlot = slotInfo?.status === 'fixed' && !existing
   const fixedMartialArt = slotInfo?.fixedMartialArtIndex != null ? martialArts[slotInfo.fixedMartialArtIndex] : null
   const showActions = !readOnly
+  const submitDisabled = saving || (shouldLock && (lockTimestamp <= 0 || lockExpired))
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
@@ -267,6 +299,22 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
+        {shouldLock && lockTimestamp > 0 && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className={lockExpired ? 'text-destructive' : 'text-muted-foreground'}>
+                {lockExpired ? '锁定已过期' : '锁定剩余'}
+              </span>
+              <span className="font-mono text-muted-foreground">{lockRemainingSeconds}s</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className={`h-full rounded-full transition-[width] duration-200 ${lockCountdownTone}`}
+                style={{ width: `${lockProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
         {isBossSlot && (
           <p className="text-xs text-purple-400 bg-purple-950/30 rounded-md px-3 py-2">此位置为老板位</p>
         )}
@@ -434,8 +482,16 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
           </div>
           {showActions && (
             <div className="flex gap-2 pt-1">
-              <Button type="submit" className="flex-1" disabled={saving || (shouldLock && lockTimestamp <= 0)}>
-                {saving ? '保存中' : existing ? '保存修改' : shouldLock && lockTimestamp <= 0 ? '锁定中' : '确认报名'}
+              <Button type="submit" className="flex-1" disabled={submitDisabled}>
+                {saving
+                  ? '保存中'
+                  : shouldLock && lockTimestamp <= 0
+                    ? '锁定中'
+                    : lockExpired
+                      ? '锁定过期'
+                      : existing
+                        ? '保存修改'
+                        : '确认报名'}
               </Button>
               {onLeave && (
                 <Button type="button" variant="outline" className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10" disabled={saving} onClick={() => onLeave(lockToken ?? lockTimestamp)}>
