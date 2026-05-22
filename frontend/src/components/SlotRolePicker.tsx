@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { martialArts, getMartialArtLabel } from '../data/martialArts'
+import { getMartialArtLabel } from '../data/martialArts'
 import { ArrowLeft } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
+import { getSlotRoleMartialArtOptions } from '../signupRules'
 
 interface Props {
   open: boolean
@@ -13,14 +14,17 @@ interface Props {
   currentMartialArt: number | null
   isReserved: boolean
   canSignup: boolean
+  onlyTnSignup?: boolean
+  errorMessage?: string
   onSet: (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => void
   onSignup: () => void
   onClose: () => void
 }
 
-export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt, isReserved, canSignup, onSet, onSignup, onClose }: Props) {
+export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt, isReserved, canSignup, onlyTnSignup = false, errorMessage = '', onSet, onSignup, onClose }: Props) {
   const [showMartialArts, setShowMartialArts] = useState(false)
   const [assignQQ, setAssignQQ] = useState('')
+  const martialArtOptions = getSlotRoleMartialArtOptions(onlyTnSignup)
 
   const handlePick = (role: 'T' | '治疗' | 'DPS' | 'boss' | null, maIdx: number | null = null) => {
     const qq = normalizeTextInput(assignQQ, { maxLength: TEXT_INPUT_LIMITS.qq }) || undefined
@@ -35,6 +39,9 @@ export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt
         <DialogHeader>
           <DialogTitle>位置 #{slotIndex + 1}</DialogTitle>
         </DialogHeader>
+        {errorMessage && (
+          <p className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">{errorMessage}</p>
+        )}
 
         {!showMartialArts ? (
           <div className="flex flex-col gap-2">
@@ -79,7 +86,7 @@ export function SlotRolePicker({ open, slotIndex, currentRole, currentMartialArt
               />
             </div>
             <div className="grid grid-cols-2 gap-1 max-h-72 overflow-y-auto">
-              {martialArts.map((ma, i) => (
+              {martialArtOptions.map(({ martialArt: ma, index: i }) => (
                 <button
                   key={i}
                   className={`text-left text-xs px-2 py-1.5 rounded border transition-colors truncate ${

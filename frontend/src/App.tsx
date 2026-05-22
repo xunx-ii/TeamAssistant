@@ -18,6 +18,7 @@ import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeT
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
 import { loadSubsidyPresets, saveSubsidyPresets } from './subsidyPresets'
 import { createDefaultTeam, createTeamFromGuide, type CreateTeamGuideValues } from './teamCreation'
+import { findUniqueSignupConflictSlot } from './signupRules'
 import { getCurrentWeekStartKey } from './week'
 import { startAdaptivePoll } from './polling'
 import { TeamTabs } from './components/TeamTabs'
@@ -68,6 +69,16 @@ const LOADING_MESSAGES = [
   '快开门！你们在里面干嘛！！！',
 ]
 
+function mutationResultErrorMessage(result: MutationResult) {
+  if (result.reason === 'teamLocked') return '表格已被管理员锁定'
+  if (result.reason === 'expired') return '该位置已被其他人抢占，请刷新后重试'
+  if (result.reason === 'slotChanged') return '该位置内容已变更，请刷新后重试'
+  if (result.reason === 'onlyTnSignup') return '当前团队仅限T/奶报名'
+  if (result.reason === 'uniqueQqSignup') return '该QQ已在当前团队报名'
+  if (result.reason === 'selfSignupOnly') return '该团队每人仅能报名一次，不能代报名'
+  return result.error || '保存失败，请稍后再试'
+}
+
 function pickLoadingMessage() {
   return LOADING_MESSAGES[Math.floor(Math.random() * LOADING_MESSAGES.length)] ?? LOADING_MESSAGES[0]
 }
@@ -114,6 +125,7 @@ function App() {
   const [teamLocks, setTeamLocks] = useState<TeamLockInfo[]>([])
   const [lockRetrySignal, setLockRetrySignal] = useState(0)
   const [mutationError, setMutationError] = useState('')
+  const [slotRoleError, setSlotRoleError] = useState('')
   const [confirmOptions, setConfirmOptions] = useState<AppConfirmOptions | null>(null)
   const [alertOptions, setAlertOptions] = useState<AppAlertOptions | null>(null)
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
@@ -387,6 +399,7 @@ function App() {
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
     setAlertOptions(null)
+    setSlotRoleError('')
   }
 
   const applyLocalMutation = useCallback((mutation: Mutation) => {
@@ -516,7 +529,7 @@ function App() {
   const handleShowCreateTeam = useCallback(() => setShowCreateTeam(true), [])
   const openSignupSlot = useCallback((idx: number) => {
     if (activeTeam?.config.uniqueQqSignup && qq) {
-      const existingSlot = activeTeam.slots.find(slot => slot.index !== idx && slot.member?.qq === qq)
+      const existingSlot = findUniqueSignupConflictSlot(activeTeam.slots, qq, idx)
       if (existingSlot) {
         setAlertOptions({
           title: '已报名',
@@ -532,11 +545,15 @@ function App() {
   const handleSignupSlot = useCallback((idx: number) => { openSignupSlot(idx) }, [openSignupSlot])
   const handleEditSlot = useCallback((idx: number) => setEditSlot(idx), [])
   const handleViewSlot = useCallback((idx: number) => setEditSlot(idx), [])
-  const handleSetRoleSlotClick = useCallback((idx: number) => setSetRoleSlot(idx), [])
+  const handleSetRoleSlotClick = useCallback((idx: number) => {
+    setSlotRoleError('')
+    setSetRoleSlot(idx)
+  }, [])
   const handleSignupFromRole = useCallback(() => {
     if (setRoleSlot !== null) {
-      openSignupSlot(setRoleSlot)
-      setSetRoleSlot(null)
+      if (openSignupSlot(setRoleSlot)) {
+        setSetRoleSlot(null)
+      }
     }
   }, [openSignupSlot, setRoleSlot])
 
@@ -632,19 +649,20 @@ function App() {
   const handleSetSlotRole = async (role: 'T' | '治疗' | 'DPS' | 'boss' | null, martialArtIndex: number | null, assignQQ?: string) => {
     const slotIndex = setRoleSlot
     if (slotIndex === null || !activeTeam) return
+    setSlotRoleError('')
     const assignedQq = normalizeTextInput(assignQQ ?? '', { maxLength: TEXT_INPUT_LIMITS.qq }) || undefined
     const assignedMartialArt = martialArtIndex != null ? martialArts[martialArtIndex] : null
     if (activeTeam.config.onlyTnSignup && (role === 'DPS' || assignedMartialArt?.role === 'DPS')) {
-      setMutationError('当前团队仅限T/奶报名')
+      setSlotRoleError('当前团队仅限T/奶报名')
       return
     }
     if (activeTeam.config.uniqueQqSignup && assignedQq) {
       if (assignedQq !== qq) {
-        setMutationError('该团队每人仅能报名一次，不能代报名')
+        setSlotRoleError('该团队每人仅能报名一次，不能代报名')
         return
       }
-      if (activeTeam.slots.some(slot => slot.index !== slotIndex && slot.member?.qq === assignedQq)) {
-        setMutationError('该QQ已在当前团队报名')
+      if (findUniqueSignupConflictSlot(activeTeam.slots, assignedQq, slotIndex)) {
+        setSlotRoleError('该QQ已在当前团队报名')
         return
       }
     }
@@ -658,7 +676,11 @@ function App() {
       actorQq: qq ?? undefined,
     })
     if (result.ok) {
+      setSlotRoleError('')
       setSetRoleSlot(null)
+    } else {
+      setSlotRoleError(mutationResultErrorMessage(result))
+      setMutationError('')
     }
   }
 
@@ -731,7 +753,7 @@ function App() {
         setMutationError('该团队每人仅能报名一次，不能代报名')
         return
       }
-      const existingSlot = activeTeam.slots.find(slot => slot.index !== slotIndex && slot.member?.qq === memberQq)
+      const existingSlot = findUniqueSignupConflictSlot(activeTeam.slots, memberQq, slotIndex)
       if (existingSlot) {
         setAlertOptions({
           title: '已报名',
@@ -1098,9 +1120,11 @@ function App() {
           currentMartialArt={activeTeam.slots[setRoleSlot]?.fixedMartialArtIndex ?? null}
           isReserved={activeTeam.slots[setRoleSlot]?.status === 'reserved'}
           canSignup={true}
+          onlyTnSignup={activeTeam.config.onlyTnSignup}
+          errorMessage={slotRoleError}
           onSet={(role, maIdx, assignQQ) => { handleSetSlotRole(role, maIdx, assignQQ) }}
           onSignup={handleSignupFromRole}
-          onClose={() => setSetRoleSlot(null)}
+          onClose={() => { setSlotRoleError(''); setSetRoleSlot(null) }}
         />
       )}
       {showCreateTeam && (
