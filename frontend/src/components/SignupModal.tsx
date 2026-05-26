@@ -41,7 +41,6 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const [martialArt, setMartialArt] = useState(sanitizeIntegerInput(existing?.martialArtIndex ?? '', 3))
   const [gearScore, setGearScore] = useState(sanitizeIntegerInput(existing?.gearScore ?? '', TEXT_INPUT_LIMITS.gearScore))
   const [characterId, setCharacterId] = useState(sanitizeTextInput(existing?.characterId ?? '', { maxLength: TEXT_INPUT_LIMITS.characterId }))
-  const [note, setNote] = useState(sanitizeTextInput(existing?.note ?? '', { maxLength: TEXT_INPUT_LIMITS.note }))
   const [hasOrangeWeapon, setHasOrangeWeapon] = useState(existing?.hasOrangeWeapon ?? false)
   const [lockTimestamp, setLockTimestamp] = useState<number>(0)
   const [lockExpiresAt, setLockExpiresAt] = useState(0)
@@ -227,11 +226,9 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     const textGearScore = sanitizeIntegerInput(gearScore, TEXT_INPUT_LIMITS.gearScore)
     const fallbackCharacterId = normalizeTextInput(nickname, { maxLength: TEXT_INPUT_LIMITS.characterId })
     const textCharacterId = normalizeTextInput(characterId, { maxLength: TEXT_INPUT_LIMITS.characterId }) || fallbackCharacterId
-    const textNote = normalizeTextInput(note, { maxLength: TEXT_INPUT_LIMITS.note })
     setMartialArt(textMartialArt)
     setGearScore(textGearScore)
     setCharacterId(textCharacterId)
-    setNote(textNote)
     if (!textMartialArt) {
       setError('请选择心法')
       return
@@ -273,7 +270,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       }
     }
     try {
-      await onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: textNote, hasOrangeWeapon }, lockToken ?? lockTimestamp)
+      await onConfirm({ martialArtIndex: textMartialArt, gearScore: textGearScore, characterId: textCharacterId, note: '', hasOrangeWeapon }, lockToken ?? lockTimestamp)
     } finally {
       savingRef.current = false
       if (mountedRef.current) {
@@ -508,16 +505,6 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
               maxLength={TEXT_INPUT_LIMITS.characterId}
               onChange={e => { if (!readOnly) setCharacterId(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.characterId })) }}
               placeholder="角色ID"
-              disabled={readOnly}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>备注</Label>
-            <Input
-              value={note}
-              maxLength={TEXT_INPUT_LIMITS.note}
-              onChange={e => { if (!readOnly) setNote(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.note })) }}
-              placeholder="备注"
               disabled={readOnly}
             />
           </div>

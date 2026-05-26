@@ -11,6 +11,7 @@ import {
   getOccupiedSlotDisplay,
   getReservedSlotLabel,
   getSlotLockOwnerLabel,
+  getUserDisplayName,
   shouldShowAvailableMarker,
 } from './slotGridDisplay'
 
@@ -186,6 +187,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
                               ma?.role === '治疗' ? 'text-pink-600 bg-pink-100 border-pink-300' :
                               'text-blue-600 bg-blue-100 border-blue-300'
             const assignedReservationLabel = getAssignedReservationLabel(slot, userProfiles)
+            const signupName = getUserDisplayName(m.qq, userProfiles)
             content = (
               <>
                 <span className="absolute top-1 left-1 z-[1] text-[10px] text-muted-foreground font-mono sm:left-2">#{slot.index + 1}</span>
@@ -218,8 +220,8 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
                         <span className="sm:hidden">{m.characterId}</span>
                         <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>
                       </div>
-                      <div className={`w-full text-[9px] leading-3 text-muted-foreground italic sm:text-[10px] sm:leading-4 ${m.note ? '' : 'opacity-0'}`}>
-                        {m.note || '备注占位'}
+                      <div className="w-full truncate text-[9px] leading-3 text-muted-foreground sm:text-[10px] sm:leading-4">
+                        报名人：{signupName}
                       </div>
                     </>
                   )}
