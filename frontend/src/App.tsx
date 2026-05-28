@@ -929,203 +929,56 @@ function App() {
     )
   }
 
-  if (!hasBoardAccess) {
-    const publicTime = accessGate?.publicAtMs ? formatShanghaiDateTimeMinute(accessGate.publicAtMs) : ''
-    return (
-      <>
-        <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
-          <div className="max-w-[960px] mx-auto px-4 py-5">
-            <div className="pixel-card p-3">
-              <div className="flex items-center justify-between gap-3">
-                <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
-                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
-              </div>
-            </div>
-            <div className="mt-4 pixel-card p-5">
-              <div className="flex items-center gap-2">
-                <PixelHeart size={16} className="shrink-0" />
-                <h2 className="text-sm font-bold text-foreground">报名未开放</h2>
-              </div>
-              {publicTime && (
-                <p className="mt-3 text-sm text-muted-foreground">公开时间：{publicTime}</p>
-              )}
-            </div>
-          </div>
-        </div>
-        {loadingOverlay}
-      </>
-    )
-  }
-
-  return (
-    <>
-      {notice && (
-        <CancellationNotice open={!!notice} notice={notice} onDismiss={() => { void dismissNotice() }} />
+  const sharedHeaderActions = (
+    <div className="flex items-center gap-2 flex-wrap justify-end">
+      {isAdmin && (
+        <span className="pixel-badge bg-amber-100 text-amber-700">
+          GM
+        </span>
       )}
-      <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
-        {/* Decorative floating elements */}
-        <div className="fixed top-20 left-4 opacity-20 pointer-events-none pixel-carrot-float hidden lg:block">
-          <PixelCarrot size={32} />
-        </div>
-        <div className="fixed top-40 right-8 opacity-20 pointer-events-none pixel-heart-float hidden lg:block">
-          <PixelHeart size={28} />
-        </div>
-        <div className="fixed bottom-32 left-8 opacity-20 pointer-events-none pixel-star-float hidden lg:block">
-          <PixelStar size={24} />
-        </div>
-        <div className="fixed bottom-20 right-16 opacity-15 pointer-events-none pixel-carrot-float hidden lg:block" style={{ animationDelay: '1.5s' }}>
-          <PixelCarrot size={20} />
-        </div>
+      {isAdmin && (
+        <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowBackupSettings(true)} disabled={!serverMode}>
+          备份设置
+        </Button>
+      )}
+      {isAdmin && (
+        <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowAccessGate(true)} disabled={!serverMode}>
+          提前报名
+        </Button>
+      )}
+      {isAdmin && (
+        <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyPreset(true)}>
+          补贴预设
+        </Button>
+      )}
+      {isAdmin && (
+        <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowArchives(true)}>
+          查看档案
+        </Button>
+      )}
+      <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidy(true)}>
+        补贴登记
+      </Button>
+      <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyStats(true)}>
+        补贴统计
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="pixel-btn max-w-[160px] truncate text-xs"
+        onClick={() => {
+          setNicknameError('')
+          setShowNicknameDialog(true)
+        }}
+      >
+        {currentNickname || '设置昵称'}
+      </Button>
+      <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
+    </div>
+  )
 
-        <div className="max-w-[960px] mx-auto px-4 py-5">
-          {/* Header */}
-          <div className="pixel-card p-3">
-            <div className="flex items-center justify-between">
-              <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                {isAdmin && (
-                  <span className="pixel-badge bg-amber-100 text-amber-700">
-                    GM
-                  </span>
-                )}
-                {isAdmin && (
-                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowBackupSettings(true)} disabled={!serverMode}>
-                    备份设置
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowAccessGate(true)} disabled={!serverMode}>
-                    提前报名
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyPreset(true)}>
-                    补贴预设
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowArchives(true)}>
-                    查看档案
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidy(true)}>
-                  补贴登记
-                </Button>
-                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowSubsidyStats(true)}>
-                  补贴统计
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="pixel-btn max-w-[160px] truncate text-xs"
-                  onClick={() => {
-                    setNicknameError('')
-                    setShowNicknameDialog(true)
-                  }}
-                >
-                  {currentNickname || '设置昵称'}
-                </Button>
-                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Tabs */}
-          <div className="mt-3">
-            <TeamTabs
-              teams={teams.map(t => ({ id: t.id, name: t.name }))}
-              activeId={resolvedActiveTeamId}
-              isAdmin={isAdmin}
-              onSwitch={switchTeam}
-              onCreate={handleShowCreateTeam}
-              onDelete={handleDeleteTeam}
-              onRename={handleRenameTeam}
-              onReorder={(ids) => {
-                void runMutation({ type: 'reorderTeams', ids })
-              }}
-            />
-          </div>
-
-          {activeTeam && (
-            <div className="mt-4">
-              {isAdmin && (
-                <AdminConfig
-                  teamName={activeTeam.name}
-                  weekStart={activeTeam.weekStart ?? currentWeekStart}
-                  note={activeTeam.note}
-                  serverMode={serverMode}
-                  locked={activeTeam.config.locked}
-                  onlyTnSignup={activeTeam.config.onlyTnSignup}
-                  uniqueQqSignup={activeTeam.config.uniqueQqSignup}
-                  onRename={handleAdminRename}
-                  onSaveWeekStart={handleUpdateWeekStart}
-                  onUpdateNote={handleUpdateNote}
-                  onQuickReserve={handleQuickReserve}
-                  onToggleLock={async () => {
-                    if (!activeTeam) return
-                    const newLocked = !activeTeam.config.locked
-                    await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
-                  }}
-                  onUpdateSignupRules={handleUpdateSignupRules}
-                  onViewLogs={() => setShowLogs(true)}
-                  onArchive={handleArchiveTeam}
-                  onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
-                />
-              )}
-              <div className="mb-3 pixel-card p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <PixelHeart size={16} className="shrink-0" />
-                    <h2 className="min-w-0 break-all text-sm font-bold text-foreground">{activeTeam.name}</h2>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-                    {activeTeam.config.onlyTnSignup || activeTeam.config.uniqueQqSignup ? (
-                      <>
-                        {activeTeam.config.onlyTnSignup && (
-                          <span className="pixel-badge bg-emerald-100 text-emerald-700">仅TN</span>
-                        )}
-                        {activeTeam.config.uniqueQqSignup && (
-                          <span className="pixel-badge bg-sky-100 text-sky-700">每人一次</span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="pixel-badge bg-secondary text-muted-foreground">限制：无</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <SlotGrid
-                slots={activeTeam.slots}
-                config={activeTeam.config}
-                currentQQ={qq}
-                userProfiles={userProfiles}
-                isAdmin={isAdmin}
-                locks={locks.filter(l => l.teamId === activeTeam.id)}
-                teamLocked={teamLocks.some(t => t.teamId === activeTeam.id)}
-                onSignup={handleSignupSlot}
-                onEdit={handleEditSlot}
-                onSetRole={handleSetRoleSlotClick}
-                onView={handleViewSlot}
-              />
-              {mutationError && (
-                <div className="mt-3 pixel-notification bg-red-50 px-3 py-2 text-xs text-red-600">
-                  ⚠️ {mutationError}
-                </div>
-              )}
-              {activeTeam.note && (
-                <div className="mt-4 pixel-card p-3 border-l-4 border-l-amber-400">
-                  <div className="flex items-center gap-2 mb-1">
-                    <PixelCarrot size={16} />
-                    <p className="text-xs font-bold text-amber-600 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
-                  </div>
-                  <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
+  const sharedDialogs = (
+    <>
       <SignupModal
         key={`signup-${activeTeam?.id ?? 'none'}-${signupSlot ?? 'none'}`}
         open={signupSlot !== null}
@@ -1339,6 +1192,164 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </>
+  )
+
+  if (!hasBoardAccess) {
+    const publicTime = accessGate?.publicAtMs ? formatShanghaiDateTimeMinute(accessGate.publicAtMs) : ''
+    return (
+      <>
+        <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
+          <div className="max-w-[960px] mx-auto px-4 py-5">
+            <div className="pixel-card p-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
+                {sharedHeaderActions}
+              </div>
+            </div>
+            <div className="mt-4 pixel-card p-5">
+              <div className="flex items-center gap-2">
+                <PixelHeart size={16} className="shrink-0" />
+                <h2 className="text-sm font-bold text-foreground">报名未开放</h2>
+              </div>
+              {publicTime && (
+                <p className="mt-3 text-sm text-muted-foreground">公开时间：{publicTime}</p>
+              )}
+            </div>
+          </div>
+        </div>
+        {sharedDialogs}
+        {loadingOverlay}
+      </>
+    )
+  }
+
+  return (
+    <>
+      {notice && (
+        <CancellationNotice open={!!notice} notice={notice} onDismiss={() => { void dismissNotice() }} />
+      )}
+      <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
+        {/* Decorative floating elements */}
+        <div className="fixed top-20 left-4 opacity-20 pointer-events-none pixel-carrot-float hidden lg:block">
+          <PixelCarrot size={32} />
+        </div>
+        <div className="fixed top-40 right-8 opacity-20 pointer-events-none pixel-heart-float hidden lg:block">
+          <PixelHeart size={28} />
+        </div>
+        <div className="fixed bottom-32 left-8 opacity-20 pointer-events-none pixel-star-float hidden lg:block">
+          <PixelStar size={24} />
+        </div>
+        <div className="fixed bottom-20 right-16 opacity-15 pointer-events-none pixel-carrot-float hidden lg:block" style={{ animationDelay: '1.5s' }}>
+          <PixelCarrot size={20} />
+        </div>
+
+        <div className="max-w-[960px] mx-auto px-4 py-5">
+          {/* Header */}
+          <div className="pixel-card p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
+              {sharedHeaderActions}
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div className="mt-3">
+            <TeamTabs
+              teams={teams.map(t => ({ id: t.id, name: t.name }))}
+              activeId={resolvedActiveTeamId}
+              isAdmin={isAdmin}
+              onSwitch={switchTeam}
+              onCreate={handleShowCreateTeam}
+              onDelete={handleDeleteTeam}
+              onRename={handleRenameTeam}
+              onReorder={(ids) => {
+                void runMutation({ type: 'reorderTeams', ids })
+              }}
+            />
+          </div>
+
+          {activeTeam && (
+            <div className="mt-4">
+              {isAdmin && (
+                <AdminConfig
+                  teamName={activeTeam.name}
+                  weekStart={activeTeam.weekStart ?? currentWeekStart}
+                  note={activeTeam.note}
+                  serverMode={serverMode}
+                  locked={activeTeam.config.locked}
+                  onlyTnSignup={activeTeam.config.onlyTnSignup}
+                  uniqueQqSignup={activeTeam.config.uniqueQqSignup}
+                  onRename={handleAdminRename}
+                  onSaveWeekStart={handleUpdateWeekStart}
+                  onUpdateNote={handleUpdateNote}
+                  onQuickReserve={handleQuickReserve}
+                  onToggleLock={async () => {
+                    if (!activeTeam) return
+                    const newLocked = !activeTeam.config.locked
+                    await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
+                  }}
+                  onUpdateSignupRules={handleUpdateSignupRules}
+                  onViewLogs={() => setShowLogs(true)}
+                  onArchive={handleArchiveTeam}
+                  onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
+                />
+              )}
+              <div className="mb-3 pixel-card p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <PixelHeart size={16} className="shrink-0" />
+                    <h2 className="min-w-0 break-all text-sm font-bold text-foreground">{activeTeam.name}</h2>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                    {activeTeam.config.onlyTnSignup || activeTeam.config.uniqueQqSignup ? (
+                      <>
+                        {activeTeam.config.onlyTnSignup && (
+                          <span className="pixel-badge bg-emerald-100 text-emerald-700">仅TN</span>
+                        )}
+                        {activeTeam.config.uniqueQqSignup && (
+                          <span className="pixel-badge bg-sky-100 text-sky-700">每人一次</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="pixel-badge bg-secondary text-muted-foreground">限制：无</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <SlotGrid
+                slots={activeTeam.slots}
+                config={activeTeam.config}
+                currentQQ={qq}
+                userProfiles={userProfiles}
+                isAdmin={isAdmin}
+                locks={locks.filter(l => l.teamId === activeTeam.id)}
+                teamLocked={teamLocks.some(t => t.teamId === activeTeam.id)}
+                onSignup={handleSignupSlot}
+                onEdit={handleEditSlot}
+                onSetRole={handleSetRoleSlotClick}
+                onView={handleViewSlot}
+              />
+              {mutationError && (
+                <div className="mt-3 pixel-notification bg-red-50 px-3 py-2 text-xs text-red-600">
+                  ⚠️ {mutationError}
+                </div>
+              )}
+              {activeTeam.note && (
+                <div className="mt-4 pixel-card p-3 border-l-4 border-l-amber-400">
+                  <div className="flex items-center gap-2 mb-1">
+                    <PixelCarrot size={16} />
+                    <p className="text-xs font-bold text-amber-600 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
+                  </div>
+                  <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {sharedDialogs}
       {loadingOverlay}
     </>
   )
