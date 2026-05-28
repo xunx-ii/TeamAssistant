@@ -1822,7 +1822,113 @@ private:
         json["cancellationsTruncated"] = false;
         json["isAdmin"] = isAdmin;
         json["accessGate"] = accessGateJson(gate, false, isAdmin, false);
+        {
+            std::lock_guard lock(mutex_);
+            ensureSchema();
+
+            sqlite3_stmt *stmt = nullptr;
+            prepare(
+                "SELECT id, name, week_start, subsidy_types_json, member_subsidies_json "
+                "FROM teams ORDER BY sort_order, id",
+                &stmt);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                Value team = protectedSubsidyTeamFromRow(stmt);
+                if (!team.isNull()) {
+                    json["teams"].append(team);
+                }
+            }
+            sqlite3_finalize(stmt);
+
+            prepare("SELECT id, team_json, archived_at FROM archives ORDER BY archived_at DESC", &stmt);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                Value sourceTeam = parseJson(textColumn(stmt, 1), Value(Json::objectValue));
+                Value team = protectedSubsidyTeamFromJson(sourceTeam);
+                if (team.isNull()) {
+                    continue;
+                }
+                Value archive;
+                archive["id"] = textColumn(stmt, 0);
+                archive["team"] = team;
+                archive["archivedAt"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 2));
+                archive["archivedBy"] = "";
+                json["archivedTeams"].append(archive);
+            }
+            sqlite3_finalize(stmt);
+
+            json["userProfiles"] = readUserProfilesUnlocked();
+            json["subsidyPresets"] = readSubsidyPresetsUnlocked();
+        }
         return json;
+    }
+
+    static Value protectedSubsidyTeamJson(
+        const std::string &id,
+        const std::string &name,
+        const std::string &weekStart,
+        const Value &subsidyTypes,
+        const Value &memberSubsidies
+    ) {
+        if (!subsidyTypes.isArray() || subsidyTypes.size() == 0) {
+            return Value(Json::nullValue);
+        }
+        Value config;
+        config["reservedSlots"] = Value(Json::arrayValue);
+        config["locked"] = false;
+        config["onlyTnSignup"] = false;
+        config["uniqueQqSignup"] = false;
+
+        Value team;
+        team["id"] = id;
+        team["name"] = name;
+        team["note"] = "";
+        if (!weekStart.empty()) {
+            team["weekStart"] = weekStart;
+        }
+        team["config"] = config;
+        team["slots"] = Value(Json::arrayValue);
+        team["subsidyTypes"] = subsidyTypes;
+        team["memberSubsidies"] = memberSubsidies.isObject() ? memberSubsidies : Value(Json::objectValue);
+        return team;
+    }
+
+    Value protectedSubsidyTeamFromRow(sqlite3_stmt *stmt) {
+        const Value subsidyTypes = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+            ? Value(Json::arrayValue)
+            : parseJson(textColumn(stmt, 3), Value(Json::arrayValue));
+        const Value memberSubsidies = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+            ? Value(Json::objectValue)
+            : parseJson(textColumn(stmt, 4), Value(Json::objectValue));
+        return protectedSubsidyTeamJson(
+            textColumn(stmt, 0),
+            textColumn(stmt, 1),
+            sqlite3_column_type(stmt, 2) == SQLITE_NULL ? "" : textColumn(stmt, 2),
+            subsidyTypes,
+            memberSubsidies);
+    }
+
+    static Value protectedSubsidyTeamFromJson(const Value &team) {
+        if (!team.isObject()) {
+            return Value(Json::nullValue);
+        }
+        return protectedSubsidyTeamJson(
+            team["id"].isString() ? team["id"].asString() : "",
+            team["name"].isString() ? team["name"].asString() : "归档团队",
+            team["weekStart"].isString() ? team["weekStart"].asString() : "",
+            team["subsidyTypes"].isArray() ? team["subsidyTypes"] : Value(Json::arrayValue),
+            team["memberSubsidies"].isObject() ? team["memberSubsidies"] : Value(Json::objectValue));
+    }
+
+    Value readUserProfilesUnlocked() {
+        Value profiles(Json::objectValue);
+        sqlite3_stmt *stmt = nullptr;
+        prepare("SELECT qq, nickname FROM user_profiles ORDER BY qq", &stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Value profile;
+            profile["nickname"] = textColumn(stmt, 1);
+            profiles[textColumn(stmt, 0)] = profile;
+        }
+        sqlite3_finalize(stmt);
+        return profiles;
     }
 
     static std::string slotLockKey(const std::string &teamId, int slotIndex) {
@@ -4329,7 +4435,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidies/{2}",
-        [db, respondMutation, requireSelfOrAdmin, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -4337,7 +4443,6 @@ int main() {
                 return;
             }
             if (!requireSelfOrAdmin(qq, *json, callback)) return;
-            if (!requireBoardAccess(request, *json, callback)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::optional<std::string>(teamId),
@@ -4353,7 +4458,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/archives/{1}/subsidies/{2}",
-        [db, respondMutation, requireSelfOrAdmin, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &archiveId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -4361,7 +4466,6 @@ int main() {
                 return;
             }
             if (!requireSelfOrAdmin(qq, *json, callback)) return;
-            if (!requireBoardAccess(request, *json, callback)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::nullopt,

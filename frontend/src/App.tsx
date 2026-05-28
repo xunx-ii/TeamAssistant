@@ -148,7 +148,7 @@ function App() {
   const currentWeekStart = getCurrentWeekStartKey()
   const currentNickname = qq ? (userProfiles[qq]?.nickname ?? '') : ''
   const hasBoardAccess = !serverMode || accessGate?.authorized !== false
-  const requiresNickname = Boolean(qq) && !currentNickname && hasBoardAccess
+  const requiresNickname = Boolean(qq) && !currentNickname
   const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
   const subsidyRegistrationTargets = useMemo(
     () => getSubsidyRegistrationTargets(subsidyTargets, currentWeekStart),
@@ -192,7 +192,8 @@ function App() {
     // 只有 bootstrap / 全量替换的 ServerData 才会带 truncated 字段，
     // 增量 patch 的路径不会进到这里。这里直接覆盖即可。
     setLogsTruncated(Boolean(data.logsTruncated))
-    if (snapshot.teams.length === 0 && data.accessGate?.authorized !== false) return false
+    const isProtectedSnapshot = data.accessGate?.authorized === false
+    if (snapshot.teams.length === 0 && !isProtectedSnapshot) return false
     const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
     const canApplyLocks = incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
     const previousLockVersion = lockVersionRef.current
