@@ -69,8 +69,10 @@ export function BackupSettingsDialog({ open, actorQq, onRestored, onClose }: Pro
     if (!open) {
       // Reset transient state whenever the dialog is closed so that a stuck
       // confirm Promise / lingering busy flag cannot persist into the next open.
-      setBusy(false)
-      resolveConfirm(false)
+      queueMicrotask(() => {
+        setBusy(false)
+        resolveConfirm(false)
+      })
       return
     }
     let active = true

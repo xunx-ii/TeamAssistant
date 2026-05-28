@@ -2,9 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  formatShanghaiDateTimeLocalInput,
   formatShanghaiDateTimeMinute,
   formatShanghaiMonthDayTimeMinute,
   formatShanghaiMonthDayTimeSecond,
+  parseShanghaiDateTimeLocalInput,
 } from '../src/time.ts'
 import {
   formatWeekRange,
@@ -34,4 +36,7 @@ test('Shanghai time formatters render fixed application timezone', () => {
   assert.equal(formatShanghaiDateTimeMinute('2026-01-01T03:00:00.000Z'), '2026/01/01 11:00')
   assert.equal(formatShanghaiMonthDayTimeMinute('2026-01-01T03:00:00.000Z'), '01/01 11:00')
   assert.equal(formatShanghaiMonthDayTimeSecond(1777770000000), '05/03 09:00:00')
+  assert.equal(formatShanghaiDateTimeLocalInput('2026-01-01T03:00:00.000Z'), '2026-01-01T11:00')
+  assert.equal(parseShanghaiDateTimeLocalInput('2026-01-01T11:00'), Date.parse('2026-01-01T03:00:00.000Z'))
+  assert.equal(parseShanghaiDateTimeLocalInput('2026-02-31T11:00'), null)
 })

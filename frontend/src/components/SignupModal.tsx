@@ -63,7 +63,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
   const slotIndex = slotInfo?.index ?? null
   const shouldLock = requireLock && !readOnly
   const currentLockRemainingMs = lockExpiresAt > 0
-    ? Math.max(0, lockRemainingMs || lockExpiresAt - Date.now())
+    ? Math.max(0, lockRemainingMs)
     : 0
   const lockRemainingSeconds = Math.ceil(currentLockRemainingMs / 1000)
   const lockProgress = Math.max(0, Math.min(100, (currentLockRemainingMs / SLOT_LOCK_TIMEOUT_MS) * 100))
@@ -173,7 +173,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
 
   useEffect(() => {
     if (!open || !shouldLock || lockExpiresAt <= 0) {
-      setLockRemainingMs(0)
+      queueMicrotask(() => setLockRemainingMs(0))
       return
     }
     const updateRemaining = () => {

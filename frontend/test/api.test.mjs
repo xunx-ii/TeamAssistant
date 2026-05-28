@@ -230,6 +230,59 @@ test('fetchServerChanges requests only version deltas and parses changed payload
   assert.equal(calls[0].input, '/api/v2/sync?dataVersion=3&lockVersion=7')
 })
 
+test('invite token is sent with sync and mutation requests', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      dataVersion: 4,
+      lockVersion: 8,
+      dataChanged: false,
+      lockChanged: false,
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-invite-token`)
+    mod.setInviteToken('early-token')
+
+    await mod.fetchServerChanges(3, 7, '10001')
+    await mod.mutateData({ type: 'renameTeam', teamId: 'team-1', name: '一团' }, '10001')
+  })
+
+  assert.equal(calls[0].input, '/api/v2/sync?dataVersion=3&lockVersion=7&qq=10001&inviteToken=early-token')
+  assert.equal(calls[1].input, '/api/v2/teams/team-1')
+  assert.equal(JSON.parse(calls[1].init.body).inviteToken, 'early-token')
+})
+
+test('access gate helpers parse admin gate responses', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      publicAtMs: 1777770000000,
+      isOpen: false,
+      authorized: true,
+      inviteToken: 'token-1',
+      hasInviteToken: true,
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-access-gate`)
+    const fetched = await mod.fetchAccessGate('10001')
+    assert.equal(fetched.ok, true)
+    assert.equal(fetched.inviteToken, 'token-1')
+    assert.equal(fetched.publicAtMs, 1777770000000)
+
+    await mod.saveAccessGate(1777770000000, '10001')
+    await mod.regenerateAccessGateToken('10001')
+  })
+
+  assert.equal(calls[0].input, '/api/v2/access-gate?actorQq=10001')
+  assert.equal(calls[1].input, '/api/v2/access-gate')
+  assert.equal(JSON.parse(calls[1].init.body).publicAtMs, 1777770000000)
+  assert.equal(calls[2].input, '/api/v2/access-gate/token')
+})
+
 test('subscribeServerEvents parses server sent version events', async () => {
   const originalEventSource = globalThis.EventSource
   const instances = []

@@ -10,6 +10,17 @@ const NON_JSON_RESPONSE_ERROR = '接口返回了非 JSON 响应，请确认后�
 const INVALID_JSON_ERROR = '接口返回的数据无法解析'
 const BACKUP_DOWNLOAD_ERROR = '下载备份失败'
 
+export interface AccessGateState {
+  publicAtMs: number
+  isOpen: boolean
+  authorized: boolean
+  requiresInvite?: boolean
+  hasInviteToken?: boolean
+  inviteToken?: string
+  updatedAtMs?: number
+  updatedBy?: string
+}
+
 export interface ServerData {
   teams: Team[]
   cancellations: Cancellation[]
@@ -28,6 +39,7 @@ export interface ServerData {
   logsTruncated?: boolean
   cancellationsTotal?: number
   cancellationsTruncated?: boolean
+  accessGate?: AccessGateState
 }
 
 export interface HistoryPageResult<T> {
@@ -69,6 +81,7 @@ export interface ServerChanges {
   dataVersion: number
   lockVersion: number
   isAdmin?: boolean
+  accessGate?: AccessGateState
   dataChanged: boolean
   lockChanged: boolean
   data?: ServerData
@@ -108,10 +121,19 @@ export interface MutationResult {
   lockVersion?: number
   patch?: unknown
   reason?: string
+  accessGate?: AccessGateState
   lockedAt?: number
   currentMemberQq?: string | null
   error?: string
 }
+
+export type AccessGateResult = AccessGateState & {
+  ok: boolean
+  reason?: string
+  error?: string
+}
+
+export type AccessGateRequestResult = AccessGateResult | RequestFailure
 
 export interface BackupEntry {
   name: string
@@ -145,6 +167,54 @@ export type BackupDownloadResult =
 
 type BodyParseError = typeof HTML_RESPONSE_ERROR | typeof NON_JSON_RESPONSE_ERROR | typeof INVALID_JSON_ERROR
 
+let inviteToken = ''
+
+function readInviteTokenFromUrl() {
+  if (typeof window === 'undefined') return ''
+  try {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('invite') || params.get('inviteToken') || ''
+  } catch {
+    return ''
+  }
+}
+
+export function initializeInviteTokenFromUrl() {
+  inviteToken = readInviteTokenFromUrl()
+  return inviteToken
+}
+
+export function getInviteToken() {
+  return inviteToken
+}
+
+export function setInviteToken(token: string | null | undefined) {
+  inviteToken = token ?? ''
+}
+
+export function clearInviteTokenFromUrl() {
+  inviteToken = ''
+  if (typeof window === 'undefined') return
+  try {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('invite') && !url.searchParams.has('inviteToken')) return
+    url.searchParams.delete('invite')
+    url.searchParams.delete('inviteToken')
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+  } catch {
+    // Ignore URL cleanup failures.
+  }
+}
+
+function appendInviteToken(params: URLSearchParams) {
+  if (inviteToken) params.set('inviteToken', inviteToken)
+}
+
+function withInviteBody(body: unknown) {
+  if (!inviteToken || !body || typeof body !== 'object' || Array.isArray(body)) return body
+  return { ...(body as Record<string, unknown>), inviteToken }
+}
+
 function isServerData(value: unknown): value is ServerData {
   return Boolean(
     value &&
@@ -161,6 +231,21 @@ function isResultPayload(value: unknown): value is { ok: boolean } {
     'ok' in value &&
     typeof (value as { ok?: unknown }).ok === 'boolean',
   )
+}
+
+function parseAccessGate(value: unknown): AccessGateState | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const source = value as Partial<AccessGateState>
+  return {
+    publicAtMs: typeof source.publicAtMs === 'number' && Number.isFinite(source.publicAtMs) ? source.publicAtMs : 0,
+    isOpen: Boolean(source.isOpen),
+    authorized: source.authorized !== false,
+    requiresInvite: typeof source.requiresInvite === 'boolean' ? source.requiresInvite : undefined,
+    hasInviteToken: typeof source.hasInviteToken === 'boolean' ? source.hasInviteToken : undefined,
+    inviteToken: typeof source.inviteToken === 'string' ? source.inviteToken : undefined,
+    updatedAtMs: typeof source.updatedAtMs === 'number' && Number.isFinite(source.updatedAtMs) ? source.updatedAtMs : undefined,
+    updatedBy: typeof source.updatedBy === 'string' ? source.updatedBy : undefined,
+  }
 }
 
 async function readJsonBody<T>(resp: Response): Promise<{ ok: true, data: T } | { ok: false, error: string }> {
@@ -316,7 +401,7 @@ function jsonRequest(method: string, body?: unknown): RequestInit {
   return {
     method,
     headers: { 'Content-Type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(body === undefined ? {} : { body: JSON.stringify(withInviteBody(body)) }),
   }
 }
 
@@ -474,9 +559,10 @@ export async function checkServer(): Promise<boolean> {
 export async function fetchData(qq?: string | null): Promise<ServerData | null> {
   const params = new URLSearchParams()
   if (qq) params.set('qq', qq)
+  appendInviteToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   const data = await requestData<unknown>(`${API}/bootstrap${suffix}`, noCache)
-  return isServerData(data) ? data : null
+  return isServerData(data) ? { ...data, accessGate: parseAccessGate((data as { accessGate?: unknown }).accessGate) } : null
 }
 
 export async function fetchServerVersion(): Promise<ServerVersion | null> {
@@ -501,6 +587,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
   if (typeof dataVersion === 'number') params.set('dataVersion', String(dataVersion))
   if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
   if (qq) params.set('qq', qq)
+  appendInviteToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   const data = await requestData<unknown>(`${API}/sync${suffix}`, noCache)
   if (
@@ -519,9 +606,10 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
       dataVersion: nextDataVersion,
       lockVersion: nextLockVersion,
       isAdmin: typeof (payload as { isAdmin?: unknown }).isAdmin === 'boolean' ? (payload as { isAdmin: boolean }).isAdmin : undefined,
+      accessGate: parseAccessGate((payload as { accessGate?: unknown }).accessGate),
       dataChanged: Boolean(payload.dataChanged),
       lockChanged: Boolean(payload.lockChanged),
-      data: isServerData(payload.data) ? payload.data : undefined,
+      data: isServerData(payload.data) ? { ...payload.data, accessGate: parseAccessGate((payload.data as { accessGate?: unknown }).accessGate) } : undefined,
       patches: Array.isArray((payload as { patches?: unknown }).patches) ? (payload as { patches: unknown[] }).patches : undefined,
       locks: locks && typeof locks === 'object'
         ? {
@@ -533,6 +621,37 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
     }
   }
   return null
+}
+
+function normalizeAccessGateResult(result: AccessGateResult | RequestFailure): AccessGateRequestResult {
+  if (!result.ok) return result
+  const gate = parseAccessGate(result) ?? {
+    publicAtMs: 0,
+    isOpen: true,
+    authorized: true,
+  }
+  return { ...result, ...gate }
+}
+
+export async function fetchAccessGate(actorQq?: string | null): Promise<AccessGateRequestResult> {
+  const params = new URLSearchParams()
+  if (actorQq) params.set('actorQq', actorQq)
+  const suffix = params.toString() ? `?${params}` : ''
+  return normalizeAccessGateResult(await requestResult<AccessGateResult>(`${API}/access-gate${suffix}`, noCache))
+}
+
+export async function saveAccessGate(publicAtMs: number, actorQq?: string | null): Promise<AccessGateRequestResult> {
+  return normalizeAccessGateResult(await requestResult<AccessGateResult>(
+    `${API}/access-gate`,
+    jsonRequest('PUT', { publicAtMs, actorQq }),
+  ))
+}
+
+export async function regenerateAccessGateToken(actorQq?: string | null): Promise<AccessGateRequestResult> {
+  return normalizeAccessGateResult(await requestResult<AccessGateResult>(
+    `${API}/access-gate/token`,
+    jsonRequest('POST', { actorQq }),
+  ))
 }
 
 export function subscribeServerEvents(onEvent: (event: ServerEvent) => void): (() => void) | null {
@@ -601,7 +720,10 @@ export async function fetchLockState(): Promise<LockState> {
 }
 
 export async function fetchLockStateOrNull(): Promise<LockState | null> {
-  const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[], lockVersion?: number }>(`${API}/locks`, noCache)
+  const params = new URLSearchParams()
+  appendInviteToken(params)
+  const suffix = params.toString() ? `?${params}` : ''
+  const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[], lockVersion?: number }>(`${API}/locks${suffix}`, noCache)
   if (!data) return null
   return {
     slots: Array.isArray(data?.slots) ? data.slots : [],
@@ -685,6 +807,7 @@ export async function importBackupFile(file: File, actorQq?: string | null): Pro
 interface HistoryQueryParams {
   before?: number | null
   limit?: number | null
+  actorQq?: string | null
 }
 
 function buildHistoryQuery(extra: Record<string, string | null | undefined>, params: HistoryQueryParams) {
@@ -698,6 +821,8 @@ function buildHistoryQuery(extra: Record<string, string | null | undefined>, par
   if (params.limit != null && Number.isFinite(params.limit)) {
     search.set('limit', String(Math.trunc(params.limit)))
   }
+  if (params.actorQq) search.set('actorQq', params.actorQq)
+  appendInviteToken(search)
   const query = search.toString()
   return query ? `?${query}` : ''
 }

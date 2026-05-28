@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { fetchLogsPage, fetchServerChanges, fetchServerVersion, mutateData, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, mutateData, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatch, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -37,10 +37,12 @@ import { CreateTeamDialog } from './components/CreateTeamDialog'
 import { ArchiveDialog } from './components/ArchiveDialog'
 import { OperationLogDialog } from './components/OperationLogDialog'
 import { NicknameDialog } from './components/NicknameDialog'
+import { AccessGateDialog } from './components/AccessGateDialog'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { useImeSafeInputHandlers } from './components/ui/imeInput'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
+import { formatShanghaiDateTimeMinute } from './time'
 
 function findPendingNotice(qq: string | null, cancellations: Cancellation[]) {
   if (!qq) return null
@@ -69,6 +71,8 @@ const LOADING_MESSAGES = [
   '快开门！你们在里面干嘛！！！',
 ]
 
+initializeInviteTokenFromUrl()
+
 function mutationResultErrorMessage(result: MutationResult) {
   if (result.reason === 'teamLocked') return '表格已被管理员锁定'
   if (result.reason === 'expired') return '该位置已被其他人抢占，请刷新后重试'
@@ -76,6 +80,7 @@ function mutationResultErrorMessage(result: MutationResult) {
   if (result.reason === 'onlyTnSignup') return '当前团队仅限T/奶报名'
   if (result.reason === 'uniqueQqSignup') return '该QQ已在当前团队报名'
   if (result.reason === 'selfSignupOnly') return '该团队每人仅能报名一次，不能代报名'
+  if (result.reason === 'notOpen') return '报名暂未开放'
   return result.error || '保存失败，请稍后再试'
 }
 
@@ -115,9 +120,11 @@ function App() {
   const [showSubsidyStats, setShowSubsidyStats] = useState(false)
   const [showSubsidyPreset, setShowSubsidyPreset] = useState(false)
   const [showBackupSettings, setShowBackupSettings] = useState(false)
+  const [showAccessGate, setShowAccessGate] = useState(false)
   const [showNicknameDialog, setShowNicknameDialog] = useState(false)
   const [nicknameError, setNicknameError] = useState('')
   const [serverMode, setServerMode] = useState(false)
+  const [accessGate, setAccessGate] = useState<AccessGateState | null>(null)
   const [initializing, setInitializing] = useState(true)
   const [showLoadingTransition, setShowLoadingTransition] = useState(true)
   const [loadingMessage] = useState(pickLoadingMessage)
@@ -140,7 +147,8 @@ function App() {
   const notice = findPendingNotice(qq, cancellations)
   const currentWeekStart = getCurrentWeekStartKey()
   const currentNickname = qq ? (userProfiles[qq]?.nickname ?? '') : ''
-  const requiresNickname = Boolean(qq) && !currentNickname
+  const hasBoardAccess = !serverMode || accessGate?.authorized !== false
+  const requiresNickname = Boolean(qq) && !currentNickname && hasBoardAccess
   const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
   const subsidyRegistrationTargets = useMemo(
     () => getSubsidyRegistrationTargets(subsidyTargets, currentWeekStart),
@@ -172,6 +180,9 @@ function App() {
 
   const syncServerData = useCallback((data: ServerData) => {
     const snapshot = normalizeServerData(data)
+    if (data.accessGate) {
+      setAccessGate(data.accessGate)
+    }
     if (Array.isArray(data.subsidyPresets)) {
       syncSubsidyPresets(data.subsidyPresets)
     }
@@ -181,7 +192,7 @@ function App() {
     // 只有 bootstrap / 全量替换的 ServerData 才会带 truncated 字段，
     // 增量 patch 的路径不会进到这里。这里直接覆盖即可。
     setLogsTruncated(Boolean(data.logsTruncated))
-    if (snapshot.teams.length === 0) return false
+    if (snapshot.teams.length === 0 && data.accessGate?.authorized !== false) return false
     const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
     const canApplyLocks = incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
     const previousLockVersion = lockVersionRef.current
@@ -283,6 +294,9 @@ function App() {
         if (!changes) return false
         if (typeof changes.isAdmin === 'boolean') {
           setIsAdmin(changes.isAdmin)
+        }
+        if (changes.accessGate) {
+          setAccessGate(changes.accessGate)
         }
 
         let synced = true
@@ -396,6 +410,27 @@ function App() {
     }
   }, [serverMode, syncServerChanges])
 
+  useEffect(() => {
+    if (!serverMode || !accessGate) return
+    if (accessGate.isOpen) {
+      clearInviteTokenFromUrl()
+      return
+    }
+    if (accessGate.publicAtMs <= 0) return
+    const refresh = () => {
+      dataVersionRef.current = null
+      clearInviteTokenFromUrl()
+      void syncServerChanges()
+    }
+    const delay = accessGate.publicAtMs - Date.now()
+    if (delay <= 0) {
+      refresh()
+      return
+    }
+    const timer = window.setTimeout(refresh, Math.min(delay + 250, 2_147_483_647))
+    return () => window.clearTimeout(timer)
+  }, [accessGate, serverMode, syncServerChanges])
+
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
     setAlertOptions(null)
@@ -450,6 +485,9 @@ function App() {
     }
 
     if (!result.ok) {
+      if (result.accessGate) {
+        setAccessGate(result.accessGate)
+      }
       if (result.reason === 'teamLocked') {
         setMutationError('表格已被管理员锁定')
       } else if (result.reason === 'expired') {
@@ -467,6 +505,8 @@ function App() {
         setMutationError('该QQ已在当前团队报名')
       } else if (result.reason === 'selfSignupOnly') {
         setMutationError('该团队每人仅能报名一次，不能代报名')
+      } else if (result.reason === 'notOpen') {
+        setMutationError('报名暂未开放')
       } else if (result.error) {
         setMutationError(result.error)
       } else {
@@ -475,7 +515,7 @@ function App() {
     }
 
     return result
-  }, [applyLocalMutation, applyReleasedSlotLock, qq, serverMode, syncServerChanges, syncServerData])
+  }, [applyLocalMutation, applyReleasedSlotLock, applyServerPatches, qq, serverMode, syncServerChanges, syncServerData])
 
   const switchTeam = (id: string) => { setActiveTeamId(id); clearModals(); setMutationError('') }
   const handleBackupRestored = (data: ServerData) => {
@@ -889,6 +929,34 @@ function App() {
     )
   }
 
+  if (!hasBoardAccess) {
+    const publicTime = accessGate?.publicAtMs ? formatShanghaiDateTimeMinute(accessGate.publicAtMs) : ''
+    return (
+      <>
+        <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
+          <div className="max-w-[960px] mx-auto px-4 py-5">
+            <div className="pixel-card p-3">
+              <div className="flex items-center justify-between gap-3">
+                <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
+                <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={handleLogout}>登出</Button>
+              </div>
+            </div>
+            <div className="mt-4 pixel-card p-5">
+              <div className="flex items-center gap-2">
+                <PixelHeart size={16} className="shrink-0" />
+                <h2 className="text-sm font-bold text-foreground">报名未开放</h2>
+              </div>
+              {publicTime && (
+                <p className="mt-3 text-sm text-muted-foreground">公开时间：{publicTime}</p>
+              )}
+            </div>
+          </div>
+        </div>
+        {loadingOverlay}
+      </>
+    )
+  }
+
   return (
     <>
       {notice && (
@@ -923,6 +991,11 @@ function App() {
                 {isAdmin && (
                   <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowBackupSettings(true)} disabled={!serverMode}>
                     备份设置
+                  </Button>
+                )}
+                {isAdmin && (
+                  <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowAccessGate(true)} disabled={!serverMode}>
+                    提前报名
                   </Button>
                 )}
                 {isAdmin && (
@@ -1154,6 +1227,7 @@ function App() {
         onLoadMore={serverMode ? (cursor) => fetchLogsPage({
           before: cursor,
           teamId: activeTeam?.id ?? null,
+          actorQq: qq,
         }) : undefined}
         onClose={() => setShowLogs(false)}
       />
@@ -1215,6 +1289,12 @@ function App() {
         actorQq={qq}
         onRestored={handleBackupRestored}
         onClose={() => setShowBackupSettings(false)}
+      />
+      <AccessGateDialog
+        open={showAccessGate}
+        actorQq={qq}
+        onUpdated={setAccessGate}
+        onClose={() => setShowAccessGate(false)}
       />
       <Dialog open={!!confirmOptions} onOpenChange={(value) => { if (!value) resolveConfirm(false) }}>
         <DialogContent className="max-w-sm">

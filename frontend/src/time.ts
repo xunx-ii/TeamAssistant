@@ -73,3 +73,44 @@ export function formatShanghaiMonthDayTimeSecond(value: Date | number | string) 
   if (!date) return typeof value === 'string' ? value : ''
   return formatShanghaiDateParts(date, true, false)
 }
+
+export function formatShanghaiDateTimeLocalInput(value: Date | number | string) {
+  const date = toShanghaiDate(value)
+  if (!date) return ''
+  const year = date.getUTCFullYear()
+  const month = pad(date.getUTCMonth() + 1)
+  const day = pad(date.getUTCDate())
+  const hour = pad(date.getUTCHours())
+  const minute = pad(date.getUTCMinutes())
+  return `${year}-${month}-${day}T${hour}:${minute}`
+}
+
+export function parseShanghaiDateTimeLocalInput(value: string): number | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/)
+  if (!match) return null
+  const [, yearText, monthText, dayText, hourText, minuteText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null
+  }
+  const timestamp = Date.UTC(year, month - 1, day, hour - 8, minute)
+  return formatShanghaiDateTimeLocalInput(timestamp) === value ? timestamp : null
+}

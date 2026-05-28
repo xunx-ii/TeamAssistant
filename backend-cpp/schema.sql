@@ -89,6 +89,18 @@ CREATE TABLE IF NOT EXISTS subsidy_preset_levels (
   FOREIGN KEY (preset_id) REFERENCES subsidy_presets(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS access_gate (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  public_at_ms INTEGER NOT NULL DEFAULT 0,
+  invite_token TEXT NOT NULL DEFAULT '',
+  updated_at_ms INTEGER NOT NULL DEFAULT 0,
+  updated_by TEXT NOT NULL DEFAULT ''
+);
+
+INSERT INTO access_gate (id, public_at_ms, invite_token, updated_at_ms, updated_by)
+VALUES (1, 0, '', 0, '')
+ON CONFLICT(id) DO NOTHING;
+
 CREATE INDEX IF NOT EXISTS idx_logs_team_timestamp ON operation_logs(team_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON operation_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_teams_sort_order ON teams(sort_order, id);

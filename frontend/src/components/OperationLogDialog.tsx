@@ -33,15 +33,17 @@ export function OperationLogDialog({ open, teamName, logs, hasMore, onLoadMore, 
   // 关闭弹窗时清掉「更早日志」这部分缓存，避免下次打开看到旧数据
   // 同时根据父组件最新的 hasMore 重新初始化按钮可见性
   useEffect(() => {
-    if (open) {
-      setServerHasMore(Boolean(hasMore))
-      setError(null)
-    } else {
-      setOlderLogs([])
-      setServerHasMore(false)
-      setLoading(false)
-      setError(null)
-    }
+    queueMicrotask(() => {
+      if (open) {
+        setServerHasMore(Boolean(hasMore))
+        setError(null)
+      } else {
+        setOlderLogs([])
+        setServerHasMore(false)
+        setLoading(false)
+        setError(null)
+      }
+    })
   }, [open, hasMore])
 
   const sortedLogs = useMemo(() => {
