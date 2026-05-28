@@ -542,8 +542,32 @@ function App() {
     })
   }, [])
 
-  const handleLogin = (userQq: string) => { setStoredQQ(userQq); setQq(userQq) }
-  const handleLogout = () => { removeStoredQQ(); setQq(null); setShowNicknameDialog(false); setNicknameError(''); setMutationError(''); clearModals() }
+  const resetServerCursor = () => {
+    dataVersionRef.current = null
+    lockVersionRef.current = null
+    pendingServerEventRef.current = null
+  }
+
+  const handleLogin = (userQq: string) => {
+    resetServerCursor()
+    setStoredQQ(userQq)
+    setIsAdmin(false)
+    setAccessGate(null)
+    setInitializing(true)
+    setShowLoadingTransition(true)
+    setQq(userQq)
+  }
+  const handleLogout = () => {
+    resetServerCursor()
+    removeStoredQQ()
+    setQq(null)
+    setIsAdmin(false)
+    setAccessGate(null)
+    setShowNicknameDialog(false)
+    setNicknameError('')
+    setMutationError('')
+    clearModals()
+  }
 
   const handleSaveNickname = async (nickname: string) => {
     if (!qq) return
