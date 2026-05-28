@@ -220,8 +220,14 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
                         <span className="sm:hidden">{m.characterId}</span>
                         <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>
                       </div>
-                      <div className="w-full truncate text-[9px] leading-3 text-muted-foreground sm:text-[10px] sm:leading-4">
-                        报名人：{signupName}
+                      <div
+                        className="w-full px-0.5 text-[9px] leading-[1.15] text-muted-foreground sm:px-0 sm:text-[10px] sm:leading-4"
+                        title={`报名人：${signupName}`}
+                      >
+                        <span className="slot-signup-name-mobile block font-medium text-foreground/75 sm:hidden">
+                          {signupName}
+                        </span>
+                        <span className="hidden truncate sm:block">报名人：{signupName}</span>
                       </div>
                     </>
                   )}

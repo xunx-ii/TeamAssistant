@@ -557,6 +557,19 @@ body {
   border-color: var(--primary);
 }
 
+.slot-signup-name-mobile {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 639px) {
+  .slot-signup-name-mobile {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+}
+
 .pixel-slot-legend {
   display: inline-block;
   width: 12px;
