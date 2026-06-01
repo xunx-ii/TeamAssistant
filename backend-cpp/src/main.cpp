@@ -596,6 +596,8 @@ public:
             const std::string logId = insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
             bumpDataVersionUnlocked();
             result = mutationOkUnlocked("signupSlot", teamId, slotIndex, normalizedMember);
+            if (slot.fixedRole.has_value()) result["patch"]["slot"]["fixedRole"] = *slot.fixedRole;
+            if (slot.fixedMartialArtIndex.has_value()) result["patch"]["slot"]["fixedMartialArtIndex"] = *slot.fixedMartialArtIndex;
             Value logPatch;
             logPatch["id"] = logId;
             logPatch["teamId"] = teamId;
@@ -605,10 +607,10 @@ public:
             logPatch["action"] = action;
             result["patch"]["log"] = logPatch;
             rememberDataPatchUnlocked(result["patch"]);
-            exec("COMMIT;");
+            exec("COMMIT");
             shouldReleaseLock = true;
         } catch (...) {
-            exec("ROLLBACK;");
+            exec("ROLLBACK");
             throw;
         }
         if (shouldReleaseLock) {
@@ -667,6 +669,8 @@ public:
             const std::string logId = insertLogUnlocked(teamId, slot.teamName, now, actorQq, action);
             bumpDataVersionUnlocked();
             result = mutationOkUnlocked("leaveSlot", teamId, slotIndex, resetStatus, Value(Json::nullValue));
+            if (slot.fixedRole.has_value()) result["patch"]["slot"]["fixedRole"] = *slot.fixedRole;
+            if (slot.fixedMartialArtIndex.has_value()) result["patch"]["slot"]["fixedMartialArtIndex"] = *slot.fixedMartialArtIndex;
             Value logPatch;
             logPatch["id"] = logId;
             logPatch["teamId"] = teamId;
@@ -754,6 +758,8 @@ public:
             const std::string logId = insertLogUnlocked(teamId, slot.teamName, now, cancelledBy, action);
             bumpDataVersionUnlocked();
             result = mutationOkUnlocked("cancelSlot", teamId, slotIndex, reset, Value(Json::nullValue));
+            if (slot.fixedRole.has_value()) result["patch"]["slot"]["fixedRole"] = *slot.fixedRole;
+            if (slot.fixedMartialArtIndex.has_value()) result["patch"]["slot"]["fixedMartialArtIndex"] = *slot.fixedMartialArtIndex;
             Value logPatch;
             logPatch["id"] = logId;
             logPatch["teamId"] = teamId;
