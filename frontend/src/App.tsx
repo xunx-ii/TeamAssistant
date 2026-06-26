@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, mutateData, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { clearAdminToken, clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatch, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -63,6 +63,12 @@ interface AppAlertOptions {
   closeText: string
 }
 
+interface AdminSessionState {
+  qq: string
+  token: string
+  expiresAtMs: number
+}
+
 const LOADING_MESSAGES = [
   '正在猛猛敲门...',
   '别急，团长还在找钥匙开门...',
@@ -72,6 +78,38 @@ const LOADING_MESSAGES = [
 ]
 
 initializeInviteTokenFromUrl()
+
+const ADMIN_SESSION_KEY = 'team_admin_session_v1'
+
+function readStoredAdminSession(qq: string | null): AdminSessionState | null {
+  if (!qq) return null
+  try {
+    const raw = sessionStorage.getItem(ADMIN_SESSION_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<AdminSessionState>
+    if (
+      parsed.qq === qq &&
+      typeof parsed.token === 'string' &&
+      parsed.token &&
+      typeof parsed.expiresAtMs === 'number' &&
+      parsed.expiresAtMs > Date.now()
+    ) {
+      return parsed as AdminSessionState
+    }
+  } catch {
+    // Ignore malformed session state.
+  }
+  sessionStorage.removeItem(ADMIN_SESSION_KEY)
+  return null
+}
+
+function storeAdminSession(session: AdminSessionState) {
+  sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session))
+}
+
+function clearStoredAdminSession() {
+  sessionStorage.removeItem(ADMIN_SESSION_KEY)
+}
 
 function mutationResultErrorMessage(result: MutationResult) {
   if (result.reason === 'teamLocked') return '表格已被管理员锁定'
@@ -329,6 +367,13 @@ function App() {
   useEffect(() => {
     let active = true
     const initialize = async () => {
+      const storedAdminSession = readStoredAdminSession(qq)
+      if (storedAdminSession) {
+        setAdminToken(storedAdminSession.token)
+      } else {
+        clearAdminToken()
+        setIsAdmin(false)
+      }
       const sm = await initServerMode()
       if (!active) return
       if (sm) {
@@ -337,6 +382,10 @@ function App() {
         const viewerIsAdmin = changes?.isAdmin === true
         if (typeof changes?.isAdmin === 'boolean') {
           setIsAdmin(viewerIsAdmin)
+        }
+        if (!viewerIsAdmin && storedAdminSession) {
+          clearAdminToken()
+          clearStoredAdminSession()
         }
         const loadedData = changes?.data ?? null
         if (loadedData && syncServerData(loadedData)) {
@@ -549,16 +598,33 @@ function App() {
     pendingServerEventRef.current = null
   }
 
-  const handleLogin = (userQq: string) => {
+  const handleLogin = async (userQq: string, adminPassword?: string) => {
     resetServerCursor()
+    clearAdminToken()
+    clearStoredAdminSession()
     setStoredQQ(userQq)
     setIsAdmin(false)
     setAccessGate(null)
+    const normalizedPassword = adminPassword ?? ''
+    if (normalizedPassword) {
+      const result = await loginAdmin(userQq, normalizedPassword)
+      if (!result.ok || !result.adminToken || !result.expiresAtMs) {
+        throw new Error(result.error || '管理员密码验证失败')
+      }
+      storeAdminSession({
+        qq: userQq,
+        token: result.adminToken,
+        expiresAtMs: result.expiresAtMs,
+      })
+      setIsAdmin(true)
+    }
     setInitializing(true)
     setShowLoadingTransition(true)
     setQq(userQq)
   }
   const handleLogout = () => {
+    void logoutAdmin(qq)
+    clearStoredAdminSession()
     resetServerCursor()
     removeStoredQQ()
     setQq(null)
@@ -1380,16 +1446,33 @@ function App() {
   )
 }
 
-function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
+function LoginPage({ onLogin }: { onLogin: (qq: string, adminPassword?: string) => Promise<void> }) {
   const [inputQq, setInputQq] = useState('')
+  const [adminPassword, setAdminPassword] = useState('')
+  const [loginError, setLoginError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const qqInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value: inputQq,
     onChange: e => setInputQq(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq })),
   })
-  const handleSubmit = (e: React.FormEvent) => {
+  const passwordInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
+    value: adminPassword,
+    onChange: e => setAdminPassword(e.target.value.slice(0, 128)),
+  })
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submitting) return
+    setLoginError('')
     const t = normalizeTextInput(inputQq, { maxLength: TEXT_INPUT_LIMITS.qq })
-    if (t) onLogin(t)
+    if (!t) return
+    setSubmitting(true)
+    try {
+      await onLogin(t, adminPassword.trim() ? adminPassword : undefined)
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : '登录失败')
+    } finally {
+      setSubmitting(false)
+    }
   }
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-6 pixel-bg-pattern relative overflow-hidden">
@@ -1437,7 +1520,7 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
             <input
               type="text"
               className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
-              placeholder="输入QQ号开始冒险..."
+              placeholder="输入QQ号"
               maxLength={TEXT_INPUT_LIMITS.qq}
               {...qqInputHandlers}
               onDrop={event => {
@@ -1449,9 +1532,27 @@ function LoginPage({ onLogin }: { onLogin: (qq: string) => void }) {
               autoFocus
             />
           </div>
-          <Button type="submit" className="pixel-btn w-full h-11 bg-primary text-primary-foreground font-bold tracking-wider hover:bg-primary/90">
+          <div className="relative">
+            <input
+              type="password"
+              className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
+              placeholder="管理员密码"
+              autoComplete="current-password"
+              {...passwordInputHandlers}
+              onDrop={event => {
+                if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()
+              }}
+              onPaste={event => {
+                if (hasNonTextTransfer(event.clipboardData)) event.preventDefault()
+              }}
+            />
+          </div>
+          {loginError && (
+            <p className="text-center text-xs text-destructive">{loginError}</p>
+          )}
+          <Button type="submit" className="pixel-btn w-full h-11 bg-primary text-primary-foreground font-bold tracking-wider hover:bg-primary/90" disabled={submitting}>
             <PixelHeart size={16} className="mr-2" />
-            开始冒险
+            {submitting ? '登录中' : '开始冒险'}
             <PixelHeart size={16} className="ml-2" />
           </Button>
         </form>

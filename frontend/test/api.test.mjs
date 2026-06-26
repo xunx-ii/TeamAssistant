@@ -254,6 +254,62 @@ test('invite token is sent with sync and mutation requests', async () => {
   assert.equal(JSON.parse(calls[1].init.body).inviteToken, 'early-token')
 })
 
+test('admin token is sent with admin sync and mutation requests', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      dataVersion: 4,
+      lockVersion: 8,
+      dataChanged: false,
+      lockChanged: false,
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-admin-token`)
+    mod.setAdminToken('admin-session-token')
+
+    await mod.fetchServerChanges(3, 7, '10001')
+    await mod.mutateData({ type: 'deleteTeam', teamId: 'team-1' }, '10001')
+  })
+
+  assert.equal(calls[0].input, '/api/v2/sync?dataVersion=3&lockVersion=7&qq=10001&adminToken=admin-session-token')
+  assert.equal(JSON.parse(calls[1].init.body).adminToken, 'admin-session-token')
+})
+
+test('admin login stores returned token for later requests', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    if (String(input).endsWith('/admin/login')) {
+      return createJsonResponse({
+        ok: true,
+        isAdmin: true,
+        adminToken: 'stored-admin-token',
+        expiresAtMs: 1777770000000,
+      })
+    }
+    return createJsonResponse({
+      ok: true,
+      dataVersion: 1,
+      lockVersion: 1,
+      dataChanged: false,
+      lockChanged: false,
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-admin-login`)
+    const login = await mod.loginAdmin('10001', 'secret')
+    assert.equal(login.ok, true)
+    assert.equal(mod.getAdminToken(), 'stored-admin-token')
+
+    await mod.fetchServerChanges(1, 1, '10001')
+  })
+
+  assert.equal(calls[0].input, '/api/v2/admin/login')
+  assert.deepEqual(JSON.parse(calls[0].init.body), { actorQq: '10001', password: 'secret' })
+  assert.equal(calls[1].input, '/api/v2/sync?dataVersion=1&lockVersion=1&qq=10001&adminToken=stored-admin-token')
+})
+
 test('access gate helpers parse admin gate responses', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {

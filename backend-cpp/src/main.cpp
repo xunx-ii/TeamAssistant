@@ -1,7 +1,9 @@
 #include <drogon/drogon.h>
 #include <sqlite3.h>
+#include <trantor/utils/Utilities.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -86,6 +88,16 @@ struct AccessGateConfig {
     std::string inviteToken;
     long long updatedAtMs = 0;
     std::string updatedBy;
+};
+
+struct AdminSession {
+    std::string qq;
+    long long expiresAtMs = 0;
+};
+
+struct CreatedAdminSession {
+    std::string token;
+    long long expiresAtMs = 0;
 };
 
 class VersionEventHub {
@@ -223,8 +235,57 @@ public:
         return !qq.empty() && adminQqs_.contains(qq);
     }
 
+    bool hasPassword() const {
+        return !passwordHash_.empty();
+    }
+
+    bool verifyPassword(const std::string &password) const {
+        if (passwordHash_.empty() || password.empty()) {
+            return false;
+        }
+        return constantTimeEquals(sha256Hex(passwordSalt_ + password), passwordHash_);
+    }
+
 private:
     std::unordered_set<std::string> adminQqs_;
+    std::string passwordSalt_;
+    std::string passwordHash_;
+
+    static std::string trimAscii(std::string value) {
+        const auto isSpace = [](unsigned char ch) {
+            return std::isspace(ch) != 0;
+        };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [&](char ch) {
+            return !isSpace(static_cast<unsigned char>(ch));
+        }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [&](char ch) {
+            return !isSpace(static_cast<unsigned char>(ch));
+        }).base(), value.end());
+        return value;
+    }
+
+    static std::string normalizeHash(std::string value) {
+        value = trimAscii(std::move(value));
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::toupper(ch));
+        });
+        return value;
+    }
+
+    static std::string sha256Hex(const std::string &text) {
+        return trantor::utils::toHexString(trantor::utils::sha256(text));
+    }
+
+    static bool constantTimeEquals(const std::string &left, const std::string &right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        unsigned char diff = 0;
+        for (std::size_t index = 0; index < left.size(); ++index) {
+            diff |= static_cast<unsigned char>(left[index] ^ right[index]);
+        }
+        return diff == 0;
+    }
 
     void load(std::filesystem::path path) {
         std::ifstream input;
@@ -253,6 +314,90 @@ private:
         for (const auto &item : list) {
             if (item.isString() && !item.asString().empty()) {
                 adminQqs_.insert(item.asString());
+            }
+        }
+
+        passwordSalt_ = config["adminPasswordSalt"].isString() ? config["adminPasswordSalt"].asString() : "";
+        passwordHash_ = config["adminPasswordHash"].isString() ? normalizeHash(config["adminPasswordHash"].asString()) : "";
+        if (passwordHash_.empty() && config["adminPassword"].isString() && !config["adminPassword"].asString().empty()) {
+            passwordHash_ = sha256Hex(passwordSalt_ + config["adminPassword"].asString());
+        }
+        const char *envPassword = std::getenv("TEAMASSISTANT_ADMIN_PASSWORD");
+        if (envPassword != nullptr && *envPassword != '\0') {
+            passwordSalt_ = std::getenv("TEAMASSISTANT_ADMIN_PASSWORD_SALT") != nullptr
+                ? std::getenv("TEAMASSISTANT_ADMIN_PASSWORD_SALT")
+                : "";
+            passwordHash_ = sha256Hex(passwordSalt_ + std::string(envPassword));
+        }
+        const char *envPasswordHash = std::getenv("TEAMASSISTANT_ADMIN_PASSWORD_HASH");
+        if (envPasswordHash != nullptr && *envPasswordHash != '\0') {
+            passwordSalt_ = std::getenv("TEAMASSISTANT_ADMIN_PASSWORD_SALT") != nullptr
+                ? std::getenv("TEAMASSISTANT_ADMIN_PASSWORD_SALT")
+                : passwordSalt_;
+            passwordHash_ = normalizeHash(envPasswordHash);
+        }
+    }
+};
+
+class AdminSessions {
+public:
+    CreatedAdminSession create(const std::string &qq) {
+        const long long now = nowMs();
+        CreatedAdminSession created;
+        created.token = generateToken();
+        created.expiresAtMs = now + kSessionTtlMs;
+        std::lock_guard lock(mutex_);
+        cleanExpiredLocked(now);
+        sessions_[created.token] = AdminSession{qq, created.expiresAtMs};
+        return created;
+    }
+
+    bool isValid(const std::string &qq, const std::string &token) {
+        if (qq.empty() || token.empty()) {
+            return false;
+        }
+        const long long now = nowMs();
+        std::lock_guard lock(mutex_);
+        cleanExpiredLocked(now);
+        const auto found = sessions_.find(token);
+        return found != sessions_.end() && found->second.qq == qq && found->second.expiresAtMs > now;
+    }
+
+    void revoke(const std::string &token) {
+        if (token.empty()) {
+            return;
+        }
+        std::lock_guard lock(mutex_);
+        sessions_.erase(token);
+    }
+
+private:
+    static constexpr long long kSessionTtlMs = 12LL * 60 * 60 * 1000;
+    std::mutex mutex_;
+    std::unordered_map<std::string, AdminSession> sessions_;
+
+    static long long nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    static std::string generateToken() {
+        std::array<unsigned char, 32> bytes{};
+        if (!trantor::utils::secureRandomBytes(bytes.data(), bytes.size())) {
+            std::random_device device;
+            for (auto &byte : bytes) {
+                byte = static_cast<unsigned char>(device());
+            }
+        }
+        return trantor::utils::toHexString(bytes.data(), bytes.size());
+    }
+
+    void cleanExpiredLocked(long long now) {
+        for (auto iterator = sessions_.begin(); iterator != sessions_.end();) {
+            if (iterator->second.expiresAtMs <= now) {
+                iterator = sessions_.erase(iterator);
+            } else {
+                ++iterator;
             }
         }
     }
@@ -3821,6 +3966,7 @@ int main() {
 
     auto db = std::make_shared<SqliteDb>(dbPath);
     auto admins = std::make_shared<AdminConfig>(adminPath);
+    auto adminSessions = std::make_shared<AdminSessions>();
     auto events = std::make_shared<VersionEventHub>();
     setupCors();
 
@@ -3843,27 +3989,41 @@ int main() {
         Value json;
         json["ok"] = false;
         json["reason"] = "forbidden";
-        json["error"] = "需要管理员权限";
+        json["error"] = "需要管理员密码";
         return json;
     };
-    auto requireAdminQq = [admins, forbiddenResponse](const std::string &actorQq, std::function<void(const HttpResponsePtr &)> &callback) {
-        if (admins->isAdmin(actorQq)) {
+    auto adminTokenFromRequest = [](const HttpRequestPtr &request, const Value *body = nullptr) {
+        if (body != nullptr && (*body)["adminToken"].isString()) {
+            return (*body)["adminToken"].asString();
+        }
+        const auto authorization = request->getHeader("Authorization");
+        static const std::string bearerPrefix = "Bearer ";
+        if (authorization.rfind(bearerPrefix, 0) == 0) {
+            return authorization.substr(bearerPrefix.size());
+        }
+        return request->getParameter("adminToken");
+    };
+    auto isAdminRequest = [admins, adminSessions, adminTokenFromRequest](const HttpRequestPtr &request, const std::string &actorQq, const Value *body = nullptr) {
+        return admins->isAdmin(actorQq) && adminSessions->isValid(actorQq, adminTokenFromRequest(request, body));
+    };
+    auto requireAdminQq = [isAdminRequest, forbiddenResponse](const HttpRequestPtr &request, const std::string &actorQq, std::function<void(const HttpResponsePtr &)> &callback, const Value *body = nullptr) {
+        if (isAdminRequest(request, actorQq, body)) {
             return true;
         }
         callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
         return false;
     };
-    auto requireAdmin = [admins, forbiddenResponse](const Value &body, std::function<void(const HttpResponsePtr &)> &callback) {
+    auto requireAdmin = [isAdminRequest, forbiddenResponse](const HttpRequestPtr &request, const Value &body, std::function<void(const HttpResponsePtr &)> &callback) {
         const std::string actorQq = body["actorQq"].isString() ? body["actorQq"].asString() : "";
-        if (admins->isAdmin(actorQq)) {
+        if (isAdminRequest(request, actorQq, &body)) {
             return true;
         }
         callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
         return false;
     };
-    auto requireSelfOrAdmin = [admins, forbiddenResponse](const std::string &targetQq, const Value &body, std::function<void(const HttpResponsePtr &)> &callback) {
+    auto requireSelfOrAdmin = [isAdminRequest, forbiddenResponse](const HttpRequestPtr &request, const std::string &targetQq, const Value &body, std::function<void(const HttpResponsePtr &)> &callback) {
         const std::string actorQq = body["actorQq"].isString() ? body["actorQq"].asString() : "";
-        if (!actorQq.empty() && (actorQq == targetQq || admins->isAdmin(actorQq))) {
+        if (!actorQq.empty() && (actorQq == targetQq || isAdminRequest(request, actorQq, &body))) {
             return true;
         }
         callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
@@ -3884,13 +4044,13 @@ int main() {
         }
         return std::string();
     };
-    auto requireBoardAccess = [db, admins, inviteTokenFromRequest, actorQqFromBody](
+    auto requireBoardAccess = [db, inviteTokenFromRequest, actorQqFromBody, isAdminRequest](
         const HttpRequestPtr &request,
         const Value &body,
         std::function<void(const HttpResponsePtr &)> &callback
     ) {
         const std::string actorQq = actorQqFromBody(body);
-        const Value access = db->boardAccess(admins->isAdmin(actorQq), inviteTokenFromRequest(request, &body));
+        const Value access = db->boardAccess(isAdminRequest(request, actorQq, &body), inviteTokenFromRequest(request, &body));
         if (access["ok"].asBool()) {
             return true;
         }
@@ -3923,10 +4083,68 @@ int main() {
         },
         {drogon::Get});
 
+    drogon::app().registerHandler("/api/v2/admin/login",
+        [admins, adminSessions](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            if (json == nullptr) {
+                callback(jsonResponse(errorJson("Missing admin login body"), drogon::k400BadRequest));
+                return;
+            }
+            const std::string actorQq = (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "";
+            const std::string password = (*json)["password"].isString() ? (*json)["password"].asString() : "";
+            if (!admins->isAdmin(actorQq)) {
+                Value forbidden;
+                forbidden["ok"] = false;
+                forbidden["reason"] = "forbidden";
+                forbidden["error"] = "需要管理员权限";
+                callback(jsonResponse(forbidden, drogon::k403Forbidden));
+                return;
+            }
+            if (!admins->hasPassword()) {
+                Value missing;
+                missing["ok"] = false;
+                missing["reason"] = "adminPasswordMissing";
+                missing["error"] = "未配置管理员密码";
+                callback(jsonResponse(missing, drogon::k403Forbidden));
+                return;
+            }
+            if (!admins->verifyPassword(password)) {
+                Value invalid;
+                invalid["ok"] = false;
+                invalid["reason"] = "invalidPassword";
+                invalid["error"] = "管理员密码错误";
+                callback(jsonResponse(invalid, drogon::k403Forbidden));
+                return;
+            }
+
+            const auto session = adminSessions->create(actorQq);
+            Value result;
+            result["ok"] = true;
+            result["isAdmin"] = true;
+            result["adminToken"] = session.token;
+            result["expiresAtMs"] = static_cast<Json::Int64>(session.expiresAtMs);
+            callback(jsonResponse(result));
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler("/api/v2/admin/logout",
+        [adminSessions, adminTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            if (json != nullptr) {
+                adminSessions->revoke(adminTokenFromRequest(request, json.get()));
+            } else {
+                adminSessions->revoke(adminTokenFromRequest(request));
+            }
+            Value result;
+            result["ok"] = true;
+            callback(jsonResponse(result));
+        },
+        {drogon::Post});
+
     drogon::app().registerHandler("/api/v2/bootstrap",
-        [db, admins, inviteTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto qq = request->getParameter("qq");
-            callback(jsonResponse(db->bootstrap(admins->isAdmin(qq), inviteTokenFromRequest(request))));
+            callback(jsonResponse(db->bootstrap(isAdminRequest(request, qq), inviteTokenFromRequest(request))));
         },
         {drogon::Get});
 
@@ -3937,7 +4155,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing data"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->replaceData(*json));
             } catch (const std::exception &error) {
@@ -3947,14 +4165,14 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/sync",
-        [db, admins, inviteTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto dataVersion = request->getParameter("dataVersion");
             const auto lockVersion = request->getParameter("lockVersion");
             const auto qq = request->getParameter("qq");
             callback(jsonResponse(db->sync(
                 optionalQueryInt64(dataVersion),
                 optionalQueryInt64(lockVersion),
-                admins->isAdmin(qq),
+                isAdminRequest(request, qq),
                 inviteTokenFromRequest(request))));
         },
         {drogon::Get});
@@ -3975,14 +4193,14 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/locks",
-        [db, admins, inviteTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
-            callback(jsonResponse(db->publicLocks(admins->isAdmin(request->getParameter("qq")), inviteTokenFromRequest(request))));
+        [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            callback(jsonResponse(db->publicLocks(isAdminRequest(request, request->getParameter("qq")), inviteTokenFromRequest(request))));
         },
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/access-gate",
         [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
-            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
+            if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
             try {
                 callback(jsonResponse(db->accessGate(true, true)));
             } catch (const std::exception &error) {
@@ -3998,7 +4216,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing access gate body"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->updateAccessGate(
                     toInt64((*json)["publicAtMs"]),
@@ -4017,7 +4235,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing access gate body"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->regenerateAccessGateToken((*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "");
                 respondMutation(std::move(callback), result);
@@ -4034,7 +4252,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing team"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->createTeam((*json)["team"]);
                 respondMutation(std::move(callback), result);
@@ -4051,7 +4269,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing ids"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->reorderTeams((*json)["ids"]);
                 respondMutation(std::move(callback), result);
@@ -4069,7 +4287,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing team patch"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->patchTeam(teamId, *json);
                 respondMutation(std::move(callback), result);
@@ -4084,7 +4302,7 @@ int main() {
              const std::string &teamId) {
             const auto json = request->getJsonObject();
             const Value body = json == nullptr ? Value(Json::objectValue) : *json;
-            if (!requireAdmin(body, callback)) return;
+            if (!requireAdmin(request, body, callback)) return;
             try {
                 const auto result = db->deleteTeam(teamId, body["fallbackTeam"]);
                 respondMutation(std::move(callback), result);
@@ -4102,7 +4320,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing archive body"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->archiveTeam(
                     teamId,
@@ -4124,7 +4342,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing restore body"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->restoreArchive(
                     archiveId,
@@ -4145,7 +4363,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing locked"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->setTeamConfigLock(teamId, (*json)["locked"].asBool());
                 respondMutation(std::move(callback), result);
@@ -4215,7 +4433,7 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/member",
-        [db, respondMutation, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireBoardAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["member"].isObject()) {
@@ -4226,6 +4444,8 @@ int main() {
             const std::string actorQq = (*json)["actorQq"].isString()
                 ? (*json)["actorQq"].asString()
                 : ((*json)["qq"].isString() ? (*json)["qq"].asString() : "");
+            const std::string memberQq = (*json)["member"]["qq"].isString() ? (*json)["member"]["qq"].asString() : "";
+            if (memberQq != actorQq && !requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->saveSlotMember(
                     teamId,
@@ -4242,7 +4462,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/member",
-        [db, respondMutation, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireBoardAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -4250,13 +4470,16 @@ int main() {
                 return;
             }
             if (!requireBoardAccess(request, *json, callback)) return;
+            const std::optional<std::string> expectedMemberQq = optionalBodyString((*json)["expectedMemberQq"]);
+            const std::string actorQq = (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "";
+            if (expectedMemberQq.has_value() && *expectedMemberQq != actorQq && !requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->leaveSlotMember(
                     teamId,
                     slotIndex,
-                    (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "",
+                    actorQq,
                     bodyString((*json)["lockToken"]),
-                    optionalBodyString((*json)["expectedMemberQq"]));
+                    expectedMemberQq);
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
@@ -4265,7 +4488,7 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/cancel",
-        [db, respondMutation, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireBoardAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -4275,6 +4498,8 @@ int main() {
             if (!requireBoardAccess(request, *json, callback)) return;
             const std::string actorQq = (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "";
             const std::string cancelledBy = (*json)["cancelledBy"].isString() ? (*json)["cancelledBy"].asString() : actorQq;
+            const std::optional<std::string> expectedMemberQq = optionalBodyString((*json)["expectedMemberQq"]);
+            if (expectedMemberQq.has_value() && *expectedMemberQq != actorQq && !requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->cancelSlotMember(
                     teamId,
@@ -4283,7 +4508,7 @@ int main() {
                     cancelledBy,
                     (*json)["reason"].isString() ? (*json)["reason"].asString() : "",
                     bodyString((*json)["lockToken"]),
-                    optionalBodyString((*json)["expectedMemberQq"]));
+                    expectedMemberQq);
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
@@ -4299,7 +4524,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing role update"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->setSlotRole(
                     teamId,
@@ -4323,7 +4548,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing quick reserve body"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->quickReserve(
                     teamId,
@@ -4341,7 +4566,7 @@ int main() {
              const std::string &qq, long long timestamp) {
             const auto json = request->getJsonObject();
             const Value body = json == nullptr ? Value(Json::objectValue) : *json;
-            if (!requireSelfOrAdmin(qq, body, callback)) return;
+            if (!requireSelfOrAdmin(request, qq, body, callback)) return;
             try {
                 const auto result = db->dismissCancellation(qq, timestamp);
                 respondMutation(std::move(callback), result);
@@ -4358,7 +4583,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing teamId"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->setTeamLock((*json)["teamId"].asString()));
             } catch (const std::exception &error) {
@@ -4370,7 +4595,7 @@ int main() {
     drogon::app().registerHandler("/api/v2/team-locks/{1}",
         [db, respondOkMutation, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId) {
-            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
+            if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->removeTeamLock(teamId));
             } catch (const std::exception &error) {
@@ -4413,7 +4638,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing presets"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 respondOkMutation(std::move(callback), db->updateSubsidyPresets((*json)["presets"]));
             } catch (const std::exception &error) {
@@ -4430,7 +4655,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing subsidy types"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireAdmin(*json, callback)) return;
+            if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->updateTeamSubsidyTypes(teamId, (*json)["subsidyTypes"]);
                 respondMutation(std::move(callback), result);
@@ -4448,7 +4673,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing subsidy selections"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireSelfOrAdmin(qq, *json, callback)) return;
+            if (!requireSelfOrAdmin(request, qq, *json, callback)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::optional<std::string>(teamId),
@@ -4471,7 +4696,7 @@ int main() {
                 callback(jsonResponse(errorJson("Missing subsidy selections"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireSelfOrAdmin(qq, *json, callback)) return;
+            if (!requireSelfOrAdmin(request, qq, *json, callback)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::nullopt,
@@ -4488,7 +4713,7 @@ int main() {
 
     drogon::app().registerHandler("/api/v2/backups",
         [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
-            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
+            if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
             try {
                 callback(jsonResponse(db->backups()));
             } catch (const std::exception &error) {
@@ -4503,7 +4728,7 @@ int main() {
             const std::string actorQq = json != nullptr && (*json)["actorQq"].isString()
                 ? (*json)["actorQq"].asString()
                 : request->getParameter("actorQq");
-            if (!requireAdminQq(actorQq, callback)) return;
+            if (!requireAdminQq(request, actorQq, callback, json.get())) return;
             try {
                 callback(jsonResponse(db->createBackup()));
             } catch (const std::exception &error) {
@@ -4519,7 +4744,7 @@ int main() {
             const std::string actorQq = json != nullptr && (*json)["actorQq"].isString()
                 ? (*json)["actorQq"].asString()
                 : request->getParameter("actorQq");
-            if (!requireAdminQq(actorQq, callback)) return;
+            if (!requireAdminQq(request, actorQq, callback, json.get())) return;
             try {
                 const auto result = db->restoreBackup(name);
                 respondMutation(std::move(callback), result);
@@ -4532,7 +4757,7 @@ int main() {
     drogon::app().registerHandler("/api/v2/backups/{1}/download",
         [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &name) {
-            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
+            if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
             try {
                 const auto path = db->backupDownloadPath(name);
                 if (!path.has_value()) {
@@ -4564,7 +4789,7 @@ int main() {
             const std::string actorQq = json != nullptr && (*json)["actorQq"].isString()
                 ? (*json)["actorQq"].asString()
                 : request->getParameter("actorQq");
-            if (!requireAdminQq(actorQq, callback)) return;
+            if (!requireAdminQq(request, actorQq, callback, json.get())) return;
             try {
                 callback(jsonResponse(db->deleteBackup(name)));
             } catch (const std::exception &error) {
@@ -4575,7 +4800,7 @@ int main() {
 
     drogon::app().registerHandler("/api/v2/backups/import",
         [db, respondOkMutation, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
-            if (!requireAdminQq(request->getParameter("actorQq"), callback)) return;
+            if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
             try {
                 const auto body = request->body();
                 respondOkMutation(std::move(callback), db->importBackup(std::string(body.data(), body.size())));
@@ -4590,9 +4815,10 @@ int main() {
     // dedicated handlers using a `before` cursor (timestamp of the oldest
     // item already seen). Both teamId and qq filters are optional.
     drogon::app().registerHandler("/api/v2/logs",
-        [db, admins, inviteTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             try {
-                const Value access = db->boardAccess(admins->isAdmin(request->getParameter("actorQq")), inviteTokenFromRequest(request));
+                const std::string actorQq = request->getParameter("actorQq");
+                const Value access = db->boardAccess(isAdminRequest(request, actorQq), inviteTokenFromRequest(request));
                 if (!access["ok"].asBool()) {
                     Value blocked = access;
                     blocked["items"] = Value(Json::arrayValue);
@@ -4613,11 +4839,11 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/cancellations",
-        [db, admins, inviteTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             try {
                 const auto qq = request->getParameter("qq");
                 const std::string actorQq = request->getParameter("actorQq").empty() ? qq : request->getParameter("actorQq");
-                const Value access = db->boardAccess(admins->isAdmin(actorQq), inviteTokenFromRequest(request));
+                const Value access = db->boardAccess(isAdminRequest(request, actorQq), inviteTokenFromRequest(request));
                 if (!access["ok"].asBool()) {
                     Value blocked = access;
                     blocked["items"] = Value(Json::arrayValue);

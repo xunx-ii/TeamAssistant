@@ -22,6 +22,22 @@ npm run dev
 默认前端监听 `0.0.0.0:5173`，同机访问 `http://127.0.0.1:5173`，局域网访问 `http://服务器IP:5173`。如果 5173 已被占用，先停掉旧服务，或用 `VITE_PORT=其他端口 npm run dev` 指定端口；如果只想本机访问，可用 `VITE_HOST=127.0.0.1 npm run dev`。
 通过域名访问 Vite 开发服务器时，默认已允许 `team.hk.xunx.cc`；其它域名可用 `VITE_ALLOWED_HOSTS=域名1,域名2 npm run dev` 增加。
 
+## 管理员密码
+
+管理员 QQ 仍配置在 `backend-cpp/admin.json`。后端未配置管理员密码时会拒绝管理员登录；本地或部署时建议用环境变量：
+
+```bash
+TEAMASSISTANT_ADMIN_PASSWORD=你的强密码 npm run dev
+```
+
+也可以设置 `TEAMASSISTANT_ADMIN_PASSWORD_SALT` 与 `TEAMASSISTANT_ADMIN_PASSWORD_HASH`，或更新 `admin.json` 中的 `adminPasswordSalt` / `adminPasswordHash`。
+
+生成哈希示例：
+
+```bash
+node scripts/admin-password-hash.mjs 你的强密码
+```
+
 ## 验证
 
 ```bash

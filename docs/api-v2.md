@@ -56,6 +56,11 @@ This document defines the contract used by the split React frontend and the new 
 
 ## Team And Admin Endpoints
 
+- `POST /api/v2/admin/login`
+  - Body: `{ actorQq, password }`.
+  - Returns `{ ok, isAdmin, adminToken, expiresAtMs }`. The token is process-local and expires automatically.
+- `POST /api/v2/admin/logout`
+  - Body: `{ actorQq, adminToken }`.
 - `POST /api/v2/teams`
 - `PATCH /api/v2/teams/{teamId}`
 - `DELETE /api/v2/teams/{teamId}`
@@ -64,7 +69,7 @@ This document defines the contract used by the split React frontend and the new 
 - `POST /api/v2/archives/{archiveId}/restore`
 - `PATCH /api/v2/teams/{teamId}/lock-state`
 
-All admin operations must be validated on the backend using `actorQq`.
+All admin operations must be validated on the backend using both `actorQq` and a valid `adminToken`.
 
 ## Subsidy And Backup Endpoints
 
@@ -72,16 +77,17 @@ All admin operations must be validated on the backend using `actorQq`.
 - `PUT /api/v2/subsidy-presets`
 - `PUT /api/v2/teams/{teamId}/subsidies/{qq}`
 - `PUT /api/v2/archives/{archiveId}/subsidies/{qq}`
-- `GET /api/v2/backups?actorQq=...`
+- `GET /api/v2/backups?actorQq=...&adminToken=...`
 - `POST /api/v2/backups` with `{ actorQq }`
-- `GET /api/v2/backups/{name}/download?actorQq=...`
+- `GET /api/v2/backups/{name}/download?actorQq=...&adminToken=...`
 - `POST /api/v2/backups/{name}/restore` with `{ actorQq }`
 - `DELETE /api/v2/backups/{name}` with `{ actorQq }`
-- `POST /api/v2/backups/import?actorQq=...`
+- `POST /api/v2/backups/import?actorQq=...&adminToken=...`
 
 Backup import and restore may return a full snapshot because the full application state changes.
 
 ## Admin Config
 
 - Backend reads administrator QQs from `backend-cpp/admin.json` by default, or `TEAMASSISTANT_ADMIN_CONFIG` when set.
+- Admin password can be configured with `TEAMASSISTANT_ADMIN_PASSWORD` (recommended for deployment), or with `adminPasswordSalt` + `adminPasswordHash` in `admin.json`. `TEAMASSISTANT_ADMIN_PASSWORD_HASH` and `TEAMASSISTANT_ADMIN_PASSWORD_SALT` are also supported.
 - The admin list is not served to the frontend; `bootstrap` and `sync` return only the current viewer's `isAdmin` boolean.

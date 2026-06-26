@@ -161,6 +161,15 @@ type RequestFailure = {
   error: string
 }
 
+export interface AdminLoginResult {
+  ok: boolean
+  isAdmin?: boolean
+  adminToken?: string
+  expiresAtMs?: number
+  reason?: string
+  error?: string
+}
+
 export type BackupDownloadResult =
   | { ok: true, blob: Blob, filename: string }
   | RequestFailure
@@ -168,6 +177,19 @@ export type BackupDownloadResult =
 type BodyParseError = typeof HTML_RESPONSE_ERROR | typeof NON_JSON_RESPONSE_ERROR | typeof INVALID_JSON_ERROR
 
 let inviteToken = ''
+let adminToken = ''
+
+export function getAdminToken() {
+  return adminToken
+}
+
+export function setAdminToken(token: string | null | undefined) {
+  adminToken = token ?? ''
+}
+
+export function clearAdminToken() {
+  adminToken = ''
+}
 
 function readInviteTokenFromUrl() {
   if (typeof window === 'undefined') return ''
@@ -210,9 +232,18 @@ function appendInviteToken(params: URLSearchParams) {
   if (inviteToken) params.set('inviteToken', inviteToken)
 }
 
+function appendAdminToken(params: URLSearchParams) {
+  if (adminToken) params.set('adminToken', adminToken)
+}
+
 function withInviteBody(body: unknown) {
   if (!inviteToken || !body || typeof body !== 'object' || Array.isArray(body)) return body
   return { ...(body as Record<string, unknown>), inviteToken }
+}
+
+function withAdminBody(body: unknown) {
+  if (!adminToken || !body || typeof body !== 'object' || Array.isArray(body)) return body
+  return { ...(body as Record<string, unknown>), adminToken }
 }
 
 function isServerData(value: unknown): value is ServerData {
@@ -401,7 +432,7 @@ function jsonRequest(method: string, body?: unknown): RequestInit {
   return {
     method,
     headers: { 'Content-Type': 'application/json' },
-    ...(body === undefined ? {} : { body: JSON.stringify(withInviteBody(body)) }),
+    ...(body === undefined ? {} : { body: JSON.stringify(withInviteBody(withAdminBody(body))) }),
   }
 }
 
@@ -560,6 +591,7 @@ export async function fetchData(qq?: string | null): Promise<ServerData | null> 
   const params = new URLSearchParams()
   if (qq) params.set('qq', qq)
   appendInviteToken(params)
+  appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   const data = await requestData<unknown>(`${API}/bootstrap${suffix}`, noCache)
   return isServerData(data) ? { ...data, accessGate: parseAccessGate((data as { accessGate?: unknown }).accessGate) } : null
@@ -588,6 +620,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
   if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
   if (qq) params.set('qq', qq)
   appendInviteToken(params)
+  appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   const data = await requestData<unknown>(`${API}/sync${suffix}`, noCache)
   if (
@@ -636,6 +669,7 @@ function normalizeAccessGateResult(result: AccessGateResult | RequestFailure): A
 export async function fetchAccessGate(actorQq?: string | null): Promise<AccessGateRequestResult> {
   const params = new URLSearchParams()
   if (actorQq) params.set('actorQq', actorQq)
+  appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   return normalizeAccessGateResult(await requestResult<AccessGateResult>(`${API}/access-gate${suffix}`, noCache))
 }
@@ -685,6 +719,20 @@ export async function pushData(data: Partial<ServerData> & { actorQq?: string | 
   return result.ok
 }
 
+export async function loginAdmin(actorQq: string, password: string): Promise<AdminLoginResult> {
+  const result = await requestResult<AdminLoginResult>(`${API}/admin/login`, jsonRequest('POST', { actorQq, password }))
+  if (result.ok && result.adminToken) {
+    setAdminToken(result.adminToken)
+  }
+  return result
+}
+
+export async function logoutAdmin(actorQq?: string | null): Promise<boolean> {
+  const result = await requestResult<{ ok: boolean }>(`${API}/admin/logout`, jsonRequest('POST', withActor({}, actorQq)))
+  clearAdminToken()
+  return result.ok
+}
+
 export async function mutateData(mutation: Mutation, actorQq?: string | null): Promise<MutationResult> {
   const route = routeMutation(mutation, actorQq)
   return requestResult<MutationResult>(route.url, route.init)
@@ -722,6 +770,7 @@ export async function fetchLockState(): Promise<LockState> {
 export async function fetchLockStateOrNull(): Promise<LockState | null> {
   const params = new URLSearchParams()
   appendInviteToken(params)
+  appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   const data = await requestData<{ slots?: SlotLock[], teams?: TeamLockInfo[], lockVersion?: number }>(`${API}/locks${suffix}`, noCache)
   if (!data) return null
@@ -740,6 +789,7 @@ export async function lockTeam(teamId: string, actorQq?: string | null): Promise
 export async function unlockTeam(teamId: string, actorQq?: string | null): Promise<boolean> {
   const params = new URLSearchParams()
   if (actorQq) params.set('actorQq', actorQq)
+  appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
   const result = await requestResult<{ ok: boolean }>(
     `${API}/team-locks/${encodePath(teamId)}${suffix}`,
@@ -768,6 +818,7 @@ export async function pushSubsidyPresets(presets: SubsidyType[], actorQq?: strin
 function actorQuery(actorQq?: string | null) {
   const params = new URLSearchParams()
   if (actorQq) params.set('actorQq', actorQq)
+  appendAdminToken(params)
   const query = params.toString()
   return query ? `?${query}` : ''
 }
@@ -823,6 +874,7 @@ function buildHistoryQuery(extra: Record<string, string | null | undefined>, par
   }
   if (params.actorQq) search.set('actorQq', params.actorQq)
   appendInviteToken(search)
+  appendAdminToken(search)
   const query = search.toString()
   return query ? `?${query}` : ''
 }
