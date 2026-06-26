@@ -310,6 +310,27 @@ test('admin login stores returned token for later requests', async () => {
   assert.equal(calls[1].input, '/api/v2/sync?dataVersion=1&lockVersion=1&qq=10001&adminToken=stored-admin-token')
 })
 
+test('admin check queries qq without requiring a password', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      isAdmin: true,
+      passwordConfigured: true,
+    })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-admin-check`)
+    const checked = await mod.checkAdminQq('10001')
+    assert.equal(checked.ok, true)
+    assert.equal(checked.isAdmin, true)
+    assert.equal(checked.passwordConfigured, true)
+  })
+
+  assert.equal(calls[0].input, '/api/v2/admin/check?actorQq=10001')
+  assert.equal(calls[0].init.cache, 'no-store')
+})
+
 test('access gate helpers parse admin gate responses', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {

@@ -170,6 +170,14 @@ export interface AdminLoginResult {
   error?: string
 }
 
+export interface AdminCheckResult {
+  ok: boolean
+  isAdmin?: boolean
+  passwordConfigured?: boolean
+  reason?: string
+  error?: string
+}
+
 export type BackupDownloadResult =
   | { ok: true, blob: Blob, filename: string }
   | RequestFailure
@@ -725,6 +733,12 @@ export async function loginAdmin(actorQq: string, password: string): Promise<Adm
     setAdminToken(result.adminToken)
   }
   return result
+}
+
+export async function checkAdminQq(actorQq: string): Promise<AdminCheckResult> {
+  const params = new URLSearchParams()
+  params.set('actorQq', actorQq)
+  return requestResult<AdminCheckResult>(`${API}/admin/check?${params}`, noCache)
 }
 
 export async function logoutAdmin(actorQq?: string | null): Promise<boolean> {

@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { martialArts } from './data/martialArts'
-import { clearAdminToken, clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { checkAdminQq, clearAdminToken, clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatch, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -67,6 +67,11 @@ interface AdminSessionState {
   qq: string
   token: string
   expiresAtMs: number
+}
+
+interface LoginAttemptResult {
+  requiresAdminPassword: boolean
+  qq?: string
 }
 
 const LOADING_MESSAGES = [
@@ -598,29 +603,45 @@ function App() {
     pendingServerEventRef.current = null
   }
 
-  const handleLogin = async (userQq: string, adminPassword?: string) => {
-    resetServerCursor()
-    clearAdminToken()
-    clearStoredAdminSession()
+  const enterApp = (userQq: string) => {
     setStoredQQ(userQq)
-    setIsAdmin(false)
-    setAccessGate(null)
-    const normalizedPassword = adminPassword ?? ''
-    if (normalizedPassword) {
-      const result = await loginAdmin(userQq, normalizedPassword)
-      if (!result.ok || !result.adminToken || !result.expiresAtMs) {
-        throw new Error(result.error || '管理员密码验证失败')
-      }
-      storeAdminSession({
-        qq: userQq,
-        token: result.adminToken,
-        expiresAtMs: result.expiresAtMs,
-      })
-      setIsAdmin(true)
-    }
     setInitializing(true)
     setShowLoadingTransition(true)
     setQq(userQq)
+  }
+
+  const handleLogin = async (userQq: string): Promise<LoginAttemptResult> => {
+    resetServerCursor()
+    clearAdminToken()
+    clearStoredAdminSession()
+    removeStoredQQ()
+    setIsAdmin(false)
+    setAccessGate(null)
+    const check = await checkAdminQq(userQq)
+    if (check.ok && check.isAdmin) {
+      return { requiresAdminPassword: true, qq: userQq }
+    }
+    enterApp(userQq)
+    return { requiresAdminPassword: false }
+  }
+  const handleAdminPasswordLogin = async (userQq: string, password: string) => {
+    resetServerCursor()
+    clearAdminToken()
+    clearStoredAdminSession()
+    removeStoredQQ()
+    setIsAdmin(false)
+    setAccessGate(null)
+    const result = await loginAdmin(userQq, password)
+    if (!result.ok || !result.adminToken || !result.expiresAtMs) {
+      throw new Error(result.error || '管理员密码验证失败')
+    }
+    storeAdminSession({
+      qq: userQq,
+      token: result.adminToken,
+      expiresAtMs: result.expiresAtMs,
+    })
+    setIsAdmin(true)
+    enterApp(userQq)
   }
   const handleLogout = () => {
     void logoutAdmin(qq)
@@ -1013,7 +1034,7 @@ function App() {
     return (
       <>
         <div className="app-enter">
-          <LoginPage onLogin={handleLogin} />
+          <LoginPage onLogin={handleLogin} onAdminPasswordLogin={handleAdminPasswordLogin} />
         </div>
         {loadingOverlay}
       </>
@@ -1446,11 +1467,20 @@ function App() {
   )
 }
 
-function LoginPage({ onLogin }: { onLogin: (qq: string, adminPassword?: string) => Promise<void> }) {
+function LoginPage({
+  onLogin,
+  onAdminPasswordLogin,
+}: {
+  onLogin: (qq: string) => Promise<LoginAttemptResult>
+  onAdminPasswordLogin: (qq: string, password: string) => Promise<void>
+}) {
   const [inputQq, setInputQq] = useState('')
+  const [adminPasswordQq, setAdminPasswordQq] = useState<string | null>(null)
   const [adminPassword, setAdminPassword] = useState('')
   const [loginError, setLoginError] = useState('')
+  const [passwordError, setPasswordError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false)
   const qqInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value: inputQq,
     onChange: e => setInputQq(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq })),
@@ -1467,76 +1497,127 @@ function LoginPage({ onLogin }: { onLogin: (qq: string, adminPassword?: string) 
     if (!t) return
     setSubmitting(true)
     try {
-      await onLogin(t, adminPassword.trim() ? adminPassword : undefined)
+      const result = await onLogin(t)
+      if (result.requiresAdminPassword) {
+        setAdminPasswordQq(result.qq ?? t)
+        setAdminPassword('')
+        setPasswordError('')
+      }
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : '登录失败')
     } finally {
       setSubmitting(false)
     }
   }
+  const closeAdminPasswordDialog = () => {
+    if (passwordSubmitting) return
+    setAdminPasswordQq(null)
+    setAdminPassword('')
+    setPasswordError('')
+  }
+  const handleAdminPasswordSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!adminPasswordQq || passwordSubmitting) return
+    if (!adminPassword.trim()) return
+    setPasswordSubmitting(true)
+    setPasswordError('')
+    try {
+      await onAdminPasswordLogin(adminPasswordQq, adminPassword)
+    } catch (error) {
+      setPasswordError(error instanceof Error ? error.message : '管理员密码验证失败')
+    } finally {
+      setPasswordSubmitting(false)
+    }
+  }
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-6 pixel-bg-pattern relative overflow-hidden">
-      {/* Floating decorations */}
-      <div className="absolute top-[15%] left-[10%] opacity-30 pixel-carrot-float">
-        <PixelCarrot size={40} />
-      </div>
-      <div className="absolute top-[20%] right-[15%] opacity-30 pixel-heart-float">
-        <PixelHeart size={36} />
-      </div>
-      <div className="absolute bottom-[25%] left-[15%] opacity-25 pixel-star-float">
-        <PixelStar size={32} />
-      </div>
-      <div className="absolute bottom-[20%] right-[10%] opacity-25 pixel-carrot-float" style={{ animationDelay: '2s' }}>
-        <PixelCarrot size={28} />
-      </div>
-      <div className="absolute top-[45%] left-[5%] opacity-20 pixel-heart-float" style={{ animationDelay: '1s' }}>
-        <PixelHeart size={24} />
-      </div>
-      <div className="absolute top-[50%] right-[5%] opacity-20 pixel-star-float" style={{ animationDelay: '1.5s' }}>
-        <PixelStar size={28} />
-      </div>
-
-      {/* Main login card */}
-        <div className="pixel-card p-8 flex flex-col items-center gap-5 relative z-10 max-w-sm w-full mx-4">
-        {/* Pixel border top decoration */}
-        <div className="pixel-border-top absolute top-0 left-0 right-0" />
-
-        {/* Logo area */}
-        <div className="flex flex-col items-center gap-3 mt-2">
-          <h1 className="text-lg font-bold text-foreground pixel-font tracking-wider">
-            兔扇报名助手
-          </h1>
-          <p className="text-xs text-muted-foreground pixel-font" style={{ fontSize: '8px' }}>
-            RABBIT SIGNUP HELPER
-          </p>
+    <>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-6 pixel-bg-pattern relative overflow-hidden">
+        {/* Floating decorations */}
+        <div className="absolute top-[15%] left-[10%] opacity-30 pixel-carrot-float">
+          <PixelCarrot size={40} />
+        </div>
+        <div className="absolute top-[20%] right-[15%] opacity-30 pixel-heart-float">
+          <PixelHeart size={36} />
+        </div>
+        <div className="absolute bottom-[25%] left-[15%] opacity-25 pixel-star-float">
+          <PixelStar size={32} />
+        </div>
+        <div className="absolute bottom-[20%] right-[10%] opacity-25 pixel-carrot-float" style={{ animationDelay: '2s' }}>
+          <PixelCarrot size={28} />
+        </div>
+        <div className="absolute top-[45%] left-[5%] opacity-20 pixel-heart-float" style={{ animationDelay: '1s' }}>
+          <PixelHeart size={24} />
+        </div>
+        <div className="absolute top-[50%] right-[5%] opacity-20 pixel-star-float" style={{ animationDelay: '1.5s' }}>
+          <PixelStar size={28} />
         </div>
 
-        {/* Pixel divider */}
-        <div className="pixel-divider w-full" />
+        {/* Main login card */}
+        <div className="pixel-card p-8 flex flex-col items-center gap-5 relative z-10 max-w-sm w-full mx-4">
+          {/* Pixel border top decoration */}
+          <div className="pixel-border-top absolute top-0 left-0 right-0" />
 
-        {/* Login form */}
-        <form className="flex flex-col gap-3 w-full" onSubmit={handleSubmit}>
-          <div className="relative">
-            <input
-              type="text"
-              className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
-              placeholder="输入QQ号"
-              maxLength={TEXT_INPUT_LIMITS.qq}
-              {...qqInputHandlers}
-              onDrop={event => {
-                if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()
-              }}
-              onPaste={event => {
-                if (hasNonTextTransfer(event.clipboardData)) event.preventDefault()
-              }}
-              autoFocus
-            />
+          {/* Logo area */}
+          <div className="flex flex-col items-center gap-3 mt-2">
+            <h1 className="text-lg font-bold text-foreground pixel-font tracking-wider">
+              兔扇报名助手
+            </h1>
+            <p className="text-xs text-muted-foreground pixel-font" style={{ fontSize: '8px' }}>
+              RABBIT SIGNUP HELPER
+            </p>
           </div>
-          <div className="relative">
+
+          {/* Pixel divider */}
+          <div className="pixel-divider w-full" />
+
+          {/* Login form */}
+          <form className="flex flex-col gap-3 w-full" onSubmit={handleSubmit}>
+            <div className="relative">
+              <input
+                type="text"
+                className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
+                placeholder="输入QQ号"
+                maxLength={TEXT_INPUT_LIMITS.qq}
+                {...qqInputHandlers}
+                onDrop={event => {
+                  if (hasNonTextTransfer(event.dataTransfer)) event.preventDefault()
+                }}
+                onPaste={event => {
+                  if (hasNonTextTransfer(event.clipboardData)) event.preventDefault()
+                }}
+                autoFocus
+              />
+            </div>
+            {loginError && (
+              <p className="text-center text-xs text-destructive">{loginError}</p>
+            )}
+            <Button type="submit" className="pixel-btn w-full h-11 bg-primary text-primary-foreground font-bold tracking-wider hover:bg-primary/90" disabled={submitting}>
+              <PixelHeart size={16} className="mr-2" />
+              {submitting ? '登录中' : '开始冒险'}
+              <PixelHeart size={16} className="ml-2" />
+            </Button>
+          </form>
+
+          {/* Bottom decoration */}
+          <div className="flex items-center gap-2 mt-1">
+            <PixelStar size={12} className="opacity-50" />
+            <span className="text-[10px] text-muted-foreground pixel-font" style={{ fontSize: '7px' }}>
+              ENTER THE ADVENTURE
+            </span>
+            <PixelStar size={12} className="opacity-50" />
+          </div>
+        </div>
+      </div>
+      <Dialog open={!!adminPasswordQq} onOpenChange={(value) => { if (!value) closeAdminPasswordDialog() }}>
+        <DialogContent className="max-w-sm" hideClose={passwordSubmitting}>
+          <form className="flex flex-col gap-4" onSubmit={handleAdminPasswordSubmit}>
+            <DialogHeader>
+              <DialogTitle className="text-sm">管理员密码</DialogTitle>
+            </DialogHeader>
             <input
               type="password"
-              className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
-              placeholder="管理员密码"
+              className="pixel-input w-full h-11 px-4 py-2 text-sm text-center font-mono"
+              placeholder="密码"
               autoComplete="current-password"
               {...passwordInputHandlers}
               onDrop={event => {
@@ -1545,28 +1626,23 @@ function LoginPage({ onLogin }: { onLogin: (qq: string, adminPassword?: string) 
               onPaste={event => {
                 if (hasNonTextTransfer(event.clipboardData)) event.preventDefault()
               }}
+              autoFocus
             />
-          </div>
-          {loginError && (
-            <p className="text-center text-xs text-destructive">{loginError}</p>
-          )}
-          <Button type="submit" className="pixel-btn w-full h-11 bg-primary text-primary-foreground font-bold tracking-wider hover:bg-primary/90" disabled={submitting}>
-            <PixelHeart size={16} className="mr-2" />
-            {submitting ? '登录中' : '开始冒险'}
-            <PixelHeart size={16} className="ml-2" />
-          </Button>
-        </form>
-
-        {/* Bottom decoration */}
-        <div className="flex items-center gap-2 mt-1">
-          <PixelStar size={12} className="opacity-50" />
-          <span className="text-[10px] text-muted-foreground pixel-font" style={{ fontSize: '7px' }}>
-            ENTER THE ADVENTURE
-          </span>
-          <PixelStar size={12} className="opacity-50" />
-        </div>
-      </div>
-    </div>
+            {passwordError && (
+              <p className="text-center text-xs text-destructive">{passwordError}</p>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeAdminPasswordDialog} disabled={passwordSubmitting}>
+                取消
+              </Button>
+              <Button type="submit" disabled={passwordSubmitting || !adminPassword.trim()}>
+                {passwordSubmitting ? '验证中' : '登录'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

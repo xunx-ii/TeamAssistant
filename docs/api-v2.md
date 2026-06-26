@@ -56,6 +56,8 @@ This document defines the contract used by the split React frontend and the new 
 
 ## Team And Admin Endpoints
 
+- `GET /api/v2/admin/check?actorQq=...`
+  - Returns `{ ok, isAdmin, passwordConfigured }`. The frontend uses this to show the password dialog only for administrator QQs.
 - `POST /api/v2/admin/login`
   - Body: `{ actorQq, password }`.
   - Returns `{ ok, isAdmin, adminToken, expiresAtMs }`. The token is process-local and expires automatically.

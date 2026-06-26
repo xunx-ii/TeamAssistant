@@ -4083,6 +4083,16 @@ int main() {
         },
         {drogon::Get});
 
+    drogon::app().registerHandler("/api/v2/admin/check",
+        [admins](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            Value result;
+            result["ok"] = true;
+            result["isAdmin"] = admins->isAdmin(request->getParameter("actorQq"));
+            result["passwordConfigured"] = admins->hasPassword();
+            callback(jsonResponse(result));
+        },
+        {drogon::Get});
+
     drogon::app().registerHandler("/api/v2/admin/login",
         [admins, adminSessions](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
