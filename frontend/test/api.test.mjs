@@ -570,3 +570,28 @@ test('mutateData routes batch team creation to one atomic endpoint', async () =>
     assert.deepEqual(JSON.parse(calls[0].init.body), { teams })
   })
 })
+
+test('mutateData sends DPS martial art details for quick reserve', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({ ok: true, dataVersion: 2, lockVersion: 3 })
+  }, async () => {
+    const { mutateData } = await import(`../src/api.ts?case=${Date.now()}-quick-reserve-dps`)
+    const result = await mutateData({
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'DPS',
+      martialArtIndex: 3,
+      count: 2,
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(calls[0].input, '/api/v2/teams/team-1/quick-reserve')
+    assert.deepEqual(JSON.parse(calls[0].init.body), {
+      reserveType: 'DPS',
+      count: 2,
+      martialArtIndex: 3,
+    })
+  })
+})

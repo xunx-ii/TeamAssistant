@@ -1442,7 +1442,7 @@ public:
         return result;
     }
 
-    Value quickReserve(const std::string &teamId, const std::string &reserveType, int count) {
+    Value quickReserve(const std::string &teamId, const std::string &reserveType, int count, int martialArtIndex) {
         std::lock_guard lock(mutex_);
         ensureSchema();
         Value result;
@@ -1454,6 +1454,30 @@ public:
                 return conflictJson("notFound");
             }
 
+            count = std::clamp(count, 0, static_cast<int>(team["slots"].size()));
+            const bool isDpsReserve = reserveType == "DPS";
+            if (reserveType != "T" && reserveType != "治疗" && reserveType != "DPS" && reserveType != "boss") {
+                exec("ROLLBACK;");
+                return errorJson("Invalid reserve type");
+            }
+            if (isDpsReserve) {
+                const auto role = martialArtRoleForIndex(martialArtIndex);
+                if (!role.has_value() || *role != "DPS") {
+                    exec("ROLLBACK;");
+                    return errorJson("Invalid martial art");
+                }
+                if (team["config"]["onlyTnSignup"].asBool()) {
+                    exec("ROLLBACK;");
+                    return conflictJson("onlyTnSignup");
+                }
+            }
+            const auto matchesReserve = [&](const Value &slot) {
+                if (slot["status"].asString() != "fixed" || slot["fixedRole"].asString() != reserveType) {
+                    return false;
+                }
+                return !isDpsReserve ||
+                    (slot["fixedMartialArtIndex"].isInt() && slot["fixedMartialArtIndex"].asInt() == martialArtIndex);
+            };
             Value reserved = arrayOrEmpty(team["config"]["reservedSlots"]);
             Value order = quickReserveOrder(reserveType, static_cast<int>(team["slots"].size()));
             int current = 0;
@@ -1461,7 +1485,7 @@ public:
                 current = static_cast<int>(reserved.size());
             } else {
                 for (const auto &slot : team["slots"]) {
-                    if (slot["status"].asString() == "fixed" && slot["fixedRole"].asString() == reserveType) {
+                    if (matchesReserve(slot)) {
                         current += 1;
                     }
                 }
@@ -1505,7 +1529,7 @@ public:
                 std::vector<int> fixedSlots;
                 for (Json::ArrayIndex index = 0; index < team["slots"].size(); ++index) {
                     const Value &slot = team["slots"][index];
-                    if (slot["status"].asString() == "fixed" && slot["fixedRole"].asString() == reserveType) {
+                    if (matchesReserve(slot)) {
                         fixedSlots.push_back(static_cast<int>(index));
                     }
                 }
@@ -1529,6 +1553,9 @@ public:
                         slot = defaultSlot(slotIndex);
                         slot["status"] = "fixed";
                         slot["fixedRole"] = reserveType;
+                        if (isDpsReserve) {
+                            slot["fixedMartialArtIndex"] = martialArtIndex;
+                        }
                         need -= 1;
                     }
                 }
@@ -4642,7 +4669,8 @@ int main() {
                 const auto result = db->quickReserve(
                     teamId,
                     (*json)["reserveType"].asString(),
-                    static_cast<int>(toInt64((*json)["count"])));
+                    static_cast<int>(toInt64((*json)["count"])),
+                    (*json)["martialArtIndex"].isInt() ? (*json)["martialArtIndex"].asInt() : -1);
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));

@@ -4,6 +4,7 @@ import { applyMutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { normalizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { getWeekStartKey, normalizeWeekStartKey } from './week'
+import { martialArts } from './data/martialArts'
 
 export interface CreateTeamGuideValues {
   name: string
@@ -16,6 +17,10 @@ export interface CreateTeamGuideValues {
   reserveT: number
   reserveHealer: number
   reserveBoss: number
+  reserveDps?: Array<{
+    martialArtIndex: number
+    count: number
+  }>
 }
 
 export const DEFAULT_INITIAL_RESERVE_COUNTS = {
@@ -92,11 +97,30 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
     logs: [],
     userProfiles: {},
   }
-  const reserveMutations = [
-    { reserveType: 'T' as const, count: normalizeCreateTeamReserveCount(values.reserveT) },
-    { reserveType: '治疗' as const, count: normalizeCreateTeamReserveCount(values.reserveHealer) },
-    { reserveType: 'boss' as const, count: normalizeCreateTeamReserveCount(values.reserveBoss) },
+  const reserveMutations: Array<{
+    reserveType: 'T' | '治疗' | 'DPS' | 'boss'
+    count: number
+    martialArtIndex: number | null
+  }> = [
+    { reserveType: 'T' as const, count: normalizeCreateTeamReserveCount(values.reserveT), martialArtIndex: null },
+    { reserveType: '治疗' as const, count: normalizeCreateTeamReserveCount(values.reserveHealer), martialArtIndex: null },
+    { reserveType: 'boss' as const, count: normalizeCreateTeamReserveCount(values.reserveBoss), martialArtIndex: null },
   ]
+  if (!team.config.onlyTnSignup) {
+    const dpsCounts = new Map<number, number>()
+    for (const reserve of values.reserveDps ?? []) {
+      if (!Number.isInteger(reserve.martialArtIndex) || martialArts[reserve.martialArtIndex]?.role !== 'DPS') continue
+      const count = normalizeCreateTeamReserveCount(reserve.count)
+      if (count > 0) dpsCounts.set(reserve.martialArtIndex, count)
+    }
+    for (const [martialArtIndex, count] of dpsCounts) {
+      reserveMutations.push({
+        reserveType: 'DPS',
+        count,
+        martialArtIndex,
+      })
+    }
+  }
 
   for (const reserve of reserveMutations) {
     if (reserve.count <= 0) continue
@@ -105,6 +129,7 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
       teamId: team.id,
       reserveType: reserve.reserveType,
       count: reserve.count,
+      martialArtIndex: reserve.martialArtIndex,
     })
   }
 

@@ -863,6 +863,45 @@ test('quickReserve prioritizes healer slots from #16 to #20', () => {
   }
 })
 
+test('quickReserve manages each DPS martial art independently', () => {
+  for (const apply of [applyMutation, applyClientMutation]) {
+    const iceHeart = apply(createSnapshot(), {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'DPS',
+      martialArtIndex: 3,
+      count: 2,
+    })
+    const withTiance = apply(iceHeart, {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'DPS',
+      martialArtIndex: 0,
+      count: 3,
+    })
+    const shrunkIceHeart = apply(withTiance, {
+      type: 'quickReserve',
+      teamId: 'team-1',
+      reserveType: 'DPS',
+      martialArtIndex: 3,
+      count: 1,
+    })
+
+    assert.deepEqual(
+      shrunkIceHeart.teams[0].slots
+        .filter(slot => slot.fixedMartialArtIndex === 3)
+        .map(slot => slot.index + 1),
+      [1],
+    )
+    assert.deepEqual(
+      shrunkIceHeart.teams[0].slots
+        .filter(slot => slot.fixedMartialArtIndex === 0)
+        .map(slot => slot.index + 1),
+      [3, 4, 5],
+    )
+  }
+})
+
 test('quickReserve shrink keeps the preferred role slots first', () => {
   for (const apply of [applyMutation, applyClientMutation]) {
     const expanded = apply(createSnapshot(), {

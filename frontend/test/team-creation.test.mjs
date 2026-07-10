@@ -36,6 +36,7 @@ function createGuide(overrides = {}) {
     reserveT: 2,
     reserveHealer: 2,
     reserveBoss: 1,
+    reserveDps: [],
     ...overrides,
   }
 }
@@ -57,6 +58,28 @@ test('createTeamFromGuide imports selected presets and applies initial slot limi
   assert.equal(team.slots[0].status, 'reserved')
 })
 
+test('createTeamFromGuide applies multiple DPS martial art limits', () => {
+  const team = createTeamFromGuide(createGuide({
+    reserveDps: [
+      { martialArtIndex: 3, count: 2 },
+      { martialArtIndex: 0, count: 3 },
+    ],
+  }), presets, now)
+
+  assert.deepEqual(
+    team.slots
+      .filter(slot => slot.status === 'fixed' && slot.fixedMartialArtIndex === 3)
+      .map(slot => slot.index + 1),
+    [2, 3],
+  )
+  assert.deepEqual(
+    team.slots
+      .filter(slot => slot.status === 'fixed' && slot.fixedMartialArtIndex === 0)
+      .map(slot => slot.index + 1),
+    [4, 5, 6],
+  )
+})
+
 test('createTeamFromGuide stores signup rule switches', () => {
   const team = createTeamFromGuide(createGuide({
     onlyTnSignup: true,
@@ -73,6 +96,15 @@ test('createTeamFromGuide stores signup rule switches', () => {
     logs: [],
     userProfiles: {},
   }), true)
+})
+
+test('createTeamFromGuide ignores DPS limits for TN-only teams', () => {
+  const team = createTeamFromGuide(createGuide({
+    onlyTnSignup: true,
+    reserveDps: [{ martialArtIndex: 3, count: 2 }],
+  }), presets, now)
+
+  assert.equal(team.slots.some(slot => slot.fixedMartialArtIndex === 3), false)
 })
 
 test('createTeamsFromGuide creates numbered teams with identical settings', () => {

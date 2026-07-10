@@ -525,7 +525,11 @@ function routeMutation(mutation: Mutation, actorQq?: string | null): { url: stri
     case 'quickReserve':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}/quick-reserve`,
-        init: jsonRequest('POST', withActor({ reserveType: mutation.reserveType, count: mutation.count }, actorQq)),
+        init: jsonRequest('POST', withActor({
+          reserveType: mutation.reserveType,
+          count: mutation.count,
+          martialArtIndex: mutation.martialArtIndex,
+        }, actorQq)),
       }
 
     case 'signupSlot':

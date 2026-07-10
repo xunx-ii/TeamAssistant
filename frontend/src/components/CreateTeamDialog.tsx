@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { SubsidyPresetLoader } from './SubsidyPresetLoader'
 import { TeamWeekSelector } from './TeamWeekSelector'
 import { formatSubsidyPresetPreview } from '../subsidyPresetPreview'
@@ -15,6 +16,11 @@ import {
   type CreateTeamGuideValues,
 } from '../teamCreation'
 import { getCurrentWeekStartKey } from '../week'
+import { getMartialArtLabel, martialArts } from '../data/martialArts'
+
+const dpsMartialArtOptions = martialArts
+  .map((martialArt, index) => ({ martialArt, index }))
+  .filter(option => option.martialArt.role === 'DPS')
 
 interface Props {
   open: boolean
@@ -36,6 +42,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
   const [reserveT, setReserveT] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
   const [reserveHealer, setReserveHealer] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
   const [reserveBoss, setReserveBoss] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveBoss)
+  const [reserveDps, setReserveDps] = useState<Array<{ martialArtIndex: number; count: number }>>([])
   const loadedSubsidyPresets = useMemo(() => {
     const loadedIds = new Set(loadedPresetIds)
     return subsidyPresets.filter(preset => loadedIds.has(preset.id))
@@ -63,6 +70,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     setReserveT(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
     setReserveHealer(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
     setReserveBoss(DEFAULT_INITIAL_RESERVE_COUNTS.reserveBoss)
+    setReserveDps([])
   }
 
   const handleSubmit = (e: FormEvent) => {
@@ -81,6 +89,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
       reserveT,
       reserveHealer,
       reserveBoss,
+      reserveDps: onlyTnSignup ? [] : reserveDps,
     })
     reset()
   }
@@ -101,6 +110,21 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
   const handleWeekStartChange = (value: string) => {
     setWeekTouched(true)
     setWeekStart(value)
+  }
+
+  const addDpsReserve = () => {
+    const selectedIndexes = new Set(reserveDps.map(item => item.martialArtIndex))
+    const option = dpsMartialArtOptions.find(item => !selectedIndexes.has(item.index))
+    if (!option) return
+    setReserveDps(current => [...current, { martialArtIndex: option.index, count: 1 }])
+  }
+
+  const updateDpsReserve = (rowIndex: number, patch: Partial<{ martialArtIndex: number; count: number }>) => {
+    setReserveDps(current => current.map((item, index) => index === rowIndex ? { ...item, ...patch } : item))
+  }
+
+  const removeDpsReserve = (rowIndex: number) => {
+    setReserveDps(current => current.filter((_, index) => index !== rowIndex))
   }
 
   return (
@@ -187,40 +211,102 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
           </div>
 
           {quickReserve && (
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="create-team-reserve-t">T</Label>
-                <Input
-                  id="create-team-reserve-t"
-                  type="number"
-                  min={0}
-                  max={25}
-                  value={reserveT}
-                  onChange={e => setReserveT(normalizeCreateTeamReserveCount(e.target.value))}
-                />
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="create-team-reserve-t">T</Label>
+                  <Input
+                    id="create-team-reserve-t"
+                    type="number"
+                    min={0}
+                    max={25}
+                    value={reserveT}
+                    onChange={e => setReserveT(normalizeCreateTeamReserveCount(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="create-team-reserve-healer">奶</Label>
+                  <Input
+                    id="create-team-reserve-healer"
+                    type="number"
+                    min={0}
+                    max={25}
+                    value={reserveHealer}
+                    onChange={e => setReserveHealer(normalizeCreateTeamReserveCount(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="create-team-reserve-boss">老板</Label>
+                  <Input
+                    id="create-team-reserve-boss"
+                    type="number"
+                    min={0}
+                    max={25}
+                    value={reserveBoss}
+                    onChange={e => setReserveBoss(normalizeCreateTeamReserveCount(e.target.value))}
+                  />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="create-team-reserve-healer">奶</Label>
-                <Input
-                  id="create-team-reserve-healer"
-                  type="number"
-                  min={0}
-                  max={25}
-                  value={reserveHealer}
-                  onChange={e => setReserveHealer(normalizeCreateTeamReserveCount(e.target.value))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="create-team-reserve-boss">老板</Label>
-                <Input
-                  id="create-team-reserve-boss"
-                  type="number"
-                  min={0}
-                  max={25}
-                  value={reserveBoss}
-                  onChange={e => setReserveBoss(normalizeCreateTeamReserveCount(e.target.value))}
-                />
-              </div>
+              {!onlyTnSignup && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label>DPS心法</Label>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      disabled={reserveDps.length >= dpsMartialArtOptions.length}
+                      onClick={addDpsReserve}
+                    >
+                      添加
+                    </Button>
+                  </div>
+                  {reserveDps.map((reserve, rowIndex) => {
+                    const selectedByOtherRows = new Set(
+                      reserveDps
+                        .filter((_, index) => index !== rowIndex)
+                        .map(item => item.martialArtIndex),
+                    )
+                    return (
+                      <div key={`${rowIndex}-${reserve.martialArtIndex}`} className="grid grid-cols-[minmax(0,1fr)_72px_auto] items-end gap-2">
+                        <Select
+                          value={String(reserve.martialArtIndex)}
+                          onValueChange={value => updateDpsReserve(rowIndex, { martialArtIndex: Number.parseInt(value, 10) })}
+                        >
+                          <SelectTrigger aria-label={`DPS心法 ${rowIndex + 1}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {dpsMartialArtOptions
+                              .filter(option => option.index === reserve.martialArtIndex || !selectedByOtherRows.has(option.index))
+                              .map(option => (
+                                <SelectItem key={option.index} value={String(option.index)}>
+                                  {getMartialArtLabel(option.martialArt)}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                        <div className="space-y-1.5">
+                          <Label htmlFor={`create-team-reserve-dps-count-${rowIndex}`}>数量</Label>
+                          <Input
+                            id={`create-team-reserve-dps-count-${rowIndex}`}
+                            type="number"
+                            min={1}
+                            max={25}
+                            value={reserve.count}
+                            onChange={event => updateDpsReserve(rowIndex, {
+                              count: Math.max(1, normalizeCreateTeamReserveCount(event.target.value)),
+                            })}
+                          />
+                        </div>
+                        <Button type="button" size="sm" variant="outline" onClick={() => removeDpsReserve(rowIndex)}>
+                          移除
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 

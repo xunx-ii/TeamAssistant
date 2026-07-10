@@ -34,7 +34,13 @@ export type Mutation =
       assignQQ?: string
       actorQq?: string
     }
-  | { type: 'quickReserve'; teamId: string; reserveType: 'T' | '治疗' | 'boss'; count: number }
+  | {
+      type: 'quickReserve'
+      teamId: string
+      reserveType: 'T' | '治疗' | 'DPS' | 'boss'
+      count: number
+      martialArtIndex?: number | null
+    }
   | {
       type: 'signupSlot'
       teamId: string
@@ -229,7 +235,7 @@ function uniqueSorted(values: number[]) {
   return [...new Set(values)].sort((left, right) => left - right)
 }
 
-function getQuickReserveOrder(reserveType: 'T' | '治疗' | 'boss', slotCount: number) {
+function getQuickReserveOrder(reserveType: 'T' | '治疗' | 'DPS' | 'boss', slotCount: number) {
   const allSlots = Array.from({ length: slotCount }, (_, index) => index)
   const priorityStart = reserveType === 'T' ? 20 : reserveType === '治疗' ? 15 : null
   if (priorityStart === null) return allSlots
@@ -636,15 +642,30 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 
     case 'quickReserve': {
       const team = getTeamOrThrow(next, mutation.teamId)
+      const count = Math.min(team.slots.length, Math.max(0, Math.trunc(mutation.count)))
+      const requestedMartialArtIndex = mutation.martialArtIndex
+      const martialArtIndex = mutation.reserveType === 'DPS' &&
+        typeof requestedMartialArtIndex === 'number' &&
+        Number.isInteger(requestedMartialArtIndex)
+        ? requestedMartialArtIndex
+        : null
+      if (mutation.reserveType === 'DPS' && martialArtIndex === null) {
+        return next
+      }
+      const matchesReserve = (slot: Slot) => (
+        slot.status === 'fixed' &&
+        slot.fixedRole === mutation.reserveType &&
+        (mutation.reserveType !== 'DPS' || slot.fixedMartialArtIndex === martialArtIndex)
+      )
       let reserved = [...team.config.reservedSlots]
       const reserveOrder = getQuickReserveOrder(mutation.reserveType, team.slots.length)
       const current = mutation.reserveType === 'boss'
         ? reserved.length
-        : team.slots.filter(slot => slot.status === 'fixed' && slot.fixedRole === mutation.reserveType).length
+        : team.slots.filter(matchesReserve).length
 
       if (mutation.reserveType === 'boss') {
-        if (mutation.count < current) {
-          const toRemove = reserved.slice(mutation.count)
+        if (count < current) {
+          const toRemove = reserved.slice(count)
           reserved = reserved.filter(index => !toRemove.includes(index))
           for (const slotIndex of toRemove) {
             const slot = team.slots[slotIndex]
@@ -655,7 +676,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
             slot.fixedMartialArtIndex = null
           }
         } else {
-          let need = mutation.count - current
+          let need = count - current
           for (let index = 0; index < team.slots.length && need > 0; index += 1) {
             const slot = team.slots[index]
             if (slot.status === 'empty' && !reserved.includes(index)) {
@@ -668,16 +689,16 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
             }
           }
         }
-      } else if (mutation.count < current) {
+      } else if (count < current) {
         const reserveRank = new Map(reserveOrder.map((slotIndex, rank) => [slotIndex, rank]))
         const toReset = team.slots
-          .filter(slot => slot.status === 'fixed' && slot.fixedRole === mutation.reserveType)
+          .filter(matchesReserve)
           .sort((left, right) => {
             const leftRank = reserveRank.get(left.index) ?? left.index
             const rightRank = reserveRank.get(right.index) ?? right.index
             return leftRank - rightRank
           })
-          .slice(mutation.count)
+          .slice(count)
         for (const slot of toReset) {
           slot.status = 'empty'
           slot.member = null
@@ -685,7 +706,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
           slot.fixedMartialArtIndex = null
         }
       } else {
-        let need = mutation.count - current
+        let need = count - current
         for (const index of reserveOrder) {
           if (need <= 0) break
           const slot = team.slots[index]
@@ -693,7 +714,7 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
             slot.status = 'fixed'
             slot.member = null
             slot.fixedRole = mutation.reserveType
-            slot.fixedMartialArtIndex = null
+            slot.fixedMartialArtIndex = mutation.reserveType === 'DPS' ? martialArtIndex : null
             need -= 1
           }
         }
