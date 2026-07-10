@@ -1075,6 +1075,35 @@ public:
         return result;
     }
 
+    Value createTeams(const Value &teams) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        if (!teams.isArray() || teams.empty() || teams.size() > 50) {
+            return errorJson("Invalid teams");
+        }
+        for (const auto &team : teams) {
+            if (!team.isObject() || !team["id"].isString() || team["id"].asString().empty()) {
+                return errorJson("Invalid team");
+            }
+        }
+
+        Value result;
+        exec("BEGIN IMMEDIATE;");
+        try {
+            int sortOrder = nextTeamSortOrderUnlocked();
+            for (const auto &team : teams) {
+                insertTeamUnlocked(normalizeTeam(team, "默认团队"), sortOrder++);
+            }
+            bumpDataVersionAndClearPatchesUnlocked();
+            result = mutationVersionsUnlocked();
+            exec("COMMIT;");
+        } catch (...) {
+            exec("ROLLBACK;");
+            throw;
+        }
+        return result;
+    }
+
     Value deleteTeam(const std::string &teamId, const Value &fallbackTeam) {
         std::lock_guard lock(mutex_);
         ensureSchema();
@@ -4298,6 +4327,23 @@ int main() {
             if (!requireAdmin(request, *json, callback)) return;
             try {
                 const auto result = db->createTeam((*json)["team"]);
+                respondMutation(std::move(callback), result);
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler("/api/v2/teams/batch",
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            if (json == nullptr || !(*json)["teams"].isArray()) {
+                callback(jsonResponse(errorJson("Missing teams"), drogon::k400BadRequest));
+                return;
+            }
+            if (!requireAdmin(request, *json, callback)) return;
+            try {
+                const auto result = db->createTeams((*json)["teams"]);
                 respondMutation(std::move(callback), result);
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));

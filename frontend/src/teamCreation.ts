@@ -7,6 +7,7 @@ import { getWeekStartKey, normalizeWeekStartKey } from './week'
 
 export interface CreateTeamGuideValues {
   name: string
+  count?: number
   weekStart: string
   subsidyPresetIds: string[]
   onlyTnSignup: boolean
@@ -23,10 +24,18 @@ export const DEFAULT_INITIAL_RESERVE_COUNTS = {
   reserveBoss: 0,
 } as const
 
+export const MAX_BATCH_TEAM_COUNT = 50
+
 export function normalizeCreateTeamReserveCount(value: unknown) {
   const number = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10)
   if (!Number.isFinite(number)) return 0
   return Math.min(25, Math.max(0, Math.trunc(number)))
+}
+
+export function normalizeTeamBatchCount(value: unknown) {
+  const number = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(number)) return 1
+  return Math.min(MAX_BATCH_TEAM_COUNT, Math.max(1, Math.trunc(number)))
 }
 
 export function cloneSubsidyTypes(subsidyTypes: SubsidyType[]) {
@@ -34,6 +43,19 @@ export function cloneSubsidyTypes(subsidyTypes: SubsidyType[]) {
     ...type,
     levels: type.levels.map(level => ({ ...level })),
   }))
+}
+
+function createBatchTeamName(name: string, index: number, count: number) {
+  const normalizedName = normalizeTeamName(
+    normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName }),
+    '默认团队',
+  )
+  if (count === 1) return normalizedName
+
+  const suffix = ` ${index + 1}`
+  const maxBaseLength = Math.max(1, TEXT_INPUT_LIMITS.teamName - Array.from(suffix).length)
+  const base = Array.from(normalizedName).slice(0, maxBaseLength).join('')
+  return normalizeTeamName(`${base}${suffix}`, `团队 ${index + 1}`)
 }
 
 export function createDefaultTeam(name = '默认团队', options: { weekStart?: string; subsidyTypes?: SubsidyType[] } = {}): Team {
@@ -87,4 +109,46 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
   }
 
   return snapshot.teams[0] ?? team
+}
+
+export function createTeamsFromGuide(values: CreateTeamGuideValues, subsidyPresets: SubsidyType[], now: Date | number = new Date()): Team[] {
+  const count = normalizeTeamBatchCount(values.count)
+  return Array.from({ length: count }, (_, index) => createTeamFromGuide({
+    ...values,
+    count: 1,
+    name: createBatchTeamName(values.name, index, count),
+  }, subsidyPresets, now))
+}
+
+export function createTeamCopies(source: Team, name: string, countValue: unknown): Team[] {
+  const count = normalizeTeamBatchCount(countValue)
+  const reservedSlots = [...source.config.reservedSlots]
+
+  return Array.from({ length: count }, (_, copyIndex) => {
+    const team: Team = {
+      id: generateId(),
+      name: createBatchTeamName(name, copyIndex, count),
+      note: source.note,
+      config: {
+        ...source.config,
+        reservedSlots: [...reservedSlots],
+        locked: false,
+      },
+      slots: source.slots.map(slot => {
+        const isFixed = slot.fixedRole !== null || slot.fixedMartialArtIndex !== null
+        const isReserved = reservedSlots.includes(slot.index)
+        return {
+          index: slot.index,
+          status: isFixed ? 'fixed' : isReserved ? 'reserved' : 'empty',
+          member: null,
+          fixedRole: slot.fixedRole,
+          fixedMartialArtIndex: slot.fixedMartialArtIndex,
+        }
+      }),
+    }
+    const weekStart = normalizeWeekStartKey(source.weekStart)
+    if (weekStart) team.weekStart = weekStart
+    if (source.subsidyTypes?.length) team.subsidyTypes = cloneSubsidyTypes(source.subsidyTypes)
+    return team
+  })
 }

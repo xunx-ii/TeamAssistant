@@ -11,6 +11,7 @@ import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../tex
 import {
   DEFAULT_INITIAL_RESERVE_COUNTS,
   normalizeCreateTeamReserveCount,
+  normalizeTeamBatchCount,
   type CreateTeamGuideValues,
 } from '../teamCreation'
 import { getCurrentWeekStartKey } from '../week'
@@ -24,6 +25,7 @@ interface Props {
 
 export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: Props) {
   const [name, setName] = useState('')
+  const [count, setCount] = useState(1)
   const [weekStart, setWeekStart] = useState(getCurrentWeekStartKey)
   const [weekTouched, setWeekTouched] = useState(false)
   const [presetDraftIds, setPresetDraftIds] = useState<Set<string>>(() => new Set())
@@ -50,6 +52,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
 
   const reset = () => {
     setName('')
+    setCount(1)
     setWeekStart(getCurrentWeekStartKey())
     setWeekTouched(false)
     setPresetDraftIds(new Set())
@@ -69,6 +72,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     const resolvedWeekStart = weekTouched ? weekStart : getCurrentWeekStartKey()
     onConfirm({
       name: trimmed,
+      count,
       weekStart: resolvedWeekStart,
       subsidyPresetIds: loadedPresetIds,
       onlyTnSignup,
@@ -115,6 +119,18 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
               value={name}
               maxLength={TEXT_INPUT_LIMITS.teamName}
               onChange={e => setName(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.teamName }))}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="create-team-count">创建数量</Label>
+            <Input
+              id="create-team-count"
+              type="number"
+              min={1}
+              max={50}
+              value={count}
+              onChange={e => setCount(normalizeTeamBatchCount(e.target.value))}
             />
           </div>
 

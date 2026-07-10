@@ -550,3 +550,23 @@ test('mutateData routes slot signup to atomic v2 member endpoint', async () => {
     })
   })
 })
+
+test('mutateData routes batch team creation to one atomic endpoint', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({ ok: true, dataVersion: 2, lockVersion: 3 })
+  }, async () => {
+    const { mutateData } = await import(`../src/api.ts?case=${Date.now()}-batch-create-teams`)
+    const teams = [
+      { id: 'team-2', name: '批量团 1' },
+      { id: 'team-3', name: '批量团 2' },
+    ]
+    const result = await mutateData({ type: 'createTeams', teams })
+
+    assert.equal(result.ok, true)
+    assert.equal(calls[0].input, '/api/v2/teams/batch')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.deepEqual(JSON.parse(calls[0].init.body), { teams })
+  })
+})

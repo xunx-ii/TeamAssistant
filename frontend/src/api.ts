@@ -449,6 +449,9 @@ function routeMutation(mutation: Mutation, actorQq?: string | null): { url: stri
     case 'createTeam':
       return { url: `${API}/teams`, init: jsonRequest('POST', withActor({ team: mutation.team }, actorQq)) }
 
+    case 'createTeams':
+      return { url: `${API}/teams/batch`, init: jsonRequest('POST', withActor({ teams: mutation.teams }, actorQq)) }
+
     case 'deleteTeam':
       return {
         url: `${API}/teams/${encodePath(mutation.teamId)}`,

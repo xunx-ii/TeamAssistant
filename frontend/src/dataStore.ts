@@ -14,6 +14,7 @@ export type LockToken = number | string
 
 export type Mutation =
   | { type: 'createTeam'; team: Team }
+  | { type: 'createTeams'; teams: Team[] }
   | { type: 'deleteTeam'; teamId: string; fallbackTeam?: Team }
   | { type: 'archiveTeam'; teamId: string; archivedBy: string; archivedAt?: number; fallbackTeam?: Team }
   | { type: 'restoreArchivedTeam'; archiveId: string; actorQq: string; restoredAt?: number }
@@ -487,6 +488,20 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
       if (weekStart) team.weekStart = weekStart
       else delete team.weekStart
       next.teams.push(team)
+      return next
+    }
+
+    case 'createTeams': {
+      for (const sourceTeam of mutation.teams) {
+        const team = {
+          ...sourceTeam,
+          name: normalizeTeamName(sourceTeam.name, '默认团队'),
+        }
+        const weekStart = normalizeWeekStart(sourceTeam.weekStart)
+        if (weekStart) team.weekStart = weekStart
+        else delete team.weekStart
+        next.teams.push(team)
+      }
       return next
     }
 

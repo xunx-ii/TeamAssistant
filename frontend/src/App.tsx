@@ -17,7 +17,7 @@ import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
 import { loadSubsidyPresets, saveSubsidyPresets } from './subsidyPresets'
-import { createDefaultTeam, createTeamFromGuide, type CreateTeamGuideValues } from './teamCreation'
+import { createDefaultTeam, createTeamCopies, createTeamsFromGuide, type CreateTeamGuideValues } from './teamCreation'
 import { findUniqueSignupConflictSlot } from './signupRules'
 import { getCurrentWeekStartKey } from './week'
 import { startAdaptivePoll } from './polling'
@@ -34,6 +34,7 @@ import { SignupModal } from './components/SignupModal'
 import { CancelModal } from './components/CancelModal'
 import { CancellationNotice } from './components/CancellationNotice'
 import { CreateTeamDialog } from './components/CreateTeamDialog'
+import { CopyTeamDialog } from './components/CopyTeamDialog'
 import { ArchiveDialog } from './components/ArchiveDialog'
 import { OperationLogDialog } from './components/OperationLogDialog'
 import { NicknameDialog } from './components/NicknameDialog'
@@ -157,6 +158,7 @@ function App() {
   const [cancelSlot, setCancelSlot] = useState<number | null>(null)
   const [setRoleSlot, setSetRoleSlot] = useState<number | null>(null)
   const [showCreateTeam, setShowCreateTeam] = useState(false)
+  const [showCopyTeam, setShowCopyTeam] = useState(false)
   const [showArchives, setShowArchives] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [showSubsidy, setShowSubsidy] = useState(false)
@@ -489,6 +491,7 @@ function App() {
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
+    setShowCopyTeam(false)
     setAlertOptions(null)
     setSlotRoleError('')
   }
@@ -727,12 +730,22 @@ function App() {
   }, [activeTeam, runMutation])
 
   const handleCreateTeam = async (values: CreateTeamGuideValues) => {
-    const team = createTeamFromGuide(values, subsidyPresets)
-    const result = await runMutation({ type: 'createTeam', team })
+    const createdTeams = createTeamsFromGuide(values, subsidyPresets)
+    const result = await runMutation({ type: 'createTeams', teams: createdTeams })
     if (result.ok) {
-      setActiveTeamId(team.id)
+      setActiveTeamId(createdTeams[0]?.id ?? '')
       clearModals()
       setShowCreateTeam(false)
+    }
+  }
+
+  const handleCopyTeam = async (values: { name: string; count: number }) => {
+    if (!activeTeam) return
+    const createdTeams = createTeamCopies(activeTeam, values.name, values.count)
+    const result = await runMutation({ type: 'createTeams', teams: createdTeams })
+    if (result.ok) {
+      setActiveTeamId(createdTeams[0]?.id ?? activeTeam.id)
+      setShowCopyTeam(false)
     }
   }
 
@@ -1185,6 +1198,15 @@ function App() {
           onClose={() => setShowCreateTeam(false)}
         />
       )}
+      {showCopyTeam && activeTeam && (
+        <CopyTeamDialog
+          key={activeTeam.id}
+          open={showCopyTeam}
+          sourceName={activeTeam.name}
+          onConfirm={handleCopyTeam}
+          onClose={() => setShowCopyTeam(false)}
+        />
+      )}
       <OperationLogDialog
         open={showLogs}
         teamName={activeTeam?.name ?? ''}
@@ -1406,6 +1428,7 @@ function App() {
                   }}
                   onUpdateSignupRules={handleUpdateSignupRules}
                   onViewLogs={() => setShowLogs(true)}
+                  onCopyTeam={() => setShowCopyTeam(true)}
                   onArchive={handleArchiveTeam}
                   onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
                 />

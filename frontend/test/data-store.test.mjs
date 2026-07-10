@@ -47,6 +47,24 @@ function fixedRoleSlotNumbers(snapshot, role) {
     .map(slot => slot.index + 1)
 }
 
+test('applyMutation appends multiple teams in one mutation', () => {
+  const snapshot = createSnapshot()
+  const teams = [1, 2].map(index => ({
+    ...structuredClone(snapshot.teams[0]),
+    id: `team-${index + 1}`,
+    name: `批量团 ${index}`,
+  }))
+
+  const next = applyMutation(snapshot, {
+    type: 'createTeams',
+    teams,
+  })
+
+  assert.deepEqual(next.teams.map(team => team.name), ['一团', '批量团 1', '批量团 2'])
+  assert.equal(next.teams[1].slots.length, 25)
+  assert.equal(next.teams[2].config.locked, false)
+})
+
 test('applyMutation preserves concurrent changes on different slots', () => {
   const base = createSnapshot()
   const first = applyMutation(base, {

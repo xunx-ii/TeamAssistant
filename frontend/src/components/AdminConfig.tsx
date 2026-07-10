@@ -21,11 +21,12 @@ interface Props {
   onToggleLock: () => void
   onUpdateSignupRules: (rules: { onlyTnSignup: boolean; uniqueQqSignup: boolean }) => void
   onViewLogs: () => void
+  onCopyTeam: () => void
   onArchive: () => void
   onOpenSubsidyConfig: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onArchive, onOpenSubsidyConfig }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -60,6 +61,9 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
         </Button>
         <Button variant="outline" size="sm" onClick={onOpenSubsidyConfig}>
           补贴设置
+        </Button>
+        <Button variant="outline" size="sm" onClick={onCopyTeam}>
+          复制团队
         </Button>
       </div>
       {open && (
