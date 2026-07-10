@@ -834,12 +834,16 @@ export function applyServerPatch(snapshot: Snapshot, patch: unknown): Snapshot {
       const patchedSlot = patch.slot
       slot.status = toText(patchedSlot.status, slot.status) as typeof slot.status
       slot.member = isPlainObject(patchedSlot.member) ? normalizeMember(patchedSlot.member) : null
-      slot.fixedRole = patchedSlot.fixedRole === 'T' || patchedSlot.fixedRole === '治疗' || patchedSlot.fixedRole === 'DPS'
-        ? patchedSlot.fixedRole
-        : null
-      slot.fixedMartialArtIndex = typeof patchedSlot.fixedMartialArtIndex === 'number'
-        ? patchedSlot.fixedMartialArtIndex
-        : null
+      if (Object.prototype.hasOwnProperty.call(patchedSlot, 'fixedRole')) {
+        slot.fixedRole = patchedSlot.fixedRole === 'T' || patchedSlot.fixedRole === '治疗' || patchedSlot.fixedRole === 'DPS'
+          ? patchedSlot.fixedRole
+          : null
+      }
+      if (Object.prototype.hasOwnProperty.call(patchedSlot, 'fixedMartialArtIndex')) {
+        slot.fixedMartialArtIndex = typeof patchedSlot.fixedMartialArtIndex === 'number'
+          ? patchedSlot.fixedMartialArtIndex
+          : null
+      }
     }
 
     if (isPlainObject(patch.cancellation)) {

@@ -120,6 +120,7 @@ function mutationResultErrorMessage(result: MutationResult) {
   if (result.reason === 'teamLocked') return '表格已被管理员锁定'
   if (result.reason === 'expired') return '该位置已被其他人抢占，请刷新后重试'
   if (result.reason === 'slotChanged') return '该位置内容已变更，请刷新后重试'
+  if (result.reason === 'slotRestriction') return '所选心法不符合该位置限制'
   if (result.reason === 'onlyTnSignup') return '当前团队仅限T/奶报名'
   if (result.reason === 'uniqueQqSignup') return '该QQ已在当前团队报名'
   if (result.reason === 'selfSignupOnly') return '该团队每人仅能报名一次，不能代报名'
@@ -549,6 +550,8 @@ function App() {
         setMutationError('该位置已被其他人抢占，请刷新后重试')
       } else if (result.reason === 'slotChanged') {
         setMutationError('该位置内容已变更，请刷新后重试')
+      } else if (result.reason === 'slotRestriction') {
+        setMutationError('所选心法不符合该位置限制')
       } else if (result.reason === 'onlyTnSignup') {
         setMutationError('当前团队仅限T/奶报名')
       } else if (result.reason === 'uniqueQqSignup') {

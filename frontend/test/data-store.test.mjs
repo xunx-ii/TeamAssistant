@@ -133,6 +133,39 @@ test('applyServerPatch applies slot update, log, and cancellation incrementally'
   assert.equal(next.logs[0].id, 'log-1')
 })
 
+test('applyServerPatch preserves fixed martial art restrictions omitted by partial slot patches', () => {
+  const snapshot = createSnapshot()
+  snapshot.teams[0].slots[3] = {
+    index: 3,
+    status: 'occupied',
+    member: {
+      qq: '10001',
+      martialArtIndex: '3',
+      gearScore: '1200',
+      characterId: '冰心角色',
+      note: '',
+    },
+    fixedRole: 'DPS',
+    fixedMartialArtIndex: 3,
+  }
+
+  const next = applyServerPatch(snapshot, {
+    type: 'leaveSlot',
+    teamId: 'team-1',
+    slotIndex: 3,
+    slot: {
+      index: 3,
+      status: 'fixed',
+      member: null,
+    },
+  })
+
+  assert.equal(next.teams[0].slots[3].status, 'fixed')
+  assert.equal(next.teams[0].slots[3].member, null)
+  assert.equal(next.teams[0].slots[3].fixedRole, 'DPS')
+  assert.equal(next.teams[0].slots[3].fixedMartialArtIndex, 3)
+})
+
 test('validateSlotMutationLock rejects expired slot locks', () => {
   const slotLocks = new Map([
     ['team-1:0', { qq: '10001', timestamp: 1000 }],
@@ -241,44 +274,49 @@ test('cancelSlot appends cancellation and restores reserved status', () => {
   assert.match(next.logs[0].action, /取消 #3/)
 })
 
-test('cancelSlot restores fixed slot after signup and hydration', () => {
+test('cancelSlot restores fixed role and martial art restrictions after signup and hydration', () => {
   for (const [apply, hydrate] of [
     [applyMutation, normalizeHydratableData],
     [applyClientMutation, normalizeClientHydratableData],
   ]) {
-    const fixed = apply(createSnapshot(), {
-      type: 'setSlotRole',
-      teamId: 'team-1',
-      slotIndex: 4,
-      role: 'T',
-      martialArtIndex: null,
-    })
-    const signed = apply(fixed, {
-      type: 'signupSlot',
-      teamId: 'team-1',
-      slotIndex: 4,
-      member: {
-        qq: '10001',
-        martialArtIndex: '1',
-        gearScore: '1200',
-        characterId: 'Tank',
-        note: '',
-      },
-    })
-    const hydrated = hydrate(signed)
-    const cancelled = apply(hydrated, {
-      type: 'cancelSlot',
-      teamId: 'team-1',
-      slotIndex: 4,
-      reason: '时间冲突',
-      cancelledBy: 'admin',
-      timestamp: 123456,
-    })
+    for (const restriction of [
+      { role: 'T', martialArtIndex: null, memberMartialArtIndex: '1', characterId: '铁牢角色' },
+      { role: 'DPS', martialArtIndex: 3, memberMartialArtIndex: '3', characterId: '冰心角色' },
+    ]) {
+      const fixed = apply(createSnapshot(), {
+        type: 'setSlotRole',
+        teamId: 'team-1',
+        slotIndex: 4,
+        role: restriction.role,
+        martialArtIndex: restriction.martialArtIndex,
+      })
+      const signed = apply(fixed, {
+        type: 'signupSlot',
+        teamId: 'team-1',
+        slotIndex: 4,
+        member: {
+          qq: '10001',
+          martialArtIndex: restriction.memberMartialArtIndex,
+          gearScore: '1200',
+          characterId: restriction.characterId,
+          note: '',
+        },
+      })
+      const hydrated = hydrate(signed)
+      const cancelled = apply(hydrated, {
+        type: 'cancelSlot',
+        teamId: 'team-1',
+        slotIndex: 4,
+        reason: '时间冲突',
+        cancelledBy: 'admin',
+        timestamp: 123456,
+      })
 
-    assert.equal(cancelled.teams[0].slots[4].status, 'fixed')
-    assert.equal(cancelled.teams[0].slots[4].member, null)
-    assert.equal(cancelled.teams[0].slots[4].fixedRole, 'T')
-    assert.equal(cancelled.teams[0].slots[4].fixedMartialArtIndex, null)
+      assert.equal(cancelled.teams[0].slots[4].status, 'fixed')
+      assert.equal(cancelled.teams[0].slots[4].member, null)
+      assert.equal(cancelled.teams[0].slots[4].fixedRole, restriction.role)
+      assert.equal(cancelled.teams[0].slots[4].fixedMartialArtIndex, restriction.martialArtIndex)
+    }
   }
 })
 

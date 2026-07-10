@@ -712,6 +712,10 @@ public:
             }
 
             const std::string normalizedMemberQq = normalizedMember["qq"].asString();
+            if (!memberMatchesSlotRestriction(slot, normalizedMember)) {
+                exec("ROLLBACK;");
+                return conflictJson("slotRestriction");
+            }
             if (slot.onlyTnSignup && !isTnMember(normalizedMember)) {
                 exec("ROLLBACK;");
                 return conflictJson("onlyTnSignup");
@@ -2192,26 +2196,50 @@ private:
         return std::nullopt;
     }
 
-    static bool isTnMartialArtIndex(int index) {
+    static std::optional<std::string> martialArtRoleForIndex(int index) {
         switch (index) {
             case 1:
-            case 4:
             case 8:
-            case 10:
-            case 12:
             case 16:
             case 19:
+                return "T";
+            case 4:
+            case 10:
+            case 12:
             case 21:
             case 27:
-                return true;
+                return "治疗";
             default:
-                return false;
+                if (index >= 0 && index <= 31) {
+                    return "DPS";
+                }
+                return std::nullopt;
         }
+    }
+
+    static bool isTnMartialArtIndex(int index) {
+        const auto role = martialArtRoleForIndex(index);
+        return role.has_value() && *role != "DPS";
     }
 
     static bool isTnMember(const Value &member) {
         const auto index = martialArtIndexFromValue(member["martialArtIndex"]);
         return index.has_value() && isTnMartialArtIndex(*index);
+    }
+
+    static bool memberMatchesSlotRestriction(const SlotRecord &slot, const Value &member) {
+        const auto index = martialArtIndexFromValue(member["martialArtIndex"]);
+        if (!index.has_value()) {
+            return false;
+        }
+        if (slot.fixedMartialArtIndex.has_value()) {
+            return *index == *slot.fixedMartialArtIndex;
+        }
+        if (!slot.fixedRole.has_value()) {
+            return true;
+        }
+        const auto role = martialArtRoleForIndex(*index);
+        return role.has_value() && *role == *slot.fixedRole;
     }
 
     static bool isDpsSlotRule(const std::string &roleText, const Value &martialArtIndex) {
@@ -3557,6 +3585,11 @@ private:
         }
         try {
             exec("ALTER TABLE teams ADD COLUMN unique_qq_signup INTEGER NOT NULL DEFAULT 0;");
+        } catch (...) {
+            // Existing databases created after this feature already have this column.
+        }
+        try {
+            exec("ALTER TABLE slots ADD COLUMN fixed_martial_art_index INTEGER;");
         } catch (...) {
             // Existing databases created after this feature already have this column.
         }
