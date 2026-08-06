@@ -1,0 +1,23 @@
+{
+  "name": "qqbot",
+  "version": "1.0.0",
+  "description": "AI QQ bot template powered by @earendil-works/pi-coding-agent and @tencent-connect/qqbot-connector",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "bind": "node src/bind.js",
+    "test": "node test-team.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@tencent-connect/qqbot-connector": "^1.2.0",
+    "@tencent-connect/qqbot-nodejs": "^1.0.4",
+    "dotenv": "^16.6.1"
+  }
+}
