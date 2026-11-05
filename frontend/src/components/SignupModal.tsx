@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { martialArts, getMartialArtLabel } from '../data/martialArts'
+import { martialArts, getMartialArt, getMartialArtLabel } from '../data/martialArts'
 import type { Member, Slot } from '../types'
 import type { LockToken } from '../dataStore'
 import { acquireSlotLock, releaseSlotLock } from '../api'
@@ -73,8 +73,9 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     : lockRemainingSeconds <= 10
       ? 'bg-amber-500'
       : 'bg-emerald-500'
+  const selectedMa = getMartialArt(martialArt)
   const maSearchInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
-    value: martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : maSearch,
+    value: selectedMa ? getMartialArtLabel(selectedMa) : maSearch,
     onChange: e => {
       if (readOnly) return
       setMartialArt('')
@@ -83,7 +84,6 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     },
   })
 
-  const selectedMa = martialArt ? martialArts[parseInt(martialArt)] : null
   const isDPS = selectedMa?.role === 'DPS'
 
   useEffect(() => {
@@ -229,11 +229,11 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
     setMartialArt(textMartialArt)
     setGearScore(textGearScore)
     setCharacterId(textCharacterId)
-    if (!textMartialArt) {
+    const selectedMartialArt = getMartialArt(textMartialArt)
+    if (!selectedMartialArt) {
       setError('请选择心法')
       return
     }
-    const selectedMartialArt = martialArts[parseInt(textMartialArt)]
     if (onlyTnSignup && selectedMartialArt?.role === 'DPS') {
       setError('当前团队仅限T/奶报名')
       return
@@ -385,7 +385,7 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
                 <input
                   type="text"
                   className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                  placeholder={martialArt ? getMartialArtLabel(martialArts[parseInt(martialArt)]) : '搜索心法'}
+                  placeholder={selectedMa ? getMartialArtLabel(selectedMa) : '搜索心法'}
                   {...maSearchInputHandlers}
                   maxLength={TEXT_INPUT_LIMITS.search}
                   onDrop={event => {

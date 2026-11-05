@@ -70,19 +70,22 @@ target_link_libraries(teamassistant_concurrency_bench PRIVATE
   Drogon::Drogon
 )
 
-if (MSVC)
-  target_compile_options(teamassistant_backend PRIVATE /W4 /utf-8)
+if (WIN32)
   target_compile_definitions(teamassistant_backend PRIVATE
     NOMINMAX
     WIN32_LEAN_AND_MEAN
     _CRT_SECURE_NO_WARNINGS
   )
-  target_compile_options(teamassistant_concurrency_bench PRIVATE /W4 /utf-8)
   target_compile_definitions(teamassistant_concurrency_bench PRIVATE
     NOMINMAX
     WIN32_LEAN_AND_MEAN
     _CRT_SECURE_NO_WARNINGS
   )
+endif()
+
+if (MSVC)
+  target_compile_options(teamassistant_backend PRIVATE /W4 /utf-8)
+  target_compile_options(teamassistant_concurrency_bench PRIVATE /W4 /utf-8)
 else()
   target_compile_options(teamassistant_backend PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(teamassistant_concurrency_bench PRIVATE -Wall -Wextra -Wpedantic)

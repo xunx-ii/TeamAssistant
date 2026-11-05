@@ -16,7 +16,8 @@
     "serve": "node scripts/serve-backend-cpp.mjs",
     "lint": "eslint -c frontend/eslint.config.js frontend",
     "preview": "vite preview --config frontend/vite.config.ts",
-    "test": "node --import tsx --test frontend/test/*.test.mjs"
+    "test": "node --import tsx --test frontend/test/*.test.mjs",
+    "test:backend": "node --test backend-cpp/tests/*.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

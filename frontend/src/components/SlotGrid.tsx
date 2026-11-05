@@ -1,5 +1,5 @@
 import { useMemo, useCallback, memo, type ReactNode } from 'react'
-import { martialArts, getMartialArtLabel } from '../data/martialArts'
+import { getMartialArt, getMartialArtLabel } from '../data/martialArts'
 import type { Slot, TeamConfig, UserProfiles } from '../types'
 import type { SlotLock } from '../api'
 import { PixelStar } from './PixelRabbit'
@@ -33,9 +33,9 @@ function getRoleCounts(slots: Slot[], reservedSlots: number[]) {
   const counts = { T: 0, 治疗: 0, DPS: 0, bossT: 0, bossHealer: 0, bossDPS: 0 }
   for (const slot of slots) {
     if (slot.status === 'occupied' && slot.member) {
-        const idx = parseInt(slot.member.martialArtIndex)
-        if (!isNaN(idx) && idx < martialArts.length) {
-          const r = martialArts[idx].role
+        const ma = getMartialArt(slot.member.martialArtIndex)
+        if (ma) {
+          const r = ma.role
           const isBoss = reservedSlots.includes(slot.index)
           if (r === 'T') {
             if (isBoss) counts.bossT += 1
@@ -180,8 +180,7 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
             const m = slot.member
             const occupiedDisplay = getOccupiedSlotDisplay(slot, config, currentQQ)
             cellClass += ` ${occupiedDisplay.className}`
-            const maIdx = parseInt(m.martialArtIndex)
-            const ma = !isNaN(maIdx) && maIdx < martialArts.length ? martialArts[maIdx] : null
+            const ma = getMartialArt(m.martialArtIndex)
             const roleLabel = ma?.role === 'T' ? 'T' : ma?.role === '治疗' ? '奶' : 'DPS'
             const roleColor = ma?.role === 'T' ? 'text-orange-600 bg-orange-100 border-orange-300' :
                               ma?.role === '治疗' ? 'text-pink-600 bg-pink-100 border-pink-300' :

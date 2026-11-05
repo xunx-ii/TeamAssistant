@@ -1,4 +1,4 @@
-import { getMartialArtLabel, martialArts } from '../data/martialArts'
+import { getMartialArt, getMartialArtLabel } from '../data/martialArts'
 import type { Slot, TeamConfig, UserProfiles } from '../types'
 
 export interface OccupiedSlotDisplay {
@@ -55,14 +55,8 @@ export function getFixedSlotLabel(
 ): string {
   if (isLocked) return '⏳ 报名中'
 
-  const martialArtIndex = slot.fixedMartialArtIndex
-  if (
-    martialArtIndex !== null &&
-    martialArtIndex >= 0 &&
-    martialArtIndex < martialArts.length
-  ) {
-    return getMartialArtLabel(martialArts[martialArtIndex])
-  }
+  const martialArt = getMartialArt(slot.fixedMartialArtIndex)
+  if (martialArt) return getMartialArtLabel(martialArt)
 
   if (slot.fixedRole === 'T') return '🛡️ T 位'
   if (slot.fixedRole === '治疗') return '💚 奶 位'

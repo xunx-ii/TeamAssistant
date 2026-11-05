@@ -42,9 +42,15 @@ node scripts/admin-password-hash.mjs 你的强密码
 
 ```bash
 npm run test
+npm run lint
 npm run build
 npm run backend:build
+npm --prefix qqbot ci
+npm --prefix qqbot run test:client
+npm run test:backend
 ```
+
+`test:backend` 会启动真实 C++ 后端，使用工作区 `.temp/` 下的隔离数据库和管理员配置，验证旧库迁移、机器人接口、并发报名及版本同步。
 
 ## 并发压测
 
@@ -52,4 +58,4 @@ npm run backend:build
 npm run bench:concurrency
 ```
 
-该命令会启动一个使用临时 SQLite 数据库的后端，然后运行 C++ 压测程序模拟 30 人同时报名不同表格/格子，以及 30 人同时抢同一个格子的内存锁冲突场景。可用 `BENCH_CLIENTS=30`、`BENCH_PORT=23961` 调整参数。
+该命令会启动一个使用 `.temp/` 下临时 SQLite 数据库及独立管理员配置的后端，然后运行 C++ 压测程序模拟 30 人同时报名不同表格/格子，以及 30 人同时抢同一个格子的内存锁冲突场景。压测结束后自动清理临时数据。可用 `BENCH_CLIENTS=30`、`BENCH_PORT=23961` 调整参数。

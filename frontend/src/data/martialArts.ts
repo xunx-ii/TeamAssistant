@@ -42,3 +42,10 @@ export const martialArts: MartialArt[] = [
 export function getMartialArtLabel(ma: MartialArt): string {
   return `${ma.school}·${ma.name}`
 }
+
+export function getMartialArt(value: unknown): MartialArt | null {
+  if (typeof value === 'string' && !/^\d+$/.test(value)) return null
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  const index = Number(value)
+  return Number.isInteger(index) && index >= 0 ? martialArts[index] ?? null : null
+}

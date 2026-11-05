@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { initTheme } from './storage/theme'
 import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
-  loadTeams, saveTeams, setTeamsLocal,
+  loadTeams, setTeamsLocal,
   loadCancellations, setCancellationsLocal,
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
@@ -10,9 +10,11 @@ import {
   initServerMode, normalizeServerData,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
-import { martialArts } from './data/martialArts'
+import { getMartialArt, martialArts } from './data/martialArts'
 import { checkAdminQq, clearAdminToken, clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
-import { applyMutation, applyServerPatch, type LockToken, type Mutation, type Snapshot } from './dataStore'
+import { applyMutation, applyServerPatches as applySnapshotPatches, type LockToken, type Mutation, type Snapshot } from './dataStore'
+import { planMutationSync, shouldApplySyncVersion, unseenServerPatches } from './syncCursor'
+import { LOG_WINDOW } from './historyWindow'
 import { normalizeTeamName } from './teamName'
 import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
@@ -139,7 +141,7 @@ function App() {
     const stored = loadTeams()
     if (stored.length > 0) return stored
     const def = createDefaultTeam()
-    saveTeams([def])
+    setTeamsLocal([def])
     return [def]
   })
   const [activeTeamId, setActiveTeamId] = useState<string>(teams[0]?.id ?? '')
@@ -184,7 +186,9 @@ function App() {
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const dataVersionRef = useRef<number | null>(null)
   const lockVersionRef = useRef<number | null>(null)
-  const syncingChangesRef = useRef(false)
+  const snapshotRef = useRef<Snapshot>({ teams, cancellations, archivedTeams, logs: operationLogs, userProfiles })
+  const syncingChangesRef = useRef<symbol | null>(null)
+  const syncGenerationRef = useRef(0)
   const pendingServerEventRef = useRef<ServerEvent | null>(null)
 
   const activeTeamExists = teams.some(t => t.id === activeTeamId)
@@ -202,21 +206,23 @@ function App() {
   )
 
   const syncSnapshot = useCallback((snapshot: Snapshot) => {
+    const previous = snapshotRef.current
     const nextTeams = snapshot.teams ?? []
     const nextCancellations = snapshot.cancellations ?? []
     const nextArchivedTeams = snapshot.archivedTeams ?? []
     const nextLogs = snapshot.logs ?? []
     const nextUserProfiles = snapshot.userProfiles ?? {}
+    snapshotRef.current = { teams: nextTeams, cancellations: nextCancellations, archivedTeams: nextArchivedTeams, logs: nextLogs, userProfiles: nextUserProfiles }
     setTeams(nextTeams)
     setCancellations(nextCancellations)
     setArchivedTeams(nextArchivedTeams)
     setOperationLogs(nextLogs)
     setUserProfiles(nextUserProfiles)
-    setTeamsLocal(nextTeams)
-    setCancellationsLocal(nextCancellations)
-    setArchivedTeamsLocal(nextArchivedTeams)
-    setOperationLogsLocal(nextLogs)
-    setUserProfilesLocal(nextUserProfiles)
+    if (previous.teams !== nextTeams) setTeamsLocal(nextTeams)
+    if (previous.cancellations !== nextCancellations) setCancellationsLocal(nextCancellations)
+    if (previous.archivedTeams !== nextArchivedTeams) setArchivedTeamsLocal(nextArchivedTeams)
+    if (previous.logs !== nextLogs) setOperationLogsLocal(nextLogs)
+    if (previous.userProfiles !== nextUserProfiles) setUserProfilesLocal(nextUserProfiles)
   }, [])
 
   const syncSubsidyPresets = useCallback((presets: SubsidyType[]) => {
@@ -224,7 +230,8 @@ function App() {
     saveSubsidyPresets(presets)
   }, [])
 
-  const syncServerData = useCallback((data: ServerData) => {
+  const syncServerData = useCallback((data: ServerData, allowVersionReset = false) => {
+    if (!allowVersionReset && typeof data.dataVersion === 'number' && dataVersionRef.current !== null && data.dataVersion < dataVersionRef.current) return true
     const snapshot = normalizeServerData(data)
     if (data.accessGate) {
       setAccessGate(data.accessGate)
@@ -238,10 +245,8 @@ function App() {
     // 只有 bootstrap / 全量替换的 ServerData 才会带 truncated 字段，
     // 增量 patch 的路径不会进到这里。这里直接覆盖即可。
     setLogsTruncated(Boolean(data.logsTruncated))
-    const isProtectedSnapshot = data.accessGate?.authorized === false
-    if (snapshot.teams.length === 0 && !isProtectedSnapshot) return false
     const incomingLockVersion = typeof data.lockVersion === 'number' ? data.lockVersion : null
-    const canApplyLocks = incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
+    const canApplyLocks = allowVersionReset || incomingLockVersion === null || lockVersionRef.current === null || incomingLockVersion >= lockVersionRef.current
     const previousLockVersion = lockVersionRef.current
     if (canApplyLocks && data.locks) setLocks(data.locks)
     if (canApplyLocks && data.teamLocks) setTeamLocks(data.teamLocks)
@@ -258,12 +263,12 @@ function App() {
     return true
   }, [syncSnapshot, syncSubsidyPresets])
 
-  const syncLockState = useCallback((state: LockState) => {
+  const syncLockState = useCallback((state: LockState, allowVersionReset = false) => {
     const previousLockVersion = lockVersionRef.current
     if (
       typeof state.lockVersion === 'number' &&
       typeof lockVersionRef.current === 'number' &&
-      state.lockVersion < lockVersionRef.current
+      state.lockVersion < lockVersionRef.current && !allowVersionReset
     ) {
       return
     }
@@ -280,6 +285,8 @@ function App() {
   }, [])
 
   const applyAcquiredSlotLock = useCallback((lock: SlotLock & { lockVersion?: number }) => {
+    const previousLockVersion = lockVersionRef.current
+    if (typeof lock.lockVersion === 'number' && previousLockVersion !== null && lock.lockVersion <= previousLockVersion) return
     setLocks(current => {
       const withoutSlot = current.filter(item => item.teamId !== lock.teamId || item.slotIndex !== lock.slotIndex)
       return [...withoutSlot, {
@@ -289,8 +296,7 @@ function App() {
         timestamp: lock.timestamp,
       }]
     })
-    if (typeof lock.lockVersion === 'number') {
-      const previousLockVersion = lockVersionRef.current
+    if (typeof lock.lockVersion === 'number' && previousLockVersion !== null && lock.lockVersion === previousLockVersion + 1) {
       lockVersionRef.current = lock.lockVersion
       if (previousLockVersion !== lock.lockVersion) {
         setLockRetrySignal(value => value + 1)
@@ -308,20 +314,24 @@ function App() {
   }, [])
 
   const applyServerPatches = useCallback((patches: unknown[]) => {
-    let next: Snapshot = { teams, cancellations, archivedTeams, logs: operationLogs, userProfiles }
-    for (const patch of patches) {
-      next = applyServerPatch(next, patch)
+    const current = snapshotRef.current
+    const next = applySnapshotPatches(current, patches)
+    if (next.logs !== current.logs && next.logs.length === LOG_WINDOW) {
+      const visibleLogIds = new Set(next.logs.map(log => log.id))
+      if (current.logs.some(log => !visibleLogIds.has(log.id))) setLogsTruncated(true)
     }
-    syncSnapshot(next)
+    if (next !== current) syncSnapshot(next)
     return next
-  }, [teams, cancellations, archivedTeams, operationLogs, userProfiles, syncSnapshot])
+  }, [syncSnapshot])
 
   const syncServerChanges = useCallback(async (event?: ServerEvent | null) => {
     if (syncingChangesRef.current) {
       if (event) pendingServerEventRef.current = event
       return true
     }
-    syncingChangesRef.current = true
+    const requestId = Symbol()
+    const generation = syncGenerationRef.current
+    syncingChangesRef.current = requestId
     try {
       let nextEvent = event ?? pendingServerEventRef.current
       pendingServerEventRef.current = null
@@ -337,28 +347,34 @@ function App() {
           continue
         }
 
-        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current, qq)
+        const requestedDataVersion = dataVersionRef.current
+        const requestedLockVersion = lockVersionRef.current
+        const changes = await fetchServerChanges(requestedDataVersion, requestedLockVersion, qq)
+        if (generation !== syncGenerationRef.current) return true
         if (!changes) return false
-        if (typeof changes.isAdmin === 'boolean') {
-          setIsAdmin(changes.isAdmin)
-        }
-        if (changes.accessGate) {
-          setAccessGate(changes.accessGate)
-        }
 
         let synced = true
-        if (changes.data) {
-          synced = syncServerData(changes.data)
-        } else if (Array.isArray(changes.patches)) {
-          applyServerPatches(changes.patches)
-          dataVersionRef.current = changes.dataVersion
-        } else {
-          dataVersionRef.current = changes.dataVersion
+        if (shouldApplySyncVersion(dataVersionRef.current, requestedDataVersion, changes.dataVersion)) {
+          if (typeof changes.isAdmin === 'boolean') setIsAdmin(changes.isAdmin)
+          if (changes.accessGate) setAccessGate(changes.accessGate)
+          if (changes.data) {
+            const snapshot = { ...changes.data }
+            if (!shouldApplySyncVersion(lockVersionRef.current, requestedLockVersion, changes.data.lockVersion ?? changes.lockVersion)) {
+              delete snapshot.locks
+              delete snapshot.teamLocks
+              delete snapshot.lockVersion
+            }
+            synced = syncServerData(snapshot, true)
+          } else if (Array.isArray(changes.patches)) {
+            applyServerPatches(unseenServerPatches(changes.patches, dataVersionRef.current))
+            dataVersionRef.current = changes.dataVersion
+          } else {
+            dataVersionRef.current = changes.dataVersion
+          }
         }
-        if (changes.locks) {
-          syncLockState(changes.locks)
-        } else {
-          lockVersionRef.current = changes.lockVersion
+        if (shouldApplySyncVersion(lockVersionRef.current, requestedLockVersion, changes.lockVersion)) {
+          if (changes.locks) syncLockState(changes.locks, true)
+          else if (!changes.data) lockVersionRef.current = changes.lockVersion
         }
         if (!synced) return false
 
@@ -368,7 +384,7 @@ function App() {
 
       return true
     } finally {
-      syncingChangesRef.current = false
+      if (syncingChangesRef.current === requestId) syncingChangesRef.current = null
     }
   }, [applyServerPatches, qq, syncLockState, syncServerData])
 
@@ -397,27 +413,7 @@ function App() {
         }
         const loadedData = changes?.data ?? null
         if (loadedData && syncServerData(loadedData)) {
-          const loadedTeams = loadTeams()
-          const loadedCancellations = loadCancellations()
-          const loadedArchivedTeams = loadArchivedTeams()
-          const loadedLogs = loadOperationLogs()
-          syncSnapshot({
-            teams: loadedTeams,
-            cancellations: loadedCancellations,
-            archivedTeams: loadedArchivedTeams,
-            logs: loadedLogs,
-            userProfiles: loadUserProfiles(),
-          })
-          if (loadedTeams.length > 0) {
-            setActiveTeamId(loadedTeams[0].id)
-          }
-        } else if (loadedData && normalizeServerData(loadedData).teams.length === 0) {
-          if (viewerIsAdmin) {
-            const localTeams = loadTeams()
-            if (localTeams[0]) {
-              await mutateData({ type: 'createTeam', team: localTeams[0] }, qq)
-            }
-          }
+          if (loadedData.teams.length > 0) setActiveTeamId(loadedData.teams[0].id)
         }
       }
       if (!active) return
@@ -432,21 +428,26 @@ function App() {
     return () => {
       active = false
     }
-  }, [qq, syncSnapshot, syncServerData])
+  }, [qq, syncServerData])
 
   useEffect(() => { initTheme() }, [])
 
   useEffect(() => {
     if (!serverMode) return
+    let active = true
+    const generation = syncGenerationRef.current
     const unsubscribe = subscribeServerEvents(event => {
+      if (!active || generation !== syncGenerationRef.current) return
       pendingServerEventRef.current = event
       void syncServerChanges(event)
     })
     const poll = async () => {
+      if (!active || generation !== syncGenerationRef.current) return true
       if (pendingServerEventRef.current) {
         return syncServerChanges()
       }
       const version = await fetchServerVersion()
+      if (!active || generation !== syncGenerationRef.current) return true
       if (!version) return false
       if (
         dataVersionRef.current === version.dataVersion &&
@@ -463,6 +464,7 @@ function App() {
       runImmediately: false,
     })
     return () => {
+      active = false
       unsubscribe?.()
       controller.stop()
     }
@@ -475,7 +477,9 @@ function App() {
       return
     }
     if (accessGate.publicAtMs <= 0) return
+    const generation = syncGenerationRef.current
     const refresh = () => {
+      if (generation !== syncGenerationRef.current) return
       dataVersionRef.current = null
       clearInviteTokenFromUrl()
       void syncServerChanges()
@@ -497,10 +501,10 @@ function App() {
   }
 
   const applyLocalMutation = useCallback((mutation: Mutation) => {
-    const next = applyMutation({ teams, cancellations, archivedTeams, logs: operationLogs, userProfiles }, mutation)
+    const next = applyMutation(snapshotRef.current, mutation)
     syncSnapshot(next)
     return next
-  }, [teams, cancellations, archivedTeams, operationLogs, userProfiles, syncSnapshot])
+  }, [syncSnapshot])
 
   const runMutation = useCallback(async (mutation: Mutation): Promise<MutationResult> => {
     setMutationError('')
@@ -509,25 +513,26 @@ function App() {
       return { ok: true }
     }
 
+    const generation = syncGenerationRef.current
     const result = await mutateData(mutation, qq)
+    if (generation !== syncGenerationRef.current) return result
     if (result.ok) {
       if (result.data) {
         syncServerData(result.data)
       } else {
-        const previousDataVersion = dataVersionRef.current
-        if (
+        const plan = planMutationSync(dataVersionRef.current, result.dataVersion)
+        if (plan.apply &&
           result.patch &&
           (mutation.type === 'signupSlot' || mutation.type === 'cancelSlot' || mutation.type === 'leaveSlot')
         ) {
           applyServerPatches([result.patch])
-        } else {
+        } else if (plan.apply) {
           applyLocalMutation(mutation)
         }
-        if (typeof result.dataVersion === 'number' && typeof previousDataVersion === 'number' && result.dataVersion > previousDataVersion + 1) {
-          void syncServerChanges({ dataVersion: result.dataVersion, lockVersion: result.lockVersion ?? lockVersionRef.current ?? 0 })
-        }
-        if (typeof result.dataVersion === 'number') dataVersionRef.current = result.dataVersion
-        if (typeof result.lockVersion === 'number') lockVersionRef.current = result.lockVersion
+        dataVersionRef.current = plan.nextVersion
+        if (plan.needsSync) void syncServerChanges(typeof result.dataVersion === 'number'
+          ? { dataVersion: result.dataVersion, lockVersion: result.lockVersion ?? lockVersionRef.current ?? 0 }
+          : undefined)
       }
       if (
         (mutation.type === 'signupSlot' || mutation.type === 'cancelSlot' || mutation.type === 'leaveSlot') &&
@@ -604,6 +609,8 @@ function App() {
   }, [])
 
   const resetServerCursor = () => {
+    syncGenerationRef.current += 1
+    syncingChangesRef.current = null
     dataVersionRef.current = null
     lockVersionRef.current = null
     pendingServerEventRef.current = null
@@ -1003,9 +1010,10 @@ function App() {
       if (s.status === 'occupied' && s.member) {
         if (excludeSlot !== undefined && s.index === excludeSlot) continue
         if (activeTeam.config.reservedSlots.includes(s.index)) continue
-        const idx = parseInt(s.member.martialArtIndex)
-        if (!isNaN(idx) && idx < martialArts.length) {
-          const role = martialArts[idx].role
+        const ma = getMartialArt(s.member.martialArtIndex)
+        if (ma) {
+          const idx = Number(s.member.martialArtIndex)
+          const role = ma.role
           if (role === 'T' || role === '治疗') indices.push(idx)
         }
       }
@@ -1211,8 +1219,7 @@ function App() {
         open={showLogs}
         teamName={activeTeam?.name ?? ''}
         logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
-        // 服务器告知 bootstrap 截断后才提供「加载更早」入口；
-        // 单机/本地模式下没有更早日志可以拉，按钮就不会显示。
+        // bootstrap 或增量更新超出本地历史窗口时可继续加载服务端日志。
         hasMore={serverMode && logsTruncated}
         onLoadMore={serverMode ? (cursor) => fetchLogsPage({
           before: cursor,

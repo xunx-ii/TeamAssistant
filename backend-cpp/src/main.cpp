@@ -406,11 +406,11 @@ private:
 class SqliteDb {
 public:
     explicit SqliteDb(const std::filesystem::path &path) {
-        dbPath_ = path;
-        dataDir_ = path.parent_path();
+        dbPath_ = std::filesystem::absolute(path);
+        dataDir_ = dbPath_.parent_path();
         backupDir_ = dataDir_ / "backups";
-        std::filesystem::create_directories(path.parent_path());
-        if (sqlite3_open(path.string().c_str(), &db_) != SQLITE_OK) {
+        std::filesystem::create_directories(dataDir_);
+        if (sqlite3_open(dbPath_.string().c_str(), &db_) != SQLITE_OK) {
             throw std::runtime_error(sqlite3_errmsg(db_));
         }
         exec("PRAGMA journal_mode=WAL;");
@@ -523,7 +523,17 @@ public:
             return json;
         }
 
-        Value current = versionSnapshot();
+        Value current;
+        Value patches;
+        {
+            // Writes publish their patches before COMMIT while holding mutex_.
+            // Capture the cursor and its complete patch range after that commit.
+            std::lock_guard lock(mutex_);
+            current = versionSnapshot();
+            if (!dataVersion.has_value() || *dataVersion != current["dataVersion"].asInt64()) {
+                patches = dataPatchesSince(dataVersion, current["dataVersion"].asInt64());
+            }
+        }
         const auto currentData = current["dataVersion"].asInt64();
         const auto currentLocks = current["lockVersion"].asInt64();
         const bool dataChanged = !dataVersion.has_value() || *dataVersion != currentData;
@@ -534,7 +544,6 @@ public:
         json["dataChanged"] = dataChanged;
         json["lockChanged"] = lockChanged;
         if (dataChanged) {
-            Value patches = dataPatchesSince(dataVersion);
             if (patches.isArray()) {
                 json["patches"] = patches;
             } else {
@@ -2839,8 +2848,8 @@ private:
         return result;
     }
 
-    Value dataPatchesSince(std::optional<long long> clientVersion) {
-        if (!clientVersion.has_value()) {
+    Value dataPatchesSince(std::optional<long long> clientVersion, long long targetVersion) {
+        if (!clientVersion.has_value() || *clientVersion > targetVersion) {
             return Value(Json::nullValue);
         }
 
@@ -2848,24 +2857,20 @@ private:
         if (dataPatches_.empty()) {
             return Value(Json::nullValue);
         }
-        const long long firstVersion = dataPatches_.front().version;
-        const long long latestVersion = dataPatches_.back().version;
-        if (*clientVersion >= latestVersion) {
-            return Value(Json::arrayValue);
-        }
-        if (*clientVersion < firstVersion - 1) {
-            return Value(Json::nullValue);
-        }
-
+        long long expectedVersion = *clientVersion + 1;
         Value patches(Json::arrayValue);
         for (const auto &record : dataPatches_) {
-            if (record.version > *clientVersion) {
+            if (record.version > *clientVersion && record.version <= targetVersion) {
+                if (record.version != expectedVersion) {
+                    return Value(Json::nullValue);
+                }
                 Value item = record.patch;
                 item["dataVersion"] = static_cast<Json::Int64>(record.version);
                 patches.append(item);
+                ++expectedVersion;
             }
         }
-        return patches;
+        return expectedVersion == targetVersion + 1 ? patches : Value(Json::nullValue);
     }
 
     void rememberDataPatchUnlocked(const Value &patch) {
@@ -2873,7 +2878,7 @@ private:
         std::lock_guard lock(patchMutex_);
         dataPatches_.push_back(DataPatchRecord{version, patch});
         while (dataPatches_.size() > maxDataPatches_) {
-            dataPatches_.erase(dataPatches_.begin());
+            dataPatches_.pop_front();
         }
     }
 
@@ -3615,6 +3620,24 @@ private:
         sqlite3_finalize(stmt);
     }
 
+    void ensureColumn(const std::string &table, const std::string &column, const std::string &definition) {
+        sqlite3_stmt *raw = nullptr;
+        prepare("PRAGMA table_info(" + table + ")", &raw);
+        std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> stmt(raw, sqlite3_finalize);
+        bool tableExists = false;
+        bool columnExists = false;
+        int result = SQLITE_OK;
+        while ((result = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+            tableExists = true;
+            columnExists = columnExists || textColumn(stmt.get(), 1) == column;
+        }
+        if (result != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db_));
+        stmt.reset();
+        if (tableExists && !columnExists) {
+            exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+        }
+    }
+
     void ensureSchema() {
         if (schemaReady_) {
             return;
@@ -3628,47 +3651,17 @@ private:
         }
         std::stringstream buffer;
         buffer << input.rdbuf();
+        // schema.sql creates an index on sort_order. Older databases need
+        // the column before that CREATE INDEX can run successfully.
+        ensureColumn("teams", "sort_order", "INTEGER NOT NULL DEFAULT 0");
         exec(buffer.str());
-        try {
-            exec("ALTER TABLE teams ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;");
-        } catch (...) {
-            // Existing databases created after the split already have this column.
-        }
-        try {
-            exec("ALTER TABLE teams ADD COLUMN only_tn_signup INTEGER NOT NULL DEFAULT 0;");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
-        try {
-            exec("ALTER TABLE teams ADD COLUMN unique_qq_signup INTEGER NOT NULL DEFAULT 0;");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
-        try {
-            exec("ALTER TABLE slots ADD COLUMN fixed_martial_art_index INTEGER;");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
-        try {
-            exec("ALTER TABLE access_gate ADD COLUMN public_at_ms INTEGER NOT NULL DEFAULT 0;");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
-        try {
-            exec("ALTER TABLE access_gate ADD COLUMN invite_token TEXT NOT NULL DEFAULT '';");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
-        try {
-            exec("ALTER TABLE access_gate ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0;");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
-        try {
-            exec("ALTER TABLE access_gate ADD COLUMN updated_by TEXT NOT NULL DEFAULT '';");
-        } catch (...) {
-            // Existing databases created after this feature already have this column.
-        }
+        ensureColumn("teams", "only_tn_signup", "INTEGER NOT NULL DEFAULT 0");
+        ensureColumn("teams", "unique_qq_signup", "INTEGER NOT NULL DEFAULT 0");
+        ensureColumn("slots", "fixed_martial_art_index", "INTEGER");
+        ensureColumn("access_gate", "public_at_ms", "INTEGER NOT NULL DEFAULT 0");
+        ensureColumn("access_gate", "invite_token", "TEXT NOT NULL DEFAULT ''");
+        ensureColumn("access_gate", "updated_at_ms", "INTEGER NOT NULL DEFAULT 0");
+        ensureColumn("access_gate", "updated_by", "TEXT NOT NULL DEFAULT ''");
         schemaReady_ = true;
     }
 
@@ -3988,7 +3981,9 @@ drogon::HttpStatusCode statusForResult(const Value &json) {
         reason == "slotChanged" ||
         reason == "onlyTnSignup" ||
         reason == "uniqueQqSignup" ||
-        reason == "selfSignupOnly"
+        reason == "selfSignupOnly" ||
+        reason == "slotRestriction" ||
+        json["lockedBy"].isString()
     ) {
         return drogon::k409Conflict;
     }
@@ -4490,7 +4485,7 @@ int main() {
         {drogon::Patch});
 
     drogon::app().registerHandler("/api/v2/slot-locks",
-        [db, respondOkMutation, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondMutation, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["teamId"].isString() || !(*json)["qq"].isString()) {
                 callback(jsonResponse(errorJson("Missing fields"), drogon::k400BadRequest));
@@ -4498,7 +4493,7 @@ int main() {
             }
             if (!requireBoardAccess(request, *json, callback)) return;
             try {
-                respondOkMutation(std::move(callback), db->acquireSlotLock(
+                respondMutation(std::move(callback), db->acquireSlotLock(
                     (*json)["teamId"].asString(),
                     static_cast<int>(toInt64((*json)["slotIndex"])),
                     (*json)["qq"].asString()));

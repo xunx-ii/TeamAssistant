@@ -1,6 +1,7 @@
 import type { ArchivedTeam, Cancellation, OperationLog, Team, UserProfiles } from './types'
 import { checkServer, fetchServerChanges, pushData, type ServerData } from './api'
 import { normalizeHydratableData, normalizeHydratableTeams } from './dataHydration'
+import { CANCELLATION_WINDOW, LOG_WINDOW, trimRecentByTimestamp } from './historyWindow'
 
 const KEYS = {
   teams: 'team_teams_v3',
@@ -15,17 +16,6 @@ const KEYS = {
 // 避免本地 localStorage 在长期使用中无限增长，重新 hydrate 后又把这些
 // 旧数据塞回前端造成内存膨胀。这里只截断写入侧，读出来的旧数据如果
 // 仍然超过上限，下一次 saveTeams / serverPatch 时会被自然修剪。
-const LOCAL_CANCELLATION_LIMIT = 200
-const LOCAL_LOG_LIMIT = 500
-
-function trimRecentByTimestamp<T extends { timestamp: number }>(items: T[], limit: number): T[] {
-  if (!Array.isArray(items) || items.length <= limit) return items
-  // 复制后按 timestamp 升序排好，保留最新的 limit 条。这样即便上游传入
-  // 顺序不固定（增量 patch 可能 push 到末尾），保留下来的也始终是最新的。
-  const sorted = [...items].sort((left, right) => left.timestamp - right.timestamp)
-  return sorted.slice(sorted.length - limit)
-}
-
 let serverMode = false
 
 function reportLocalStorageCorruption(key: string, raw: string, error: unknown) {
@@ -117,7 +107,7 @@ export function loadCancellations(): Cancellation[] {
 }
 
 export function setCancellationsLocal(cancellations: Cancellation[]) {
-  const trimmed = trimRecentByTimestamp(cancellations, LOCAL_CANCELLATION_LIMIT)
+  const trimmed = trimRecentByTimestamp(cancellations, CANCELLATION_WINDOW)
   localStorage.setItem(KEYS.cancellations, JSON.stringify(trimmed))
 }
 
@@ -148,7 +138,7 @@ export function loadOperationLogs(): OperationLog[] {
 }
 
 export function setOperationLogsLocal(logs: OperationLog[]) {
-  const trimmed = trimRecentByTimestamp(logs, LOCAL_LOG_LIMIT)
+  const trimmed = trimRecentByTimestamp(logs, LOG_WINDOW)
   localStorage.setItem(KEYS.logs, JSON.stringify(trimmed))
 }
 

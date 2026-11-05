@@ -1,6 +1,7 @@
 import type { ArchivedTeam, Cancellation, Member, MemberSubsidySelection, OperationLog, Slot, SubsidyType, Team, UserProfiles } from './types'
 import { normalizeTeamName } from './teamName'
 import { normalizeWeekStartKey } from './week'
+import { CANCELLATION_WINDOW, LOG_WINDOW, trimRecentByTimestamp } from './historyWindow'
 
 export interface Snapshot {
   teams: Team[]
@@ -853,50 +854,84 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
 }
 
 export function applyServerPatch(snapshot: Snapshot, patch: unknown): Snapshot {
-  if (!isPlainObject(patch) || typeof patch.type !== 'string') {
-    return snapshot
+  return applyServerPatches(snapshot, [patch])
+}
+
+export function applyServerPatches(snapshot: Snapshot, patches: readonly unknown[]): Snapshot {
+  let next = snapshot
+  const teamIndexes = new Map(snapshot.teams.map((team, index) => [team.id, index]))
+  const copiedTeams = new Set<number>()
+  let cancellationKeys: Set<string> | undefined
+  let logIds: Set<string> | undefined
+  const cancellationKey = (qq: string, timestamp: number) => JSON.stringify([qq, timestamp])
+  const ensureNext = () => {
+    if (next === snapshot) next = { ...snapshot }
   }
 
-  const next = cloneSnapshot(snapshot)
-  if (
-    (patch.type === 'signupSlot' || patch.type === 'cancelSlot' || patch.type === 'leaveSlot') &&
-    typeof patch.teamId === 'string' &&
-    isSlotIndex(patch.slotIndex) &&
-    isPlainObject(patch.slot)
-  ) {
-    const team = next.teams.find(item => item.id === patch.teamId)
-    const slot = team?.slots[patch.slotIndex]
-    if (slot) {
+  for (const patch of patches) {
+    if (
+      !isPlainObject(patch) ||
+      !['signupSlot', 'cancelSlot', 'leaveSlot'].includes(toText(patch.type)) ||
+      typeof patch.teamId !== 'string' ||
+      !isSlotIndex(patch.slotIndex) ||
+      !isPlainObject(patch.slot)
+    ) continue
+
+    const teamIndex = teamIndexes.get(patch.teamId)
+    if (teamIndex !== undefined && next.teams[teamIndex].slots[patch.slotIndex]) {
+      ensureNext()
+      if (next.teams === snapshot.teams) next.teams = [...snapshot.teams]
+      if (!copiedTeams.has(teamIndex)) {
+        const team = next.teams[teamIndex]
+        next.teams[teamIndex] = { ...team, slots: [...team.slots] }
+        copiedTeams.add(teamIndex)
+      }
+      const team = next.teams[teamIndex]
+      const previous = team.slots[patch.slotIndex]
       const patchedSlot = patch.slot
-      slot.status = toText(patchedSlot.status, slot.status) as typeof slot.status
-      slot.member = isPlainObject(patchedSlot.member) ? normalizeMember(patchedSlot.member) : null
+      const slot = {
+        ...previous,
+        status: toText(patchedSlot.status, previous.status) as Slot['status'],
+        member: isPlainObject(patchedSlot.member) ? normalizeMember(patchedSlot.member) : null,
+      }
       if (Object.prototype.hasOwnProperty.call(patchedSlot, 'fixedRole')) {
         slot.fixedRole = patchedSlot.fixedRole === 'T' || patchedSlot.fixedRole === '治疗' || patchedSlot.fixedRole === 'DPS'
-          ? patchedSlot.fixedRole
-          : null
+          ? patchedSlot.fixedRole : null
       }
       if (Object.prototype.hasOwnProperty.call(patchedSlot, 'fixedMartialArtIndex')) {
         slot.fixedMartialArtIndex = typeof patchedSlot.fixedMartialArtIndex === 'number'
-          ? patchedSlot.fixedMartialArtIndex
-          : null
+          ? patchedSlot.fixedMartialArtIndex : null
       }
+      team.slots[patch.slotIndex] = slot
     }
 
     if (isPlainObject(patch.cancellation)) {
-      next.cancellations.push({
-        qq: toText(patch.cancellation.qq),
-        reason: toText(patch.cancellation.reason),
-        cancelledBy: toText(patch.cancellation.cancelledBy),
-        teamId: toText(patch.cancellation.teamId),
-        teamName: toText(patch.cancellation.teamName),
-        slotIndex: toFiniteNumber(patch.cancellation.slotIndex),
-        timestamp: toFiniteNumber(patch.cancellation.timestamp),
-      })
+      const qq = toText(patch.cancellation.qq)
+      const timestamp = toFiniteNumber(patch.cancellation.timestamp)
+      cancellationKeys ??= new Set(next.cancellations.map(item => cancellationKey(item.qq, item.timestamp)))
+      const key = cancellationKey(qq, timestamp)
+      if (!cancellationKeys.has(key)) {
+        ensureNext()
+        if (next.cancellations === snapshot.cancellations) next.cancellations = [...snapshot.cancellations]
+        cancellationKeys.add(key)
+        next.cancellations.push({
+          qq, timestamp,
+          reason: toText(patch.cancellation.reason),
+          cancelledBy: toText(patch.cancellation.cancelledBy),
+          teamId: toText(patch.cancellation.teamId),
+          teamName: toText(patch.cancellation.teamName),
+          slotIndex: toFiniteNumber(patch.cancellation.slotIndex),
+        })
+      }
     }
 
     if (isPlainObject(patch.log)) {
       const id = toText(patch.log.id)
-      if (id && !next.logs.some(log => log.id === id)) {
+      logIds ??= new Set(next.logs.map(log => log.id))
+      if (id && !logIds.has(id)) {
+        ensureNext()
+        if (next.logs === snapshot.logs) next.logs = [...snapshot.logs]
+        logIds.add(id)
         next.logs.push({
           id,
           teamId: toText(patch.log.teamId),
@@ -909,5 +944,9 @@ export function applyServerPatch(snapshot: Snapshot, patch: unknown): Snapshot {
     }
   }
 
+  if (next !== snapshot) {
+    next.cancellations = trimRecentByTimestamp(next.cancellations, CANCELLATION_WINDOW)
+    next.logs = trimRecentByTimestamp(next.logs, LOG_WINDOW)
+  }
   return next
 }

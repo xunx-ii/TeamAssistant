@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node src/index.js",
     "bind": "node src/bind.js",
-    "test": "node test-team.mjs"
+    "test": "node test-team.mjs",
+    "test:client": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.83.0",

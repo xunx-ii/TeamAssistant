@@ -30,6 +30,8 @@ struct Config {
     bool prepareData = true;
     bool sameSlot = false;
     bool syncAfterSave = false;
+    std::string adminQq;
+    std::string adminPassword;
 };
 
 struct HttpResult {
@@ -100,6 +102,8 @@ void usage() {
 
 Config parseArgs(int argc, char **argv) {
     Config config;
+    if (const char *qq = std::getenv("BENCH_ADMIN_QQ")) config.adminQq = qq;
+    if (const char *password = std::getenv("BENCH_ADMIN_PASSWORD")) config.adminPassword = password;
     if (const char *url = std::getenv("BENCH_URL")) {
         config.baseUrl = url;
     }
@@ -410,8 +414,19 @@ int main(int argc, char **argv) {
         }
 
         if (config.prepareData) {
+            if (config.adminQq.empty() || config.adminPassword.empty()) {
+                throw std::runtime_error("Set BENCH_ADMIN_QQ and BENCH_ADMIN_PASSWORD to prepare benchmark data");
+            }
+            Value loginBody;
+            loginBody["actorQq"] = config.adminQq;
+            loginBody["password"] = config.adminPassword;
+            const HttpResult login = requestJson(client, drogon::Post, "/admin/login", loginBody, config.timeoutSeconds);
+            if (!login.ok || !login.json["adminToken"].isString()) {
+                throw std::runtime_error("Benchmark administrator login failed");
+            }
             Value payload = preparePayload(config.clients, config.sameSlot);
-            payload["actorQq"] = "89906502";
+            payload["actorQq"] = config.adminQq;
+            payload["adminToken"] = login.json["adminToken"];
             const HttpResult prepared = requestJson(client, drogon::Put, "/data", payload, config.timeoutSeconds);
             if (!prepared.ok) {
                 std::cerr << "Failed to prepare benchmark data: "

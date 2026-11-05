@@ -5,6 +5,7 @@ import {
   applyMutation,
   applyMutation as applyClientMutation,
   applyServerPatch,
+  applyServerPatches,
   validateDataReplacement,
   validateExpectedSlotMember,
   validateSnapshotData,
@@ -46,6 +47,58 @@ function fixedRoleSlotNumbers(snapshot, role) {
     .filter(slot => slot.status === 'fixed' && slot.fixedRole === role)
     .map(slot => slot.index + 1)
 }
+
+test('patch batches preserve unrelated references and apply all concurrent slots', () => {
+  const snapshot = createSnapshot()
+  const untouchedTeam = { ...structuredClone(snapshot.teams[0]), id: 'team-2' }
+  snapshot.teams.push(untouchedTeam)
+  const patches = [0, 1].map(slotIndex => ({
+    type: 'signupSlot', teamId: 'team-1', slotIndex,
+    slot: { status: 'occupied', member: { qq: `1000${slotIndex}`, characterId: '玩家' } },
+  }))
+
+  const next = applyServerPatches(snapshot, patches)
+
+  assert.equal(next.teams[0].slots[0].member.qq, '10000')
+  assert.equal(next.teams[0].slots[1].member.qq, '10001')
+  assert.equal(next.teams[1], untouchedTeam)
+  assert.equal(next.teams[0].slots[2], snapshot.teams[0].slots[2])
+  assert.equal(next.archivedTeams, snapshot.archivedTeams)
+  assert.equal(next.userProfiles, snapshot.userProfiles)
+  assert.equal(snapshot.teams[0].slots[0].member, null)
+})
+
+test('replayed cancellation patches do not duplicate notices or logs', () => {
+  const patch = {
+    type: 'cancelSlot', teamId: 'team-1', slotIndex: 0,
+    slot: { status: 'empty', member: null },
+    cancellation: { qq: '10001', timestamp: 123, teamId: 'team-1' },
+    log: { id: 'log-1', timestamp: 123 },
+  }
+  const next = applyServerPatches(createSnapshot(), [patch, patch])
+  assert.equal(next.cancellations.length, 1)
+  assert.equal(next.logs.length, 1)
+})
+
+test('empty and unsupported patch batches preserve the snapshot', () => {
+  const snapshot = createSnapshot()
+  assert.equal(applyServerPatches(snapshot, []), snapshot)
+  assert.equal(applyServerPatches(snapshot, [null, { type: 'unknown' }]), snapshot)
+})
+
+test('incremental history stays within the bootstrap window', () => {
+  const patches = Array.from({ length: 550 }, (_, timestamp) => ({
+    type: 'cancelSlot', teamId: 'team-1', slotIndex: 0,
+    slot: { status: 'empty', member: null },
+    cancellation: { qq: '10001', timestamp },
+    log: { id: `log-${timestamp}`, timestamp },
+  }))
+  const next = applyServerPatches(createSnapshot(), patches)
+  assert.equal(next.logs.length, 500)
+  assert.equal(next.cancellations.length, 200)
+  assert.equal(next.logs[0].timestamp, 50)
+  assert.equal(next.cancellations[0].timestamp, 350)
+})
 
 test('applyMutation appends multiple teams in one mutation', () => {
   const snapshot = createSnapshot()

@@ -1,16 +1,17 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { resolve, join } from 'node:path'
+import { resolve, join, relative, isAbsolute } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const rootDir = resolve(import.meta.dirname, '..')
 const clients = process.env.BENCH_CLIENTS ?? '30'
 const port = process.env.BENCH_PORT ?? '23961'
 const benchTimeoutMs = Number.parseInt(process.env.BENCH_TIMEOUT_MS ?? '30000', 10)
-const tempDir = mkdtempSync(join(tmpdir(), 'teamassistant-bench-'))
-const dbPath = join(tempDir, 'bench.sqlite3')
+if (!Number.isFinite(benchTimeoutMs) || benchTimeoutMs <= 0) {
+  throw new Error('BENCH_TIMEOUT_MS 必须为正数')
+}
 
 const backendCandidates = [
   resolve(rootDir, 'backend-cpp', 'build', 'teamassistant_backend.exe'),
@@ -34,11 +35,27 @@ if (!backend || !bench) {
   process.exit(1)
 }
 
+const tempRoot = resolve(rootDir, '.temp')
+mkdirSync(tempRoot, { recursive: true })
+const tempDir = mkdtempSync(join(tempRoot, 'teamassistant-bench-'))
+const dbPath = join(tempDir, 'bench.sqlite3')
+const adminPath = join(tempDir, 'admin.json')
+const adminQq = '10001'
+const adminPassword = randomBytes(32).toString('hex')
+writeFileSync(adminPath, JSON.stringify({ adminQQs: [adminQq] }))
+
+function cleanupTempDir() {
+  const target = relative(tempRoot, resolve(tempDir))
+  if (!target || target.startsWith('..') || isAbsolute(target)) throw new Error('临时目录超出工作区')
+  rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+}
+
 function spawnProcess(label, command, args, env = {}) {
   const child = spawn(command, args, {
     cwd: rootDir,
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   })
   child.stdout.on('data', chunk => process.stdout.write(`[${label}] ${chunk}`))
   child.stderr.on('data', chunk => process.stderr.write(`[${label}] ${chunk}`))
@@ -50,11 +67,17 @@ function hasExited(child) {
 }
 
 async function waitForProcess(child, timeoutMs, label) {
+  if (hasExited(child)) return [child.exitCode ?? 1]
   const exited = once(child, 'exit')
-  const timeout = delay(timeoutMs).then(() => {
+  const controller = new AbortController()
+  const timeout = delay(timeoutMs, undefined, { signal: controller.signal }).then(() => {
     throw new Error(`${label} 超时，已等待 ${timeoutMs}ms`)
   })
-  return Promise.race([exited, timeout])
+  try {
+    return await Promise.race([exited, timeout])
+  } finally {
+    controller.abort()
+  }
 }
 
 async function stopProcess(child) {
@@ -74,7 +97,7 @@ async function waitForBackend(child, url) {
       throw new Error(`后端服务提前退出，退出码：${child.exitCode}`)
     }
     try {
-      const response = await fetch(`${url}/api/v2/version`, { cache: 'no-store' })
+      const response = await fetch(`${url}/api/v2/version`, { cache: 'no-store', signal: AbortSignal.timeout(1_000) })
       if (response.ok) return
     } catch {
       // keep waiting
@@ -88,6 +111,10 @@ const url = `http://127.0.0.1:${port}`
 const server = spawnProcess('server', backend, [], {
   PORT: port,
   TEAMASSISTANT_DB: dbPath,
+  TEAMASSISTANT_ADMIN_CONFIG: adminPath,
+  TEAMASSISTANT_ADMIN_PASSWORD: adminPassword,
+  TEAMASSISTANT_ADMIN_PASSWORD_HASH: '',
+  TEAMASSISTANT_ADMIN_PASSWORD_SALT: '',
 })
 
 let exitCode = 1
@@ -95,7 +122,7 @@ try {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, async () => {
       await stopProcess(server)
-      rmSync(tempDir, { recursive: true, force: true })
+      cleanupTempDir()
       process.exit(130)
     })
   }
@@ -107,7 +134,10 @@ try {
   ]
   exitCode = 0
   for (const scenario of scenarios) {
-    const runner = spawnProcess(scenario.label, bench, scenario.args)
+    const runner = spawnProcess(scenario.label, bench, scenario.args, {
+      BENCH_ADMIN_QQ: adminQq,
+      BENCH_ADMIN_PASSWORD: adminPassword,
+    })
     try {
       const [code] = await waitForProcess(runner, benchTimeoutMs, '并发压测')
       if ((code ?? 0) !== 0) {
@@ -119,10 +149,11 @@ try {
     }
   }
 } catch (error) {
+  exitCode = 1
   console.error(error instanceof Error ? error.message : String(error))
 } finally {
   await stopProcess(server)
-  rmSync(tempDir, { recursive: true, force: true })
+  cleanupTempDir()
 }
 
 process.exit(exitCode)
