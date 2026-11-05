@@ -1,5 +1,5 @@
 import type { ArchivedTeam, Cancellation, OperationLog, Team, UserProfiles } from './types'
-import { checkServer, fetchServerChanges, pushData, type ServerData } from './api'
+import { checkServer, fetchServerChanges, pushData, type ServerChanges, type ServerData } from './api'
 import { normalizeHydratableData, normalizeHydratableTeams } from './dataHydration'
 import { CANCELLATION_WINDOW, LOG_WINDOW, trimRecentByTimestamp } from './historyWindow'
 
@@ -48,6 +48,26 @@ export type LoadFromServerResult = 'loaded' | 'empty' | 'unavailable'
 export async function initServerMode(): Promise<boolean> {
   serverMode = await checkServer()
   return serverMode
+}
+
+// 首次同步同时确认服务可用性，避免先探测 /version 再串行获取数据。
+export async function initializeServerData(qq: string, signal?: AbortSignal): Promise<ServerChanges | null> {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const timeout = globalThis.setTimeout(abort, 10_000)
+  if (signal?.aborted) abort()
+  else signal?.addEventListener('abort', abort, { once: true })
+  try {
+    const changes = await fetchServerChanges(null, null, qq, controller.signal)
+    // 被替换的初始化不能改变当前会话的连接状态。
+    if (signal?.aborted) return null
+    const ready = changes?.ok === true && Boolean(changes.data)
+    serverMode = ready
+    return ready ? changes : null
+  } finally {
+    globalThis.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  }
 }
 
 export function hasHydratableTeams(data: Pick<ServerData, 'teams'> | null | undefined): data is ServerData {

@@ -352,13 +352,16 @@ function shouldTryDirectApi(result: { ok: false, kind: 'parse' | 'network'; erro
 }
 
 async function requestData<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T | null> {
+  if (init?.signal?.aborted) return null
   const first = await fetchJson<T>(input, init)
+  if (init?.signal?.aborted) return null
   if (first.ok) return first.data
 
   const fallback = shouldTryDirectApi(first) ? fallbackApiInput(input) : null
   if (!fallback) return null
 
   const second = await fetchJson<T>(fallback, init)
+  if (init?.signal?.aborted) return null
   return second.ok ? second.data : null
 }
 
@@ -629,7 +632,7 @@ export async function fetchServerVersion(): Promise<ServerVersion | null> {
   return null
 }
 
-export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null, qq?: string | null): Promise<ServerChanges | null> {
+export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null, qq?: string | null, signal?: AbortSignal): Promise<ServerChanges | null> {
   const params = new URLSearchParams()
   if (typeof dataVersion === 'number') params.set('dataVersion', String(dataVersion))
   if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
@@ -637,7 +640,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
   appendInviteToken(params)
   appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
-  const data = await requestData<unknown>(`${API}/sync${suffix}`, noCache)
+  const data = await requestData<unknown>(`${API}/sync${suffix}`, { ...noCache, signal })
   if (
     data &&
     typeof data === 'object' &&

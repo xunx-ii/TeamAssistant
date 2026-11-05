@@ -101,7 +101,7 @@
 }
 
 @keyframes loading-overlay-fade {
-  0%, 72% {
+  0% {
     opacity: 1;
   }
   100% {
@@ -152,7 +152,7 @@
 }
 
 .app-enter {
-  animation: app-enter-rise 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: app-enter-rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
 .loading-transition {
@@ -168,7 +168,8 @@
 }
 
 .loading-transition-exit {
-  animation: loading-overlay-fade 920ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  pointer-events: none;
+  animation: loading-overlay-fade 180ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 .loading-backdrop {
@@ -180,7 +181,7 @@
 }
 
 .loading-transition-exit .loading-backdrop {
-  animation: loading-backdrop-exit 520ms ease-out 80ms forwards;
+  animation: loading-backdrop-exit 160ms ease-out forwards;
 }
 
 .loading-pixel-gate {
@@ -214,11 +215,11 @@
 }
 
 .loading-transition-exit .loading-pixel-gate-left {
-  animation: loading-gate-open-left 880ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: loading-gate-open-left 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .loading-transition-exit .loading-pixel-gate-right {
-  animation: loading-gate-open-right 880ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: loading-gate-open-right 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .loading-scanline {
@@ -240,7 +241,18 @@
 }
 
 .loading-transition-exit .loading-core {
-  animation: loading-core-exit 460ms cubic-bezier(0.2, 0.75, 0.2, 1) forwards;
+  animation: loading-core-exit 120ms cubic-bezier(0.2, 0.75, 0.2, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-enter,
+  .loading-transition * {
+    animation: none !important;
+  }
+
+  .loading-transition-exit {
+    animation-duration: 1ms;
+  }
 }
 
 .loading-stars {

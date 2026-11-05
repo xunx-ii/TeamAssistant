@@ -96,6 +96,95 @@ test('loadTeams hydrates malformed local storage snapshots', async () => {
   }
 })
 
+test('initialization uses one full sync with the viewer identity and preserves an empty board', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init) => {
+    calls.push({ input: String(input), init })
+    return createChangesResponse({ teams: [], cancellations: [], archivedTeams: [], logs: [], userProfiles: {} })
+  }, async () => {
+    const mod = await import('../src/storage.ts?case=initial-sync')
+    const changes = await mod.initializeServerData('20001')
+    assert.deepEqual(changes.data.teams, [])
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].input, '/api/v2/sync?qq=20001')
+    assert.equal(calls[0].init.cache, 'no-store')
+    assert.equal(calls[0].init.signal.aborted, false)
+  })
+})
+
+test('initialization preserves the access gate when the board is protected', async () => {
+  const gate = { publicAtMs: Date.now() + 60_000, isOpen: false, authorized: false, requiresInvite: true }
+  await withMockedFetch(async () => createChangesResponse({
+    teams: [], cancellations: [], accessGate: gate, isAdmin: false,
+  }), async () => {
+    const mod = await import('../src/storage.ts?case=initial-protected')
+    const changes = await mod.initializeServerData('20001')
+    assert.equal(changes.data.accessGate.authorized, false)
+    assert.equal(changes.data.accessGate.isOpen, false)
+    assert.equal(changes.data.accessGate.publicAtMs, gate.publicAtMs)
+    assert.equal(await mod.loadFromServer(), 'empty')
+  })
+})
+
+test('initialization rejects failed or incomplete snapshots', async () => {
+  for (const payload of [
+    { ok: false, dataVersion: 1, lockVersion: 1, data: { teams: [], cancellations: [] } },
+    { ok: true, dataVersion: 1, lockVersion: 1 },
+  ]) {
+    await withMockedFetch(async () => createJsonResponse(payload), async () => {
+      const mod = await import(`../src/storage.ts?case=incomplete-${payload.ok}`)
+      assert.equal(await mod.initializeServerData('20001'), null)
+      assert.equal(await mod.loadFromServer(), 'unavailable')
+    })
+  }
+})
+
+test('a stalled initialization times out without a direct-backend retry', async t => {
+  const mod = await import('../src/storage.ts?case=initial-timeout')
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let calls = 0
+  let requestSignal
+  await withMockedFetch(async (_input, { signal }) => {
+    calls += 1
+    requestSignal = signal
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  }, async () => {
+    const pending = mod.initializeServerData('20001')
+    t.mock.timers.tick(9_999)
+    assert.equal(requestSignal.aborted, false)
+    t.mock.timers.tick(1)
+    assert.equal(await pending, null)
+    assert.equal(requestSignal.aborted, true)
+    assert.equal(calls, 1)
+    assert.equal(await mod.loadFromServer(), 'unavailable')
+  })
+})
+
+test('cancelled initialization cannot disable a newer connected session', async () => {
+  const storage = installLocalStorage()
+  const controller = new AbortController()
+  let calls = 0
+  try {
+    await withMockedFetch(async (_input, { signal }) => {
+      calls += 1
+      if (calls === 1) return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+      return createChangesResponse({
+        teams: [{ id: 'team-1', name: '测试团队', slots: [] }], cancellations: [],
+      })
+    }, async () => {
+      const mod = await import('../src/storage.ts?case=cancelled-session')
+      const obsolete = mod.initializeServerData('10001', controller.signal)
+      assert.ok(await mod.initializeServerData('20001'))
+      controller.abort()
+      assert.equal(await obsolete, null)
+      assert.equal(await mod.loadFromServer(), 'loaded')
+      assert.equal(calls, 3)
+    })
+  } finally {
+    storage.restore()
+  }
+})
+
 test('loadFromServer reports empty server snapshots without hydrating local data', async () => {
   const storage = installLocalStorage()
   let calls = 0

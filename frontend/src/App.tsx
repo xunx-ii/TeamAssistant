@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { initTheme } from './storage/theme'
 import {
   getStoredQQ, setStoredQQ, removeStoredQQ,
@@ -7,7 +7,7 @@ import {
   loadArchivedTeams, setArchivedTeamsLocal,
   loadOperationLogs, setOperationLogsLocal,
   loadUserProfiles, setUserProfilesLocal,
-  initServerMode, normalizeServerData,
+  initializeServerData, normalizeServerData,
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { getMartialArt, martialArts } from './data/martialArts'
@@ -25,27 +25,29 @@ import { getCurrentWeekStartKey } from './week'
 import { startAdaptivePoll } from './polling'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
-import { SubsidyConfigDialog } from './components/SubsidyConfig'
-import { SubsidyModal } from './components/SubsidyModal'
-import { SubsidyStats } from './components/SubsidyStats'
-import { PresetSubsidyDialog } from './components/PresetSubsidyDialog'
-import { BackupSettingsDialog } from './components/BackupSettingsDialog'
 import { SlotGrid } from './components/SlotGrid'
-import { SlotRolePicker } from './components/SlotRolePicker'
 import { SignupModal } from './components/SignupModal'
 import { CancelModal } from './components/CancelModal'
 import { CancellationNotice } from './components/CancellationNotice'
-import { CreateTeamDialog } from './components/CreateTeamDialog'
-import { CopyTeamDialog } from './components/CopyTeamDialog'
-import { ArchiveDialog } from './components/ArchiveDialog'
-import { OperationLogDialog } from './components/OperationLogDialog'
 import { NicknameDialog } from './components/NicknameDialog'
-import { AccessGateDialog } from './components/AccessGateDialog'
+import { DeferredDialog } from './components/DeferredDialog'
 import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { useImeSafeInputHandlers } from './components/ui/imeInput'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
 import { formatShanghaiDateTimeMinute } from './time'
+
+const SubsidyConfigDialog = lazy(() => import('./components/SubsidyConfig').then(module => ({ default: module.SubsidyConfigDialog })))
+const SubsidyModal = lazy(() => import('./components/SubsidyModal').then(module => ({ default: module.SubsidyModal })))
+const SubsidyStats = lazy(() => import('./components/SubsidyStats').then(module => ({ default: module.SubsidyStats })))
+const PresetSubsidyDialog = lazy(() => import('./components/PresetSubsidyDialog').then(module => ({ default: module.PresetSubsidyDialog })))
+const BackupSettingsDialog = lazy(() => import('./components/BackupSettingsDialog').then(module => ({ default: module.BackupSettingsDialog })))
+const SlotRolePicker = lazy(() => import('./components/SlotRolePicker').then(module => ({ default: module.SlotRolePicker })))
+const CreateTeamDialog = lazy(() => import('./components/CreateTeamDialog').then(module => ({ default: module.CreateTeamDialog })))
+const CopyTeamDialog = lazy(() => import('./components/CopyTeamDialog').then(module => ({ default: module.CopyTeamDialog })))
+const ArchiveDialog = lazy(() => import('./components/ArchiveDialog').then(module => ({ default: module.ArchiveDialog })))
+const OperationLogDialog = lazy(() => import('./components/OperationLogDialog').then(module => ({ default: module.OperationLogDialog })))
+const AccessGateDialog = lazy(() => import('./components/AccessGateDialog').then(module => ({ default: module.AccessGateDialog })))
 
 function findPendingNotice(qq: string | null, cancellations: Cancellation[]) {
   if (!qq) return null
@@ -199,7 +201,10 @@ function App() {
   const currentNickname = qq ? (userProfiles[qq]?.nickname ?? '') : ''
   const hasBoardAccess = !serverMode || accessGate?.authorized !== false
   const requiresNickname = Boolean(qq) && !currentNickname
-  const subsidyTargets = useMemo(() => createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart), [teams, archivedTeams, qq, currentWeekStart])
+  const subsidyTargets = useMemo(
+    () => showSubsidy || showSubsidyStats ? createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart) : [],
+    [teams, archivedTeams, qq, currentWeekStart, showSubsidy, showSubsidyStats],
+  )
   const subsidyRegistrationTargets = useMemo(
     () => getSubsidyRegistrationTargets(subsidyTargets, currentWeekStart),
     [subsidyTargets, currentWeekStart],
@@ -390,6 +395,7 @@ function App() {
 
   useEffect(() => {
     let active = true
+    const controller = new AbortController()
     const initialize = async () => {
       const storedAdminSession = readStoredAdminSession(qq)
       if (storedAdminSession) {
@@ -398,26 +404,25 @@ function App() {
         clearAdminToken()
         setIsAdmin(false)
       }
-      const sm = await initServerMode()
+      // 登录页无需等待报名数据；进入看板时一次同步即可完成初始化。
+      const changes = qq ? await initializeServerData(qq, controller.signal) : null
       if (!active) return
-      if (sm) {
-        const changes = await fetchServerChanges(dataVersionRef.current, lockVersionRef.current, qq)
-        if (!active) return
-        const viewerIsAdmin = changes?.isAdmin === true
-        if (typeof changes?.isAdmin === 'boolean') {
+      if (changes) {
+        const viewerIsAdmin = changes.isAdmin === true
+        if (typeof changes.isAdmin === 'boolean') {
           setIsAdmin(viewerIsAdmin)
         }
-        if (!viewerIsAdmin && storedAdminSession) {
+        if (changes.isAdmin === false && storedAdminSession) {
           clearAdminToken()
           clearStoredAdminSession()
         }
-        const loadedData = changes?.data ?? null
+        const loadedData = changes.data
         if (loadedData && syncServerData(loadedData)) {
           if (loadedData.teams.length > 0) setActiveTeamId(loadedData.teams[0].id)
         }
       }
       if (!active) return
-      setServerMode(sm)
+      setServerMode(changes !== null)
       setInitializing(false)
     }
     initialize().catch(() => {
@@ -427,8 +432,16 @@ function App() {
     })
     return () => {
       active = false
+      controller.abort()
     }
   }, [qq, syncServerData])
+
+  useEffect(() => {
+    if (initializing || !showLoadingTransition) return
+    // 动画被浏览器或系统设置禁用时，仍保证遮罩可以卸载。
+    const timeout = window.setTimeout(() => setShowLoadingTransition(false), 350)
+    return () => window.clearTimeout(timeout)
+  }, [initializing, showLoadingTransition])
 
   useEffect(() => { initTheme() }, [])
 
@@ -1115,25 +1128,27 @@ function App() {
 
   const sharedDialogs = (
     <>
-      <SignupModal
-        key={`signup-${activeTeam?.id ?? 'none'}-${signupSlot ?? 'none'}`}
-        open={signupSlot !== null}
-        qq={qq}
-        nickname={currentNickname}
-        slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
-        teamId={activeTeam?.id}
-        requireLock={serverMode}
-        lockRetrySignal={lockRetrySignal}
-        isAdminEditing={false}
-        isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
-        onlyTnSignup={activeTeam?.config.onlyTnSignup}
-        takenMartialArts={getTakenMartialArts()}
-        onConfirm={handleSignupConfirm}
-        onClose={() => setSignupSlot(null)}
-        onLockAcquired={applyAcquiredSlotLock}
-        onLockReleased={applyReleasedSlotLock}
-        onLockExpired={handleSignupLockExpired}
-      />
+      {signupSlot !== null && (
+        <SignupModal
+          key={`signup-${activeTeam?.id ?? 'none'}-${signupSlot ?? 'none'}`}
+          open={signupSlot !== null}
+          qq={qq}
+          nickname={currentNickname}
+          slotInfo={signupSlot !== null ? activeTeam?.slots[signupSlot] : null}
+          teamId={activeTeam?.id}
+          requireLock={serverMode}
+          lockRetrySignal={lockRetrySignal}
+          isAdminEditing={false}
+          isBossSlot={signupSlot !== null && activeTeam ? activeTeam.config.reservedSlots.includes(signupSlot) : false}
+          onlyTnSignup={activeTeam?.config.onlyTnSignup}
+          takenMartialArts={getTakenMartialArts()}
+          onConfirm={handleSignupConfirm}
+          onClose={() => setSignupSlot(null)}
+          onLockAcquired={applyAcquiredSlotLock}
+          onLockReleased={applyReleasedSlotLock}
+          onLockExpired={handleSignupLockExpired}
+        />
+      )}
 
       {editSlot !== null && activeTeam && (() => {
         const editSlotIndex = editSlot
@@ -1170,129 +1185,167 @@ function App() {
         )
       })()}
 
-      <CancelModal
-        open={cancelSlot !== null}
-        memberName={cancelSlot !== null && activeTeam ? activeTeam.slots[cancelSlot]?.member?.characterId ?? '' : ''}
-        qq={qq}
-        teamId={activeTeam?.id}
-        slotIndex={cancelSlot}
-        requireLock={serverMode}
-        onConfirm={(reason, lockTimestamp) => { void handleCancelConfirm(reason, lockTimestamp) }}
-        onClose={() => setCancelSlot(null)}
-        onLockAcquired={applyAcquiredSlotLock}
-        onLockReleased={applyReleasedSlotLock}
-      />
+      {cancelSlot !== null && (
+        <CancelModal
+          open={cancelSlot !== null}
+          memberName={cancelSlot !== null && activeTeam ? activeTeam.slots[cancelSlot]?.member?.characterId ?? '' : ''}
+          qq={qq}
+          teamId={activeTeam?.id}
+          slotIndex={cancelSlot}
+          requireLock={serverMode}
+          onConfirm={(reason, lockTimestamp) => { void handleCancelConfirm(reason, lockTimestamp) }}
+          onClose={() => setCancelSlot(null)}
+          onLockAcquired={applyAcquiredSlotLock}
+          onLockReleased={applyReleasedSlotLock}
+        />
+      )}
 
       {setRoleSlot !== null && activeTeam && (
-        <SlotRolePicker
-          open={true}
-          slotIndex={setRoleSlot}
-          currentRole={activeTeam.slots[setRoleSlot]?.fixedRole ?? null}
-          currentMartialArt={activeTeam.slots[setRoleSlot]?.fixedMartialArtIndex ?? null}
-          isReserved={activeTeam.slots[setRoleSlot]?.status === 'reserved'}
-          canSignup={true}
-          onlyTnSignup={activeTeam.config.onlyTnSignup}
-          errorMessage={slotRoleError}
-          onSet={(role, maIdx, assignQQ) => { handleSetSlotRole(role, maIdx, assignQQ) }}
-          onSignup={handleSignupFromRole}
-          onClose={() => { setSlotRoleError(''); setSetRoleSlot(null) }}
-        />
+        <DeferredDialog onClose={() => { setSlotRoleError(''); setSetRoleSlot(null) }}>
+          <SlotRolePicker
+            open={true}
+            slotIndex={setRoleSlot}
+            currentRole={activeTeam.slots[setRoleSlot]?.fixedRole ?? null}
+            currentMartialArt={activeTeam.slots[setRoleSlot]?.fixedMartialArtIndex ?? null}
+            isReserved={activeTeam.slots[setRoleSlot]?.status === 'reserved'}
+            canSignup={true}
+            onlyTnSignup={activeTeam.config.onlyTnSignup}
+            errorMessage={slotRoleError}
+            onSet={(role, maIdx, assignQQ) => { handleSetSlotRole(role, maIdx, assignQQ) }}
+            onSignup={handleSignupFromRole}
+            onClose={() => { setSlotRoleError(''); setSetRoleSlot(null) }}
+          />
+        </DeferredDialog>
       )}
       {showCreateTeam && (
-        <CreateTeamDialog
-          subsidyPresets={subsidyPresets}
-          open={showCreateTeam}
-          onConfirm={handleCreateTeam}
-          onClose={() => setShowCreateTeam(false)}
-        />
+        <DeferredDialog onClose={() => setShowCreateTeam(false)}>
+          <CreateTeamDialog
+            subsidyPresets={subsidyPresets}
+            open={showCreateTeam}
+            onConfirm={handleCreateTeam}
+            onClose={() => setShowCreateTeam(false)}
+          />
+        </DeferredDialog>
       )}
       {showCopyTeam && activeTeam && (
-        <CopyTeamDialog
-          key={activeTeam.id}
-          open={showCopyTeam}
-          sourceName={activeTeam.name}
-          onConfirm={handleCopyTeam}
-          onClose={() => setShowCopyTeam(false)}
-        />
+        <DeferredDialog onClose={() => setShowCopyTeam(false)}>
+          <CopyTeamDialog
+            key={activeTeam.id}
+            open={showCopyTeam}
+            sourceName={activeTeam.name}
+            onConfirm={handleCopyTeam}
+            onClose={() => setShowCopyTeam(false)}
+          />
+        </DeferredDialog>
       )}
-      <OperationLogDialog
-        open={showLogs}
-        teamName={activeTeam?.name ?? ''}
-        logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
-        // bootstrap 或增量更新超出本地历史窗口时可继续加载服务端日志。
-        hasMore={serverMode && logsTruncated}
-        onLoadMore={serverMode ? (cursor) => fetchLogsPage({
-          before: cursor,
-          teamId: activeTeam?.id ?? null,
-          actorQq: qq,
-        }) : undefined}
-        onClose={() => setShowLogs(false)}
-      />
-      <ArchiveDialog
-        open={showArchives}
-        archives={archivedTeams}
-        onRestore={(archiveId) => { void handleRestoreArchive(archiveId) }}
-        onClose={() => setShowArchives(false)}
-      />
+      {showLogs && (
+        <DeferredDialog onClose={() => setShowLogs(false)}>
+          <OperationLogDialog
+            open={showLogs}
+            teamName={activeTeam?.name ?? ''}
+            logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
+            // bootstrap 或增量更新超出本地历史窗口时可继续加载服务端日志。
+            hasMore={serverMode && logsTruncated}
+            onLoadMore={serverMode ? (cursor) => fetchLogsPage({
+              before: cursor,
+              teamId: activeTeam?.id ?? null,
+              actorQq: qq,
+            }) : undefined}
+            onClose={() => setShowLogs(false)}
+          />
+        </DeferredDialog>
+      )}
+      {showArchives && (
+        <DeferredDialog onClose={() => setShowArchives(false)}>
+          <ArchiveDialog
+            open={showArchives}
+            archives={archivedTeams}
+            onRestore={(archiveId) => { void handleRestoreArchive(archiveId) }}
+            onClose={() => setShowArchives(false)}
+          />
+        </DeferredDialog>
+      )}
       {showSubsidy && (
-        <SubsidyModal
-          key={`subsidy-modal-${activeTeam?.id ?? 'none'}`}
-          open={showSubsidy}
-          targets={subsidyRegistrationTargets}
-          onConfirm={handleRegisterSubsidies}
-          onClose={() => setShowSubsidy(false)}
-        />
+        <DeferredDialog onClose={() => setShowSubsidy(false)}>
+          <SubsidyModal
+            key={`subsidy-modal-${activeTeam?.id ?? 'none'}`}
+            open={showSubsidy}
+            targets={subsidyRegistrationTargets}
+            onConfirm={handleRegisterSubsidies}
+            onClose={() => setShowSubsidy(false)}
+          />
+        </DeferredDialog>
       )}
       {showSubsidyConfig && (
-        <SubsidyConfigDialog
-          subsidyPresets={subsidyPresets}
-          key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
-          open={showSubsidyConfig}
-          subsidyTypes={activeTeam?.subsidyTypes || []}
-          onSave={handleSaveSubsidyTypes}
-          onClose={() => setShowSubsidyConfig(false)}
+        <DeferredDialog onClose={() => setShowSubsidyConfig(false)}>
+          <SubsidyConfigDialog
+            subsidyPresets={subsidyPresets}
+            key={`subsidy-config-${activeTeam?.id ?? 'none'}`}
+            open={showSubsidyConfig}
+            subsidyTypes={activeTeam?.subsidyTypes || []}
+            onSave={handleSaveSubsidyTypes}
+            onClose={() => setShowSubsidyConfig(false)}
+          />
+        </DeferredDialog>
+      )}
+      {showSubsidyStats && (
+        <DeferredDialog onClose={() => setShowSubsidyStats(false)}>
+          <SubsidyStats
+            key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
+            open={showSubsidyStats}
+            targets={subsidyTargets}
+            userProfiles={userProfiles}
+            onClose={() => setShowSubsidyStats(false)}
+          />
+        </DeferredDialog>
+      )}
+      {(showNicknameDialog || requiresNickname) && (
+        <NicknameDialog
+          open={showNicknameDialog || requiresNickname}
+          qq={qq}
+          nickname={currentNickname}
+          required={requiresNickname}
+          errorMessage={nicknameError}
+          onConfirm={(nickname) => { void handleSaveNickname(nickname) }}
+          onClose={() => {
+            setNicknameError('')
+            setShowNicknameDialog(false)
+          }}
+          onLogout={handleLogout}
         />
       )}
-      <SubsidyStats
-        key={`subsidy-stats-${activeTeam?.id ?? 'none'}`}
-        open={showSubsidyStats}
-        targets={subsidyTargets}
-        userProfiles={userProfiles}
-        onClose={() => setShowSubsidyStats(false)}
-      />
-      <NicknameDialog
-        open={showNicknameDialog || requiresNickname}
-        qq={qq}
-        nickname={currentNickname}
-        required={requiresNickname}
-        errorMessage={nicknameError}
-        onConfirm={(nickname) => { void handleSaveNickname(nickname) }}
-        onClose={() => {
-          setNicknameError('')
-          setShowNicknameDialog(false)
-        }}
-        onLogout={handleLogout}
-      />
-      <PresetSubsidyDialog
-        open={showSubsidyPreset}
-        serverMode={serverMode}
-        actorQq={qq}
-        subsidyPresets={subsidyPresets}
-        onSaved={setSubsidyPresets}
-        onClose={() => setShowSubsidyPreset(false)}
-      />
-      <BackupSettingsDialog
-        open={showBackupSettings}
-        actorQq={qq}
-        onRestored={handleBackupRestored}
-        onClose={() => setShowBackupSettings(false)}
-      />
-      <AccessGateDialog
-        open={showAccessGate}
-        actorQq={qq}
-        onUpdated={setAccessGate}
-        onClose={() => setShowAccessGate(false)}
-      />
+      {showSubsidyPreset && (
+        <DeferredDialog onClose={() => setShowSubsidyPreset(false)}>
+          <PresetSubsidyDialog
+            open={showSubsidyPreset}
+            serverMode={serverMode}
+            actorQq={qq}
+            subsidyPresets={subsidyPresets}
+            onSaved={setSubsidyPresets}
+            onClose={() => setShowSubsidyPreset(false)}
+          />
+        </DeferredDialog>
+      )}
+      {showBackupSettings && (
+        <DeferredDialog onClose={() => setShowBackupSettings(false)}>
+          <BackupSettingsDialog
+            open={showBackupSettings}
+            actorQq={qq}
+            onRestored={handleBackupRestored}
+            onClose={() => setShowBackupSettings(false)}
+          />
+        </DeferredDialog>
+      )}
+      {showAccessGate && (
+        <DeferredDialog onClose={() => setShowAccessGate(false)}>
+          <AccessGateDialog
+            open={showAccessGate}
+            actorQq={qq}
+            onUpdated={setAccessGate}
+            onClose={() => setShowAccessGate(false)}
+          />
+        </DeferredDialog>
+      )}
       <Dialog open={!!confirmOptions} onOpenChange={(value) => { if (!value) resolveConfirm(false) }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>

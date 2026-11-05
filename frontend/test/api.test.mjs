@@ -230,6 +230,33 @@ test('fetchServerChanges requests only version deltas and parses changed payload
   assert.equal(calls[0].input, '/api/v2/sync?dataVersion=3&lockVersion=7')
 })
 
+test('an already cancelled sync makes no network requests', async () => {
+  let calls = 0
+  await withMockedFetch(async () => { calls += 1; throw new Error('unexpected request') }, async () => {
+    const { fetchServerChanges } = await import('../src/api.ts?case=sync-already-cancelled')
+    const controller = new AbortController()
+    controller.abort()
+    assert.equal(await fetchServerChanges(null, null, '20001', controller.signal), null)
+    assert.equal(calls, 0)
+  })
+})
+
+test('cancelled sync does not retry the direct backend', async () => {
+  let calls = 0
+  const controller = new AbortController()
+  await withMockedFetch(async (_input, { signal }) => {
+    calls += 1
+    assert.equal(signal, controller.signal)
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  }, async () => {
+    const { fetchServerChanges } = await import('../src/api.ts?case=sync-cancelled')
+    const pending = fetchServerChanges(null, null, '20001', controller.signal)
+    controller.abort()
+    assert.equal(await pending, null)
+    assert.equal(calls, 1)
+  })
+})
+
 test('invite token is sent with sync and mutation requests', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {
