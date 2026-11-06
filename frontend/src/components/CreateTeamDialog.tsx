@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { SubsidyPresetLoader } from './SubsidyPresetLoader'
 import { TeamWeekSelector } from './TeamWeekSelector'
 import { TeamPublicationFields } from './TeamPublicationFields'
-import { formatShanghaiDateTimeLocalInput, parseShanghaiDateTimeLocalInput } from '../time'
+import { resolveTeamPublicationDraft } from '../teamPublication'
 import { formatSubsidyPresetPreview } from '../subsidyPresetPreview'
 import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 import {
@@ -40,8 +40,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
   const [loadedPresetIds, setLoadedPresetIds] = useState<string[]>([])
   const [onlyTnSignup, setOnlyTnSignup] = useState(false)
   const [uniqueQqSignup, setUniqueQqSignup] = useState(false)
-  const [publicSignup, setPublicSignup] = useState(false)
-  const [publicAtInput, setPublicAtInput] = useState(() => formatShanghaiDateTimeLocalInput(Date.now()))
+  const [nonPublicSignup, setNonPublicSignup] = useState(false)
+  const [publicAtInput, setPublicAtInput] = useState('')
   const [quickReserve, setQuickReserve] = useState(false)
   const [reserveT, setReserveT] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
   const [reserveHealer, setReserveHealer] = useState<number>(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
@@ -70,8 +70,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     setLoadedPresetIds([])
     setOnlyTnSignup(false)
     setUniqueQqSignup(false)
-    setPublicSignup(false)
-    setPublicAtInput(formatShanghaiDateTimeLocalInput(Date.now()))
+    setNonPublicSignup(false)
+    setPublicAtInput('')
     setQuickReserve(false)
     setReserveT(DEFAULT_INITIAL_RESERVE_COUNTS.reserveT)
     setReserveHealer(DEFAULT_INITIAL_RESERVE_COUNTS.reserveHealer)
@@ -83,8 +83,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     e.preventDefault()
     const trimmed = normalizeTextInput(name, { maxLength: TEXT_INPUT_LIMITS.teamName })
     if (!trimmed) return
-    const publicAtMs = publicSignup ? parseShanghaiDateTimeLocalInput(publicAtInput) : 0
-    if (publicAtMs === null) return
+    const publication = resolveTeamPublicationDraft({ nonPublicSignup, publicAtInput })
+    if (!publication) return
     const resolvedWeekStart = weekTouched ? weekStart : getCurrentWeekStartKey()
     onConfirm({
       name: trimmed,
@@ -93,8 +93,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
       subsidyPresetIds: loadedPresetIds,
       onlyTnSignup,
       uniqueQqSignup,
-      publicSignup,
-      publicAtMs,
+      ...publication,
       quickReserve,
       reserveT,
       reserveHealer,
@@ -170,7 +169,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
 
           <TeamWeekSelector value={weekStart} onChange={handleWeekStartChange} />
 
-          <TeamPublicationFields id="create-team" publicSignup={publicSignup} publicAtInput={publicAtInput} onPublicSignupChange={setPublicSignup} onPublicAtChange={setPublicAtInput} />
+          <TeamPublicationFields id="create-team" nonPublicSignup={nonPublicSignup} publicAtInput={publicAtInput} onNonPublicSignupChange={setNonPublicSignup} onPublicAtChange={setPublicAtInput} />
 
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">

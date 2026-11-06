@@ -143,6 +143,8 @@ publicSignup && 当前时间 >= publicAtMs
 
 `publicSignup: false` 的团队只对已验证的管理员和携带正确共享 `inviteToken` 的请求可见。`publicAtMs: 0` 表示立即公开。旧团队缺少这两个字段时按公开处理；升级数据库时会将原有全局公开时间迁移到已有团队。
 
+界面使用“不公开报名”选项：未勾选时保存为 `publicSignup: true, publicAtMs: 0`；勾选且未填写公开时间时保存为 `publicSignup: false, publicAtMs: 0`；勾选并填写时间时保存为 `publicSignup: true` 和对应的 `publicAtMs`，到点自动公开。
+
 团队、归档、日志、取消记录、锁和增量补丁都按同一可见范围过滤；不可见团队也不能通过直接请求报名或登记补贴。到公开时间后，服务端会更新数据版本并通过 SSE 通知已打开的页面。
 
 ## 3. 数据结构

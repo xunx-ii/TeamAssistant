@@ -1,8 +1,32 @@
 import type { Snapshot } from './dataStore'
+import { formatShanghaiDateTimeLocalInput, parseShanghaiDateTimeLocalInput } from './time'
 
 export interface TeamPublication {
   publicSignup: boolean
   publicAtMs: number
+}
+
+export interface TeamPublicationDraft {
+  nonPublicSignup: boolean
+  publicAtInput: string
+}
+
+export function createTeamPublicationDraft(publication: TeamPublication, now = Date.now()): TeamPublicationDraft {
+  const nonPublicSignup = !isTeamPublic(publication, now)
+  return {
+    nonPublicSignup,
+    publicAtInput: nonPublicSignup && publication.publicSignup && publication.publicAtMs > 0
+      ? formatShanghaiDateTimeLocalInput(publication.publicAtMs)
+      : '',
+  }
+}
+
+export function resolveTeamPublicationDraft(draft: TeamPublicationDraft): TeamPublication | null {
+  if (!draft.nonPublicSignup) return { publicSignup: true, publicAtMs: 0 }
+  if (!draft.publicAtInput) return { publicSignup: false, publicAtMs: 0 }
+  const publicAtMs = parseShanghaiDateTimeLocalInput(draft.publicAtInput)
+  if (publicAtMs === null || publicAtMs < 0) return null
+  return { publicSignup: true, publicAtMs }
 }
 
 export function isTeamPublic(config: Partial<TeamPublication>, now = Date.now()) {

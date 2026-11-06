@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createDefaultTeam, createTeamsFromGuide, createTeamCopies } from '../src/teamCreation.ts'
 import { normalizeHydratableData } from '../src/dataHydration.ts'
 import { applyMutation } from '../src/dataStore.ts'
-import { isTeamPublic, publicSnapshot } from '../src/teamPublication.ts'
+import { createTeamPublicationDraft, isTeamPublic, publicSnapshot, resolveTeamPublicationDraft } from '../src/teamPublication.ts'
 import { parseShanghaiDateTimeLocalInput } from '../src/time.ts'
 
 const values = {
@@ -11,6 +11,51 @@ const values = {
   onlyTnSignup: false, uniqueQqSignup: false, quickReserve: true,
   reserveT: 2, reserveHealer: 2, reserveBoss: 0,
 }
+
+test('non-public signup is opt-in and an optional publication time controls automatic opening', () => {
+  const publicAtInput = '2026-11-06T20:00'
+  const publicAtMs = parseShanghaiDateTimeLocalInput(publicAtInput)
+  const immediate = resolveTeamPublicationDraft({ nonPublicSignup: false, publicAtInput })
+  assert.deepEqual(immediate, { publicSignup: true, publicAtMs: 0 })
+  assert.equal(isTeamPublic(immediate, publicAtMs - 1), true)
+
+  const inviteOnly = resolveTeamPublicationDraft({ nonPublicSignup: true, publicAtInput: '' })
+  assert.deepEqual(inviteOnly, { publicSignup: false, publicAtMs: 0 })
+  assert.equal(isTeamPublic(inviteOnly, publicAtMs + 1), false)
+
+  const scheduled = resolveTeamPublicationDraft({ nonPublicSignup: true, publicAtInput })
+  assert.deepEqual(scheduled, { publicSignup: true, publicAtMs })
+  for (const team of createTeamsFromGuide({ ...values, ...scheduled }, [])) {
+    assert.equal(isTeamPublic(team.config, publicAtMs - 1), false)
+    assert.equal(isTeamPublic(team.config, publicAtMs), true)
+  }
+})
+
+test('publication editing retains existing private and scheduled policies', () => {
+  const publicAtInput = '2026-11-06T20:00'
+  const publicAtMs = parseShanghaiDateTimeLocalInput(publicAtInput)
+  for (const publication of [
+    { publicSignup: true, publicAtMs: 0 },
+    { publicSignup: false, publicAtMs: 0 },
+    { publicSignup: true, publicAtMs },
+  ]) {
+    const draft = createTeamPublicationDraft(publication, publicAtMs - 1)
+    assert.equal(draft.nonPublicSignup, !isTeamPublic(publication, publicAtMs - 1))
+    assert.deepEqual(resolveTeamPublicationDraft(draft), publication)
+  }
+  assert.deepEqual(createTeamPublicationDraft({ publicSignup: true, publicAtMs }, publicAtMs), {
+    nonPublicSignup: false, publicAtInput: '',
+  })
+})
+
+test('invalid scheduled times cannot accidentally publish a non-public team', () => {
+  for (const publicAtInput of ['invalid', '2026-02-31T20:00', '1969-12-31T20:00']) {
+    assert.equal(resolveTeamPublicationDraft({ nonPublicSignup: true, publicAtInput }), null)
+  }
+  assert.deepEqual(resolveTeamPublicationDraft({ nonPublicSignup: false, publicAtInput: 'invalid' }), {
+    publicSignup: true, publicAtMs: 0,
+  })
+})
 
 test('batch creation and copying retain per-team publication independently of signup rules', () => {
   const publicAtMs = parseShanghaiDateTimeLocalInput('2026-11-06T20:00')
