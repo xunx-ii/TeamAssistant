@@ -5,7 +5,10 @@
 **/build
 **/dist
 **/.temp
-**/data
+# Exclude runtime state without removing source directories named data.
+/data/
+/backend-cpp/data/
+/qqbot/data/
 **/uploads
 **/logs
 **/backup
