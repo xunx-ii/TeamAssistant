@@ -1,6 +1,7 @@
 import type { ArchivedTeam, Cancellation, Member, OperationLog, Slot, SubsidyType, Team, TeamConfig, UserProfiles } from './types'
 import { createEmptySlots, TOTAL_SLOTS } from './types'
 import { normalizeWeekStartKey } from './week'
+import { normalizeTeamPublication } from './teamPublication'
 
 interface HydratableSnapshot {
   teams: Team[]
@@ -67,6 +68,7 @@ function normalizeConfig(config: unknown): TeamConfig {
     locked: typeof source.locked === 'boolean' ? source.locked : false,
     onlyTnSignup: typeof source.onlyTnSignup === 'boolean' ? source.onlyTnSignup : false,
     uniqueQqSignup: typeof source.uniqueQqSignup === 'boolean' ? source.uniqueQqSignup : false,
+    ...normalizeTeamPublication(source),
   }
 }
 

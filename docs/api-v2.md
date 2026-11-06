@@ -133,15 +133,17 @@ Authorization: Bearer <adminToken>
 
 本人操作时，请保证请求体的 `actorQq` 与路径中的目标 QQ 一致。管理员代操作时，`actorQq` 应填写管理员 QQ，并携带有效 Token。
 
-### 2.4 访问门禁
+### 2.4 团队可见范围
 
-门禁开放条件为：
+每个团队通过 `config.publicSignup` 和 `config.publicAtMs` 设置公开报名。普通用户的可见条件为：
 
 ```text
-publicAtMs <= 0 || 当前时间 >= publicAtMs
+publicSignup && 当前时间 >= publicAtMs
 ```
 
-门禁关闭时，管理员或携带正确 `inviteToken` 的请求仍然可以访问受保护数据。
+`publicSignup: false` 的团队只对已验证的管理员和携带正确共享 `inviteToken` 的请求可见。`publicAtMs: 0` 表示立即公开。旧团队缺少这两个字段时按公开处理；升级数据库时会将原有全局公开时间迁移到已有团队。
+
+团队、归档、日志、取消记录、锁和增量补丁都按同一可见范围过滤；不可见团队也不能通过直接请求报名或登记补贴。到公开时间后，服务端会更新数据版本并通过 SSE 通知已打开的页面。
 
 ## 3. 数据结构
 
@@ -157,7 +159,9 @@ publicAtMs <= 0 || 当前时间 >= publicAtMs
     "reservedSlots": [20, 21],
     "locked": false,
     "onlyTnSignup": false,
-    "uniqueQqSignup": false
+    "uniqueQqSignup": false,
+    "publicSignup": true,
+    "publicAtMs": 0
   },
   "slots": []
 }
@@ -315,7 +319,7 @@ Authorization: Bearer <adminToken>
 }
 ```
 
-### 4.5 设置开放时间
+### 4.5 批量设置已有团队的公开时间（兼容接口）
 
 ```http
 PUT /api/v2/access-gate
@@ -330,7 +334,7 @@ Content-Type: application/json
 }
 ```
 
-设置 `publicAtMs: 0` 可以立即开放报名。
+该接口仅为旧客户端保留，会把当前所有活动团队设为 `publicSignup: true` 并使用指定的公开时间，不影响后续新建团队。新客户端应在创建团队时写入 `config.publicSignup` / `config.publicAtMs`，或使用 `PATCH /api/v2/teams/{teamId}` 单独更新。
 
 ### 4.6 重新生成邀请码
 
@@ -376,6 +380,7 @@ GET /api/v2/bootstrap?qq=10001&inviteToken=<inviteToken>
 - `lockVersion`
 - `isAdmin`
 - `accessGate`
+- `visibilityKey`
 
 为了限制初始响应大小，快照默认最多返回最近 200 条取消记录和 500 条操作日志，并提供：
 
@@ -388,13 +393,15 @@ GET /api/v2/bootstrap?qq=10001&inviteToken=<inviteToken>
 }
 ```
 
-门禁关闭且未授权时，`bootstrap` 仍然返回 HTTP 200，但只返回受保护的团队基础信息和补贴相关信息，不返回完整槽位数据。
+`bootstrap` 返回 HTTP 200，只包含当前请求有权查看的团队及相关历史；没有可见团队时返回空列表。日志及取消记录的数量和截断标志也按可见范围计算。`accessGate` 保留兼容字段，页面本身始终开放，公开时间以每个团队的配置为准。
 
 ### 5.3 增量同步
 
 ```http
 GET /api/v2/sync?dataVersion=12&lockVersion=8&qq=10001&inviteToken=<inviteToken>
 ```
+
+客户端应将上次快照或同步响应的 `visibilityKey` 原样附加到后续同步请求。邀请码失效或管理员身份变化时，即使版本相同，服务端也会返回当前权限下的全量快照，客户端应替换旧数据。
 
 响应示例：
 

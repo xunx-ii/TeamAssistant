@@ -24,6 +24,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <ctime>
 #include <unordered_map>
 #include <unordered_set>
@@ -31,12 +32,14 @@
 #include <vector>
 
 #include <zlib.h>
+#include "TeamVisibility.h"
 
 namespace {
 
 using Json::Value;
 using drogon::HttpRequestPtr;
 using drogon::HttpResponsePtr;
+using teamassistant::ViewerVisibility;
 
 constexpr double kAutomaticBackupIntervalSeconds = 30.0 * 60.0;
 constexpr std::size_t kBackupHistoryLimit = 48;
@@ -476,96 +479,103 @@ public:
 
     Value publicLocks(bool isAdmin = false, const std::string &inviteToken = "") {
         cleanExpiredLocks();
-        const AccessGateConfig gate = accessGateConfig();
-        if (!hasBoardAccess(gate, isAdmin, inviteToken)) {
-            Value json;
-            json["slots"] = Value(Json::arrayValue);
-            json["teams"] = Value(Json::arrayValue);
-            json["lockVersion"] = static_cast<Json::Int64>(runtimeLockVersion());
-            json["accessGate"] = accessGateJson(gate, false, isAdmin, false);
-            return json;
-        }
-        Value json = publicLocksSnapshot();
-        json["accessGate"] = accessGateJson(gate, true, isAdmin, false);
-        return json;
+        std::lock_guard lock(mutex_);
+        return viewerVisibilityUnlocked(isAdmin, inviteToken).locks(publicLocksSnapshot());
     }
 
     bool expireRuntimeLocks() {
         return cleanExpiredLocks();
     }
 
-    Value bootstrap(bool isAdmin = false, const std::string &inviteToken = "") {
-        const AccessGateConfig gate = accessGateConfig();
-        if (!hasBoardAccess(gate, isAdmin, inviteToken)) {
-            return protectedBootstrap(gate, isAdmin);
-        }
-        Value json = cachedBootstrap();
-        json["isAdmin"] = isAdmin;
-        json["accessGate"] = accessGateJson(gate, true, isAdmin, false);
-        return json;
+    bool publishScheduledTeams() {
+        std::lock_guard lock(mutex_);
+        const auto now = nowMs();
+        if (now <= lastPublicationCheckMs_) return false;
+        sqlite3_stmt *stmt = nullptr;
+        prepare("SELECT 1 FROM teams WHERE public_signup = 1 AND public_at_ms > ? AND public_at_ms <= ? LIMIT 1", &stmt);
+        sqlite3_bind_int64(stmt, 1, lastPublicationCheckMs_);
+        sqlite3_bind_int64(stmt, 2, now);
+        bool changed = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        // Archives retain the same publication policy as their source team.
+        if (pendingPublication_ || (publicVisibilityCache_.nextPublicAtMs > lastPublicationCheckMs_ && publicVisibilityCache_.nextPublicAtMs <= now)) changed = true;
+        if (changed) bumpDataVersionAndClearPatchesUnlocked();
+        pendingPublication_ = false;
+        lastPublicationCheckMs_ = now;
+        return changed;
     }
 
-    Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion, bool isAdmin = false, const std::string &inviteToken = "") {
-        const AccessGateConfig gate = accessGateConfig();
-        if (!hasBoardAccess(gate, isAdmin, inviteToken)) {
-            Value json = versionSnapshot();
-            json["isAdmin"] = isAdmin;
-            json["dataChanged"] = true;
-            json["lockChanged"] = true;
-            json["data"] = protectedBootstrap(gate, isAdmin);
-            Value locks;
-            locks["slots"] = Value(Json::arrayValue);
-            locks["teams"] = Value(Json::arrayValue);
-            locks["lockVersion"] = json["data"]["lockVersion"];
-            json["locks"] = locks;
-            json["lockVersion"] = json["data"]["lockVersion"];
-            json["accessGate"] = json["data"]["accessGate"];
-            return json;
-        }
-
-        Value current;
-        Value patches;
-        {
-            // Writes publish their patches before COMMIT while holding mutex_.
-            // Capture the cursor and its complete patch range after that commit.
-            std::lock_guard lock(mutex_);
-            current = versionSnapshot();
-            if (!dataVersion.has_value() || *dataVersion != current["dataVersion"].asInt64()) {
-                patches = dataPatchesSince(dataVersion, current["dataVersion"].asInt64());
+    Value bootstrap(bool isAdmin = false, const std::string &inviteToken = "") {
+        std::lock_guard lock(mutex_);
+        Value data = cachedBootstrapUnlocked();
+        const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
+        data = viewer.snapshot(std::move(data));
+        data["isAdmin"] = isAdmin;
+        data["visibilityKey"] = viewer.key;
+        data["accessGate"] = accessGateJson(readAccessGateConfigUnlocked(), false);
+        if (!viewer.unrestricted) {
+            const auto condition = historyVisibilityConditionUnlocked(viewer);
+            data["logs"] = historyPageUnlocked(true, "", std::nullopt, kBootstrapLogLimit, condition)["items"];
+            std::reverse(data["logs"].begin(), data["logs"].end());
+            data["cancellations"] = historyPageUnlocked(false, "", std::nullopt, kBootstrapCancellationLimit, condition)["items"];
+            for (const auto &[table, totalKey, truncatedKey, limit] : {
+                std::tuple{"operation_logs", "logsTotal", "logsTruncated", kBootstrapLogLimit},
+                std::tuple{"cancellations", "cancellationsTotal", "cancellationsTruncated", kBootstrapCancellationLimit}}) {
+                sqlite3_stmt *stmt = nullptr;
+                prepare(std::string("SELECT COUNT(*) FROM ") + table + " WHERE " + condition, &stmt);
+                const auto total = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0;
+                sqlite3_finalize(stmt);
+                data[totalKey] = static_cast<Json::Int64>(total);
+                data[truncatedKey] = total > limit;
             }
         }
-        const auto currentData = current["dataVersion"].asInt64();
-        const auto currentLocks = current["lockVersion"].asInt64();
-        const bool dataChanged = !dataVersion.has_value() || *dataVersion != currentData;
-        const bool lockChanged = !lockVersion.has_value() || *lockVersion != currentLocks;
+        return data;
+    }
+
+    Value sync(std::optional<long long> dataVersion, std::optional<long long> lockVersion, bool isAdmin = false, const std::string &inviteToken = "", const std::string &visibilityKey = "") {
+        Value current;
+        Value patches;
+        bool visibilityChanged = false;
+        std::string currentVisibilityKey;
+        {
+            std::lock_guard lock(mutex_);
+            const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
+            currentVisibilityKey = viewer.key;
+            visibilityChanged = !visibilityKey.empty() && visibilityKey != viewer.key;
+            current = versionSnapshot();
+            if (!visibilityChanged && (!dataVersion.has_value() || *dataVersion != current["dataVersion"].asInt64())) {
+                patches = viewer.patches(dataPatchesSince(dataVersion, current["dataVersion"].asInt64()));
+            }
+        }
+        const bool dataChanged = visibilityChanged || !dataVersion.has_value() || *dataVersion != current["dataVersion"].asInt64();
+        const bool lockChanged = !lockVersion.has_value() || *lockVersion != current["lockVersion"].asInt64();
         Value json = current;
         json["isAdmin"] = isAdmin;
-        json["accessGate"] = accessGateJson(gate, true, isAdmin, false);
+        json["visibilityKey"] = currentVisibilityKey;
         json["dataChanged"] = dataChanged;
         json["lockChanged"] = lockChanged;
         if (dataChanged) {
             if (patches.isArray()) {
                 json["patches"] = patches;
             } else {
-                Value data = cachedBootstrap();
-                data["isAdmin"] = isAdmin;
-                data["accessGate"] = accessGateJson(gate, true, isAdmin, false);
+                Value data = bootstrap(isAdmin, inviteToken);
                 json["data"] = data;
                 json["dataVersion"] = data["dataVersion"];
                 json["lockVersion"] = data["lockVersion"];
+                json["accessGate"] = data["accessGate"];
             }
         }
         if (lockChanged) {
-            Value locks = publicLocksSnapshot();
+            Value locks = publicLocks(isAdmin, inviteToken);
             json["locks"] = locks;
             json["lockVersion"] = locks["lockVersion"];
         }
         return json;
     }
 
-    Value accessGate(bool includeToken = false, bool isAdmin = false, const std::string &inviteToken = "") {
+    Value accessGate(bool includeToken = false) {
         const AccessGateConfig gate = accessGateConfig();
-        Value json = accessGateJson(gate, hasBoardAccess(gate, isAdmin, inviteToken), isAdmin, includeToken);
+        Value json = accessGateJson(gate, includeToken);
         json["ok"] = true;
         return json;
     }
@@ -579,14 +589,18 @@ public:
             sqlite3_stmt *stmt = nullptr;
             const long long updatedAt = nowMs();
             prepare("UPDATE access_gate SET public_at_ms = ?, updated_at_ms = ?, updated_by = ? WHERE id = 1", &stmt);
-            sqlite3_bind_int64(stmt, 1, std::max(0LL, publicAtMs));
+            sqlite3_bind_int64(stmt, 1, 0);
             sqlite3_bind_int64(stmt, 2, updatedAt);
             bindString(stmt, 3, actorQq);
             stepDone(stmt);
             sqlite3_finalize(stmt);
+            prepare("UPDATE teams SET public_signup = 1, public_at_ms = ?", &stmt);
+            sqlite3_bind_int64(stmt, 1, std::max(0LL, publicAtMs));
+            stepDone(stmt);
+            sqlite3_finalize(stmt);
             bumpDataVersionAndClearPatchesUnlocked();
             AccessGateConfig gate = readAccessGateConfigUnlocked();
-            result = accessGateJson(gate, true, true, true);
+            result = accessGateJson(gate, true);
             result["ok"] = true;
             exec("COMMIT;");
         } catch (...) {
@@ -613,7 +627,7 @@ public:
             sqlite3_finalize(stmt);
             bumpDataVersionAndClearPatchesUnlocked();
             AccessGateConfig gate = readAccessGateConfigUnlocked();
-            result = accessGateJson(gate, true, true, true);
+            result = accessGateJson(gate, true);
             result["ok"] = true;
             exec("COMMIT;");
         } catch (...) {
@@ -623,17 +637,19 @@ public:
         return result;
     }
 
-    Value boardAccess(bool isAdmin, const std::string &inviteToken) {
-        const AccessGateConfig gate = accessGateConfig();
-        const bool authorized = hasBoardAccess(gate, isAdmin, inviteToken);
-        Value json;
-        json["ok"] = authorized;
-        json["accessGate"] = accessGateJson(gate, authorized, isAdmin, false);
+    Value teamAccess(bool isAdmin, const std::string &inviteToken, const std::string &teamId = "", const std::string &archiveId = "") {
+        std::lock_guard lock(mutex_);
+        const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
+        const bool authorized = archiveId.empty()
+            ? viewer.allowsTeam(teamId)
+            : (viewer.unrestricted || viewer.archiveIds.contains(archiveId));
+        Value result;
+        result["ok"] = authorized;
         if (!authorized) {
-            json["reason"] = "notOpen";
-            json["error"] = "报名暂未开放";
+            result["reason"] = "notOpen";
+            result["error"] = "该团队尚未公开报名";
         }
-        return json;
+        return result;
     }
 
     Value acquireSlotLock(const std::string &teamId, int slotIndex, const std::string &qq) {
@@ -1069,6 +1085,7 @@ public:
         if (!team.isObject() || !team["id"].isString() || team["id"].asString().empty()) {
             return errorJson("Missing team");
         }
+        if (!teamassistant::validPublication(team["config"])) return errorJson("Invalid publication settings");
 
         Value result;
         exec("BEGIN IMMEDIATE;");
@@ -1094,6 +1111,7 @@ public:
             if (!team.isObject() || !team["id"].isString() || team["id"].asString().empty()) {
                 return errorJson("Invalid team");
             }
+            if (!teamassistant::validPublication(team["config"])) return errorJson("Invalid publication settings");
         }
 
         Value result;
@@ -1235,6 +1253,7 @@ public:
     Value patchTeam(const std::string &teamId, const Value &body) {
         std::lock_guard lock(mutex_);
         ensureSchema();
+        if (!teamassistant::validPublication(body)) return errorJson("Invalid publication settings");
         Value result;
         exec("BEGIN IMMEDIATE;");
         try {
@@ -1278,6 +1297,19 @@ public:
                 prepare("UPDATE teams SET only_tn_signup = ?, unique_qq_signup = ? WHERE id = ?", &stmt);
                 sqlite3_bind_int(stmt, 1, onlyTnSignup ? 1 : 0);
                 sqlite3_bind_int(stmt, 2, uniqueQqSignup ? 1 : 0);
+                bindString(stmt, 3, teamId);
+                stepDone(stmt);
+                sqlite3_finalize(stmt);
+            }
+            if (body.isMember("publicSignup") || body.isMember("publicAtMs")) {
+                const auto team = readTeamUnlocked(teamId);
+                if (!team.isObject()) {
+                    exec("ROLLBACK;");
+                    return conflictJson("notFound");
+                }
+                prepare("UPDATE teams SET public_signup = ?, public_at_ms = ? WHERE id = ?", &stmt);
+                sqlite3_bind_int(stmt, 1, (body.isMember("publicSignup") ? body["publicSignup"].asBool() : team["config"]["publicSignup"].asBool()) ? 1 : 0);
+                sqlite3_bind_int64(stmt, 2, body.isMember("publicAtMs") ? body["publicAtMs"].asInt64() : team["config"]["publicAtMs"].asInt64());
                 bindString(stmt, 3, teamId);
                 stepDone(stmt);
                 sqlite3_finalize(stmt);
@@ -1814,147 +1846,16 @@ public:
     // returned slice so the client can keep paging without storing extra
     // state. `hasMore` lets the UI decide whether to keep offering "load
     // more" without an extra round-trip.
-    Value historyLogs(const std::string &teamId, std::optional<long long> beforeTimestamp, int limit) {
+    Value historyLogs(const std::string &teamId, std::optional<long long> beforeTimestamp, int limit, bool isAdmin = false, const std::string &inviteToken = "") {
         std::lock_guard lock(mutex_);
-        ensureSchema();
-        const int boundedLimit = std::clamp(limit, 1, kHistoryPageSizeMax);
-
-        Value json;
-        json["ok"] = true;
-        json["items"] = Value(Json::arrayValue);
-
-        sqlite3_stmt *stmt = nullptr;
-        if (teamId.empty()) {
-            if (beforeTimestamp.has_value()) {
-                prepare(
-                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
-                    "FROM operation_logs WHERE timestamp < ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                sqlite3_bind_int64(stmt, 1, *beforeTimestamp);
-                sqlite3_bind_int(stmt, 2, boundedLimit);
-            } else {
-                prepare(
-                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
-                    "FROM operation_logs ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                sqlite3_bind_int(stmt, 1, boundedLimit);
-            }
-        } else {
-            if (beforeTimestamp.has_value()) {
-                prepare(
-                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
-                    "FROM operation_logs WHERE team_id = ? AND timestamp < ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                bindString(stmt, 1, teamId);
-                sqlite3_bind_int64(stmt, 2, *beforeTimestamp);
-                sqlite3_bind_int(stmt, 3, boundedLimit);
-            } else {
-                prepare(
-                    "SELECT id, team_id, team_name, timestamp, actor_qq, action "
-                    "FROM operation_logs WHERE team_id = ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                bindString(stmt, 1, teamId);
-                sqlite3_bind_int(stmt, 2, boundedLimit);
-            }
-        }
-
-        long long lastTimestamp = 0;
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            Value item;
-            item["id"] = textColumn(stmt, 0);
-            item["teamId"] = textColumn(stmt, 1);
-            item["teamName"] = textColumn(stmt, 2);
-            lastTimestamp = sqlite3_column_int64(stmt, 3);
-            item["timestamp"] = static_cast<Json::Int64>(lastTimestamp);
-            item["actorQq"] = textColumn(stmt, 4);
-            item["action"] = textColumn(stmt, 5);
-            json["items"].append(item);
-        }
-        sqlite3_finalize(stmt);
-
-        json["hasMore"] = static_cast<int>(json["items"].size()) >= boundedLimit;
-        if (json["items"].empty()) {
-            json["nextCursor"] = Value(Json::nullValue);
-        } else {
-            json["nextCursor"] = static_cast<Json::Int64>(lastTimestamp);
-        }
-        json["limit"] = boundedLimit;
-        return json;
+        const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
+        return historyPageUnlocked(true, teamId, beforeTimestamp, limit, historyVisibilityConditionUnlocked(viewer));
     }
 
-    Value historyCancellations(const std::string &qq, std::optional<long long> beforeTimestamp, int limit) {
+    Value historyCancellations(const std::string &qq, std::optional<long long> beforeTimestamp, int limit, bool isAdmin = false, const std::string &inviteToken = "") {
         std::lock_guard lock(mutex_);
-        ensureSchema();
-        const int boundedLimit = std::clamp(limit, 1, kHistoryPageSizeMax);
-
-        Value json;
-        json["ok"] = true;
-        json["items"] = Value(Json::arrayValue);
-
-        sqlite3_stmt *stmt = nullptr;
-        if (qq.empty()) {
-            if (beforeTimestamp.has_value()) {
-                prepare(
-                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
-                    "FROM cancellations WHERE timestamp < ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                sqlite3_bind_int64(stmt, 1, *beforeTimestamp);
-                sqlite3_bind_int(stmt, 2, boundedLimit);
-            } else {
-                prepare(
-                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
-                    "FROM cancellations ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                sqlite3_bind_int(stmt, 1, boundedLimit);
-            }
-        } else {
-            if (beforeTimestamp.has_value()) {
-                prepare(
-                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
-                    "FROM cancellations WHERE qq = ? AND timestamp < ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                bindString(stmt, 1, qq);
-                sqlite3_bind_int64(stmt, 2, *beforeTimestamp);
-                sqlite3_bind_int(stmt, 3, boundedLimit);
-            } else {
-                prepare(
-                    "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp "
-                    "FROM cancellations WHERE qq = ? "
-                    "ORDER BY timestamp DESC LIMIT ?",
-                    &stmt);
-                bindString(stmt, 1, qq);
-                sqlite3_bind_int(stmt, 2, boundedLimit);
-            }
-        }
-
-        long long lastTimestamp = 0;
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            Value item;
-            item["qq"] = textColumn(stmt, 0);
-            item["reason"] = textColumn(stmt, 1);
-            item["cancelledBy"] = textColumn(stmt, 2);
-            item["teamId"] = textColumn(stmt, 3);
-            item["teamName"] = textColumn(stmt, 4);
-            item["slotIndex"] = sqlite3_column_int(stmt, 5);
-            lastTimestamp = sqlite3_column_int64(stmt, 6);
-            item["timestamp"] = static_cast<Json::Int64>(lastTimestamp);
-            json["items"].append(item);
-        }
-        sqlite3_finalize(stmt);
-
-        json["hasMore"] = static_cast<int>(json["items"].size()) >= boundedLimit;
-        if (json["items"].empty()) {
-            json["nextCursor"] = Value(Json::nullValue);
-        } else {
-            json["nextCursor"] = static_cast<Json::Int64>(lastTimestamp);
-        }
-        json["limit"] = boundedLimit;
-        return json;
+        const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
+        return historyPageUnlocked(false, qq, beforeTimestamp, limit, historyVisibilityConditionUnlocked(viewer));
     }
 
 private:
@@ -1983,6 +1884,10 @@ private:
     static constexpr int kHistoryPageSizeMax = 500;
     std::uint64_t nextLockToken_ = 1;
     std::atomic<std::uint64_t> logIdCounter_{0};
+    ViewerVisibility publicVisibilityCache_;
+    bool historyVisibilityDirty_ = true;
+    bool pendingPublication_ = false;
+    long long lastPublicationCheckMs_ = nowMs();
 
 
     static long long nowMs() {
@@ -2002,140 +1907,167 @@ private:
         return token;
     }
 
-    static bool isAccessOpen(const AccessGateConfig &gate, long long now = nowMs()) {
-        return gate.publicAtMs <= 0 || now >= gate.publicAtMs;
-    }
-
-    static bool hasBoardAccess(const AccessGateConfig &gate, bool isAdmin, const std::string &inviteToken) {
-        return isAdmin || isAccessOpen(gate) || (!inviteToken.empty() && inviteToken == gate.inviteToken);
-    }
-
-    static Value accessGateJson(const AccessGateConfig &gate, bool authorized, bool isAdmin, bool includeToken) {
+    static Value accessGateJson(const AccessGateConfig &gate, bool includeToken) {
         Value json;
-        const bool open = isAccessOpen(gate);
-        json["publicAtMs"] = static_cast<Json::Int64>(gate.publicAtMs);
-        json["isOpen"] = open;
-        json["authorized"] = authorized;
-        json["requiresInvite"] = !open && !isAdmin;
+        json["publicAtMs"] = Json::Int64{0};
+        json["isOpen"] = true;
+        json["authorized"] = true;
+        json["requiresInvite"] = false;
         json["hasInviteToken"] = !gate.inviteToken.empty();
         json["updatedAtMs"] = static_cast<Json::Int64>(gate.updatedAtMs);
         json["updatedBy"] = gate.updatedBy;
-        if (includeToken) {
-            json["inviteToken"] = gate.inviteToken;
-        }
+        if (includeToken) json["inviteToken"] = gate.inviteToken;
         return json;
     }
 
-    Value protectedBootstrap(const AccessGateConfig &gate, bool isAdmin) {
-        Value json = versionSnapshot();
-        json["teams"] = Value(Json::arrayValue);
-        json["cancellations"] = Value(Json::arrayValue);
-        json["archivedTeams"] = Value(Json::arrayValue);
-        json["logs"] = Value(Json::arrayValue);
-        json["userProfiles"] = Value(Json::objectValue);
-        json["subsidyPresets"] = Value(Json::arrayValue);
-        json["locks"] = Value(Json::arrayValue);
-        json["teamLocks"] = Value(Json::arrayValue);
-        json["logsTotal"] = 0;
-        json["logsTruncated"] = false;
-        json["cancellationsTotal"] = 0;
-        json["cancellationsTruncated"] = false;
-        json["isAdmin"] = isAdmin;
-        json["accessGate"] = accessGateJson(gate, false, isAdmin, false);
-        {
-            std::lock_guard lock(mutex_);
-            ensureSchema();
-
-            sqlite3_stmt *stmt = nullptr;
-            prepare(
-                "SELECT id, name, week_start, subsidy_types_json, member_subsidies_json "
-                "FROM teams ORDER BY sort_order, id",
-                &stmt);
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
-                Value team = protectedSubsidyTeamFromRow(stmt);
-                if (!team.isNull()) {
-                    json["teams"].append(team);
-                }
+    ViewerVisibility viewerVisibilityUnlocked(bool isAdmin, const std::string &inviteToken) {
+        const auto gate = readAccessGateConfigUnlocked();
+        if (isAdmin || (!inviteToken.empty() && inviteToken == gate.inviteToken)) {
+            ViewerVisibility viewer;
+            viewer.unrestricted = true;
+            viewer.key = isAdmin ? "admin" : "invite:" + trantor::utils::toHexString(trantor::utils::sha256(gate.inviteToken));
+            return viewer;
+        }
+        const auto now = nowMs();
+        const auto version = dataVersionCache_.load(std::memory_order_relaxed);
+        if (publicVisibilityCache_.dataVersion == version &&
+            (publicVisibilityCache_.nextPublicAtMs == 0 || now < publicVisibilityCache_.nextPublicAtMs)) return publicVisibilityCache_;
+        ViewerVisibility viewer;
+        viewer.dataVersion = version;
+        auto rememberNext = [&viewer, now](bool publicSignup, long long publicAt) {
+            if (publicSignup && publicAt > now && (viewer.nextPublicAtMs == 0 || publicAt < viewer.nextPublicAtMs)) viewer.nextPublicAtMs = publicAt;
+        };
+        sqlite3_stmt *stmt = nullptr;
+        prepare("SELECT id, public_signup, public_at_ms FROM teams", &stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const bool publicSignup = sqlite3_column_int(stmt, 1) != 0;
+            const auto publicAt = sqlite3_column_int64(stmt, 2);
+            if (publicSignup && publicAt <= now) {
+                viewer.teamIds.insert(textColumn(stmt, 0));
+                viewer.historyTeamIds.insert(textColumn(stmt, 0));
             }
-            sqlite3_finalize(stmt);
-
-            prepare("SELECT id, team_json, archived_at FROM archives ORDER BY archived_at DESC", &stmt);
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
-                Value sourceTeam = parseJson(textColumn(stmt, 1), Value(Json::objectValue));
-                Value team = protectedSubsidyTeamFromJson(sourceTeam);
-                if (team.isNull()) {
-                    continue;
-                }
-                Value archive;
-                archive["id"] = textColumn(stmt, 0);
-                archive["team"] = team;
-                archive["archivedAt"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 2));
-                archive["archivedBy"] = "";
-                json["archivedTeams"].append(archive);
+            rememberNext(publicSignup, publicAt);
+        }
+        sqlite3_finalize(stmt);
+        prepare("SELECT id, team_json FROM archives", &stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const auto team = parseJson(textColumn(stmt, 1), Value(Json::objectValue));
+            if (teamassistant::isTeamPublic(team, now) && team["id"].isString()) {
+                viewer.archiveIds.insert(textColumn(stmt, 0));
+                viewer.historyTeamIds.insert(team["id"].asString());
             }
-            sqlite3_finalize(stmt);
-
-            json["userProfiles"] = readUserProfilesUnlocked();
-            json["subsidyPresets"] = readSubsidyPresetsUnlocked();
+            const auto &config = team["config"];
+            if (teamassistant::validPublication(config)) rememberNext(!config["publicSignup"].isBool() || config["publicSignup"].asBool(), toInt64(config["publicAtMs"]));
         }
-        return json;
+        sqlite3_finalize(stmt);
+        if (publicVisibilityCache_.nextPublicAtMs > lastPublicationCheckMs_ && publicVisibilityCache_.nextPublicAtMs <= now) pendingPublication_ = true;
+        publicVisibilityCache_ = viewer;
+        historyVisibilityDirty_ = true;
+        return viewer;
     }
 
-    static Value protectedSubsidyTeamJson(
-        const std::string &id,
-        const std::string &name,
-        const std::string &weekStart,
-        const Value &subsidyTypes,
-        const Value &memberSubsidies
-    ) {
-        if (!subsidyTypes.isArray() || subsidyTypes.size() == 0) {
-            return Value(Json::nullValue);
+    std::string historyVisibilityConditionUnlocked(const ViewerVisibility &viewer) {
+        if (viewer.unrestricted) return "1";
+        // A connection-local indexed set keeps history queries bounded by the
+        // page size without building an unbounded SQL IN parameter list.
+        if (historyVisibilityDirty_) {
+            exec("CREATE TEMP TABLE IF NOT EXISTS visible_history_teams(id TEXT PRIMARY KEY) WITHOUT ROWID;");
+            exec("DELETE FROM temp.visible_history_teams;");
+            sqlite3_stmt *raw = nullptr;
+            prepare("INSERT INTO temp.visible_history_teams(id) VALUES(?)", &raw);
+            std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> stmt(raw, sqlite3_finalize);
+            for (const auto &id : viewer.historyTeamIds) {
+                sqlite3_reset(stmt.get());
+                bindString(stmt.get(), 1, id);
+                stepDone(stmt.get());
+            }
+            historyVisibilityDirty_ = false;
         }
-        Value config;
-        config["reservedSlots"] = Value(Json::arrayValue);
-        config["locked"] = false;
-        config["onlyTnSignup"] = false;
-        config["uniqueQqSignup"] = false;
-
-        Value team;
-        team["id"] = id;
-        team["name"] = name;
-        team["note"] = "";
-        if (!weekStart.empty()) {
-            team["weekStart"] = weekStart;
-        }
-        team["config"] = config;
-        team["slots"] = Value(Json::arrayValue);
-        team["subsidyTypes"] = subsidyTypes;
-        team["memberSubsidies"] = memberSubsidies.isObject() ? memberSubsidies : Value(Json::objectValue);
-        return team;
+        return "(team_id = '' OR team_id IN (SELECT id FROM temp.visible_history_teams))";
     }
 
-    Value protectedSubsidyTeamFromRow(sqlite3_stmt *stmt) {
-        const Value subsidyTypes = sqlite3_column_type(stmt, 3) == SQLITE_NULL
-            ? Value(Json::arrayValue)
-            : parseJson(textColumn(stmt, 3), Value(Json::arrayValue));
-        const Value memberSubsidies = sqlite3_column_type(stmt, 4) == SQLITE_NULL
-            ? Value(Json::objectValue)
-            : parseJson(textColumn(stmt, 4), Value(Json::objectValue));
-        return protectedSubsidyTeamJson(
-            textColumn(stmt, 0),
-            textColumn(stmt, 1),
-            sqlite3_column_type(stmt, 2) == SQLITE_NULL ? "" : textColumn(stmt, 2),
-            subsidyTypes,
-            memberSubsidies);
+    Value historyPageUnlocked(bool logs, const std::string &filter, std::optional<long long> before, int limit, const std::string &visibilityCondition) {
+        const auto boundedLimit = std::clamp(limit, 1, kHistoryPageSizeMax);
+        std::string sql = logs
+            ? "SELECT id, team_id, team_name, timestamp, actor_qq, action FROM operation_logs WHERE "
+            : "SELECT qq, reason, cancelled_by, team_id, team_name, slot_index, timestamp FROM cancellations WHERE ";
+        sql += visibilityCondition;
+        if (!filter.empty()) sql += logs ? " AND team_id = ?" : " AND qq = ?";
+        if (before.has_value()) sql += " AND timestamp < ?";
+        sql += " ORDER BY timestamp DESC LIMIT ?";
+        sqlite3_stmt *raw = nullptr;
+        prepare(sql, &raw);
+        std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> stmt(raw, sqlite3_finalize);
+        int binding = 1;
+        if (!filter.empty()) bindString(stmt.get(), binding++, filter);
+        if (before.has_value()) sqlite3_bind_int64(stmt.get(), binding++, *before);
+        sqlite3_bind_int(stmt.get(), binding, boundedLimit + 1);
+        Value result;
+        result["ok"] = true;
+        result["items"] = Value(Json::arrayValue);
+        result["hasMore"] = false;
+        result["nextCursor"] = Value(Json::nullValue);
+        result["limit"] = boundedLimit;
+        int status;
+        while ((status = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+            if (result["items"].size() >= static_cast<Json::ArrayIndex>(boundedLimit)) {
+                result["hasMore"] = true;
+                break;
+            }
+            Value item;
+            if (logs) {
+                item["id"] = textColumn(stmt.get(), 0);
+                item["teamId"] = textColumn(stmt.get(), 1);
+                item["teamName"] = textColumn(stmt.get(), 2);
+                item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt.get(), 3));
+                item["actorQq"] = textColumn(stmt.get(), 4);
+                item["action"] = textColumn(stmt.get(), 5);
+            } else {
+                item["qq"] = textColumn(stmt.get(), 0);
+                item["reason"] = textColumn(stmt.get(), 1);
+                item["cancelledBy"] = textColumn(stmt.get(), 2);
+                item["teamId"] = textColumn(stmt.get(), 3);
+                item["teamName"] = textColumn(stmt.get(), 4);
+                item["slotIndex"] = sqlite3_column_int(stmt.get(), 5);
+                item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt.get(), 6));
+            }
+            result["nextCursor"] = item["timestamp"];
+            result["items"].append(item);
+        }
+        if (status != SQLITE_ROW && status != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db_));
+        return result;
     }
 
-    static Value protectedSubsidyTeamFromJson(const Value &team) {
-        if (!team.isObject()) {
-            return Value(Json::nullValue);
+    void migrateTeamPublicationUnlocked() {
+        sqlite3_stmt *raw = nullptr;
+        prepare("SELECT 1 FROM schema_migrations WHERE id = 'team_publication_v1'", &raw);
+        const bool migrated = sqlite3_step(raw) == SQLITE_ROW;
+        sqlite3_finalize(raw);
+        if (migrated) return;
+        exec("BEGIN IMMEDIATE;");
+        try {
+            const auto gate = readAccessGateConfigUnlocked();
+            prepare("UPDATE teams SET public_at_ms = ?", &raw);
+            sqlite3_bind_int64(raw, 1, std::max(0LL, gate.publicAtMs));
+            stepDone(raw);
+            sqlite3_finalize(raw);
+            std::vector<std::pair<std::string, Value>> archives;
+            prepare("SELECT id, team_json FROM archives", &raw);
+            while (sqlite3_step(raw) == SQLITE_ROW) archives.emplace_back(textColumn(raw, 0), parseJson(textColumn(raw, 1), Value(Json::objectValue)));
+            sqlite3_finalize(raw);
+            for (auto &[id, team] : archives) {
+                if (!team["config"].isObject()) team["config"] = Value(Json::objectValue);
+                if (!team["config"].isMember("publicSignup")) team["config"]["publicSignup"] = true;
+                if (!team["config"].isMember("publicAtMs")) team["config"]["publicAtMs"] = static_cast<Json::Int64>(std::max(0LL, gate.publicAtMs));
+                updateArchivedTeamUnlocked(id, team);
+            }
+            exec("UPDATE access_gate SET public_at_ms = 0 WHERE id = 1;");
+            exec("INSERT INTO schema_migrations(id) VALUES('team_publication_v1');");
+            exec("COMMIT;");
+        } catch (...) {
+            exec("ROLLBACK;");
+            throw;
         }
-        return protectedSubsidyTeamJson(
-            team["id"].isString() ? team["id"].asString() : "",
-            team["name"].isString() ? team["name"].asString() : "归档团队",
-            team["weekStart"].isString() ? team["weekStart"].asString() : "",
-            team["subsidyTypes"].isArray() ? team["subsidyTypes"] : Value(Json::arrayValue),
-            team["memberSubsidies"].isObject() ? team["memberSubsidies"] : Value(Json::objectValue));
     }
 
     Value readUserProfilesUnlocked() {
@@ -2551,6 +2483,8 @@ private:
         normalized["config"]["locked"] = config["locked"].asBool();
         normalized["config"]["onlyTnSignup"] = config["onlyTnSignup"].asBool();
         normalized["config"]["uniqueQqSignup"] = config["uniqueQqSignup"].asBool();
+        normalized["config"]["publicSignup"] = !config["publicSignup"].isBool() || config["publicSignup"].asBool();
+        normalized["config"]["publicAtMs"] = config["publicAtMs"].isInt64() ? config["publicAtMs"] : Value(Json::Int64{0});
         normalized["config"]["reservedSlots"] = reserved;
         normalized["slots"] = Value(Json::arrayValue);
         for (int index = 0; index < 25; ++index) {
@@ -2712,7 +2646,7 @@ private:
         sqlite3_stmt *stmt = nullptr;
         prepare(
             "SELECT id, name, note, week_start, locked, only_tn_signup, unique_qq_signup, "
-            "reserved_slots_json, subsidy_types_json, member_subsidies_json "
+            "reserved_slots_json, subsidy_types_json, member_subsidies_json, public_signup, public_at_ms "
             "FROM teams WHERE id = ?",
             &stmt);
         bindString(stmt, 1, teamId);
@@ -2733,6 +2667,8 @@ private:
         config["onlyTnSignup"] = sqlite3_column_int(stmt, 5) != 0;
         config["uniqueQqSignup"] = sqlite3_column_int(stmt, 6) != 0;
         config["reservedSlots"] = parseJson(textColumn(stmt, 7), Value(Json::arrayValue));
+        config["publicSignup"] = sqlite3_column_int(stmt, 10) != 0;
+        config["publicAtMs"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 11));
         team["config"] = config;
         if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
             team["subsidyTypes"] = parseJson(textColumn(stmt, 8), Value(Json::arrayValue));
@@ -2896,44 +2832,24 @@ private:
     }
 
     Value cachedBootstrap() {
-        const long long currentVersion = dataVersionCache_.load(std::memory_order_relaxed);
-        Value cached;
+        std::lock_guard lock(mutex_);
+        return cachedBootstrapUnlocked();
+    }
+
+    Value cachedBootstrapUnlocked() {
+        const auto version = dataVersionCache_.load(std::memory_order_relaxed);
+        Value snapshot;
         {
             std::lock_guard lock(snapshotMutex_);
-            if (cachedSnapshotDataVersion_ == currentVersion && cachedSnapshot_.isObject()) {
-                cached = cachedSnapshot_;
-            }
+            if (cachedSnapshotDataVersion_ == version && cachedSnapshot_.isObject()) snapshot = cachedSnapshot_;
         }
-        if (cached.isObject()) {
-            return attachLiveLocks(std::move(cached));
+        if (!snapshot.isObject()) {
+            snapshot = bootstrapDataUnlocked();
+            std::lock_guard lock(snapshotMutex_);
+            cachedSnapshotDataVersion_ = snapshot["dataVersion"].asInt64();
+            cachedSnapshot_ = snapshot;
         }
-
-        Value rebuilt;
-        long long rebuiltVersion = 0;
-        {
-            std::lock_guard dbLock(mutex_);
-            ensureSchema();
-            const long long versionAfterDbLock = dataVersionCache_.load(std::memory_order_relaxed);
-            Value cachedAfterWait;
-            {
-                std::lock_guard snapshotLock(snapshotMutex_);
-                if (cachedSnapshotDataVersion_ == versionAfterDbLock && cachedSnapshot_.isObject()) {
-                    cachedAfterWait = cachedSnapshot_;
-                }
-            }
-            if (cachedAfterWait.isObject()) {
-                return attachLiveLocks(std::move(cachedAfterWait));
-            }
-
-            rebuilt = bootstrapDataUnlocked();
-            rebuiltVersion = rebuilt["dataVersion"].asInt64();
-            {
-                std::lock_guard lock(snapshotMutex_);
-                cachedSnapshotDataVersion_ = rebuiltVersion;
-                cachedSnapshot_ = rebuilt;
-            }
-        }
-        return attachLiveLocks(std::move(rebuilt));
+        return attachLiveLocks(std::move(snapshot));
     }
 
     Value validateSlotMutationLockLocked(const std::string &teamId, int slotIndex, const std::string &qq, const std::string &lockToken) {
@@ -3081,6 +2997,7 @@ private:
     }
 
     void invalidateSnapshotCacheUnlocked() {
+        publicVisibilityCache_.dataVersion = 0;
         std::lock_guard lock(snapshotMutex_);
         cachedSnapshotDataVersion_ = 0;
         cachedSnapshot_ = Value(Json::nullValue);
@@ -3139,6 +3056,7 @@ private:
 
         const std::string teamId = team["id"].asString();
         const Value config = objectOrEmpty(team["config"]);
+        if (!teamassistant::validPublication(config)) throw std::invalid_argument("Invalid team publication settings");
         const Value reservedSlots = arrayOrEmpty(config["reservedSlots"]);
         const Value normalizedSubsidyTypes = normalizeSubsidyTypes(team["subsidyTypes"]);
         const Value memberSubsidies = objectOrEmpty(team["memberSubsidies"]);
@@ -3147,8 +3065,8 @@ private:
         prepare(
             "INSERT OR REPLACE INTO teams("
             "id, name, note, week_start, locked, only_tn_signup, unique_qq_signup, sort_order, "
-            "reserved_slots_json, subsidy_types_json, member_subsidies_json"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "reserved_slots_json, subsidy_types_json, member_subsidies_json, public_signup, public_at_ms"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             &stmt);
         bindString(stmt, 1, teamId);
         bindString(stmt, 2, team["name"].isString() ? team["name"].asString() : "默认团队");
@@ -3161,6 +3079,8 @@ private:
         bindString(stmt, 9, writeJson(reservedSlots));
         bindOptionalString(stmt, 10, team["subsidyTypes"].isArray() ? std::optional<std::string>(writeJson(normalizedSubsidyTypes)) : std::nullopt);
         bindOptionalString(stmt, 11, team["memberSubsidies"].isObject() ? std::optional<std::string>(writeJson(memberSubsidies)) : std::nullopt);
+        sqlite3_bind_int(stmt, 12, !config["publicSignup"].isBool() || config["publicSignup"].asBool() ? 1 : 0);
+        sqlite3_bind_int64(stmt, 13, config["publicAtMs"].isInt64() ? config["publicAtMs"].asInt64() : 0);
         stepDone(stmt);
         sqlite3_finalize(stmt);
 
@@ -3654,6 +3574,8 @@ private:
         // schema.sql creates an index on sort_order. Older databases need
         // the column before that CREATE INDEX can run successfully.
         ensureColumn("teams", "sort_order", "INTEGER NOT NULL DEFAULT 0");
+        ensureColumn("teams", "public_signup", "INTEGER NOT NULL DEFAULT 1");
+        ensureColumn("teams", "public_at_ms", "INTEGER NOT NULL DEFAULT 0");
         exec(buffer.str());
         ensureColumn("teams", "only_tn_signup", "INTEGER NOT NULL DEFAULT 0");
         ensureColumn("teams", "unique_qq_signup", "INTEGER NOT NULL DEFAULT 0");
@@ -3662,6 +3584,7 @@ private:
         ensureColumn("access_gate", "invite_token", "TEXT NOT NULL DEFAULT ''");
         ensureColumn("access_gate", "updated_at_ms", "INTEGER NOT NULL DEFAULT 0");
         ensureColumn("access_gate", "updated_by", "TEXT NOT NULL DEFAULT ''");
+        migrateTeamPublicationUnlocked();
         schemaReady_ = true;
     }
 
@@ -3750,7 +3673,7 @@ private:
         sqlite3_stmt *stmt = nullptr;
         prepare(
             "SELECT id, name, note, week_start, locked, only_tn_signup, unique_qq_signup, "
-            "reserved_slots_json, subsidy_types_json, member_subsidies_json "
+            "reserved_slots_json, subsidy_types_json, member_subsidies_json, public_signup, public_at_ms "
             "FROM teams ORDER BY sort_order, id",
             &stmt);
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -3900,6 +3823,8 @@ private:
         config["onlyTnSignup"] = sqlite3_column_int(stmt, 5) != 0;
         config["uniqueQqSignup"] = sqlite3_column_int(stmt, 6) != 0;
         config["reservedSlots"] = parseJson(textColumn(stmt, 7), Value(Json::arrayValue));
+        config["publicSignup"] = sqlite3_column_int(stmt, 10) != 0;
+        config["publicAtMs"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt, 11));
         team["config"] = config;
         if (sqlite3_column_type(stmt, 8) != SQLITE_NULL) {
             team["subsidyTypes"] = parseJson(textColumn(stmt, 8), Value(Json::arrayValue));
@@ -4128,13 +4053,16 @@ int main() {
         }
         return std::string();
     };
-    auto requireBoardAccess = [db, inviteTokenFromRequest, actorQqFromBody, isAdminRequest](
+    auto requireTeamAccess = [db, inviteTokenFromRequest, actorQqFromBody, isAdminRequest](
         const HttpRequestPtr &request,
         const Value &body,
-        std::function<void(const HttpResponsePtr &)> &callback
+        std::function<void(const HttpResponsePtr &)> &callback,
+        const std::string &teamId = "",
+        const std::string &archiveId = ""
     ) {
         const std::string actorQq = actorQqFromBody(body);
-        const Value access = db->boardAccess(isAdminRequest(request, actorQq, &body), inviteTokenFromRequest(request, &body));
+        const auto targetTeam = teamId.empty() && body["teamId"].isString() ? body["teamId"].asString() : teamId;
+        const Value access = db->teamAccess(isAdminRequest(request, actorQq, &body), inviteTokenFromRequest(request, &body), targetTeam, archiveId);
         if (access["ok"].asBool()) {
             return true;
         }
@@ -4144,6 +4072,13 @@ int main() {
     drogon::app().getLoop()->runEvery(5.0, [db, publishVersion]() {
         if (db->expireRuntimeLocks()) {
             publishVersion();
+        }
+    });
+    drogon::app().getLoop()->runEvery(1.0, [db, publishVersion]() {
+        try {
+            if (db->publishScheduledTeams()) publishVersion();
+        } catch (const std::exception &error) {
+            std::cerr << "[publication] " << error.what() << "\n";
         }
     });
     drogon::app().getLoop()->runEvery(15.0, [events]() {
@@ -4267,7 +4202,8 @@ int main() {
                 optionalQueryInt64(dataVersion),
                 optionalQueryInt64(lockVersion),
                 isAdminRequest(request, qq),
-                inviteTokenFromRequest(request))));
+                inviteTokenFromRequest(request),
+                request->getParameter("visibilityKey"))));
         },
         {drogon::Get});
 
@@ -4296,7 +4232,7 @@ int main() {
         [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
             try {
-                callback(jsonResponse(db->accessGate(true, true)));
+                callback(jsonResponse(db->accessGate(true)));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -4485,13 +4421,13 @@ int main() {
         {drogon::Patch});
 
     drogon::app().registerHandler("/api/v2/slot-locks",
-        [db, respondMutation, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, respondMutation, requireTeamAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["teamId"].isString() || !(*json)["qq"].isString()) {
                 callback(jsonResponse(errorJson("Missing fields"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireBoardAccess(request, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback)) return;
             try {
                 respondMutation(std::move(callback), db->acquireSlotLock(
                     (*json)["teamId"].asString(),
@@ -4523,13 +4459,13 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/slot-locks/validate",
-        [db, requireBoardAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, requireTeamAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["teamId"].isString() || !(*json)["qq"].isString()) {
                 callback(jsonResponse(errorJson("Missing fields"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireBoardAccess(request, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback)) return;
             try {
                 const auto result = db->validateSlotLock(
                     (*json)["teamId"].asString(),
@@ -4544,14 +4480,14 @@ int main() {
         {drogon::Post});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/member",
-        [db, respondMutation, requireBoardAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireTeamAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr || !(*json)["member"].isObject()) {
                 callback(jsonResponse(errorJson("Missing member update"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireBoardAccess(request, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback, teamId)) return;
             const std::string actorQq = (*json)["actorQq"].isString()
                 ? (*json)["actorQq"].asString()
                 : ((*json)["qq"].isString() ? (*json)["qq"].asString() : "");
@@ -4573,14 +4509,14 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/member",
-        [db, respondMutation, requireBoardAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireTeamAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing member update"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireBoardAccess(request, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback, teamId)) return;
             const std::optional<std::string> expectedMemberQq = optionalBodyString((*json)["expectedMemberQq"]);
             const std::string actorQq = (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "";
             if (expectedMemberQq.has_value() && *expectedMemberQq != actorQq && !requireAdmin(request, *json, callback)) return;
@@ -4599,14 +4535,14 @@ int main() {
         {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/slots/{2}/cancel",
-        [db, respondMutation, requireBoardAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireTeamAccess, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, int slotIndex) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing cancellation"), drogon::k400BadRequest));
                 return;
             }
-            if (!requireBoardAccess(request, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback, teamId)) return;
             const std::string actorQq = (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "";
             const std::string cancelledBy = (*json)["cancelledBy"].isString() ? (*json)["cancelledBy"].asString() : actorQq;
             const std::optional<std::string> expectedMemberQq = optionalBodyString((*json)["expectedMemberQq"]);
@@ -4778,7 +4714,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidies/{2}",
-        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin, requireTeamAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &teamId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -4786,6 +4722,7 @@ int main() {
                 return;
             }
             if (!requireSelfOrAdmin(request, qq, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback, teamId)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::optional<std::string>(teamId),
@@ -4801,7 +4738,7 @@ int main() {
         {drogon::Put});
 
     drogon::app().registerHandler("/api/v2/archives/{1}/subsidies/{2}",
-        [db, respondMutation, requireSelfOrAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+        [db, respondMutation, requireSelfOrAdmin, requireTeamAccess](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
              const std::string &archiveId, const std::string &qq) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
@@ -4809,6 +4746,7 @@ int main() {
                 return;
             }
             if (!requireSelfOrAdmin(request, qq, *json, callback)) return;
+            if (!requireTeamAccess(request, *json, callback, "", archiveId)) return;
             try {
                 const auto result = db->registerMemberSubsidies(
                     std::nullopt,
@@ -4930,20 +4868,10 @@ int main() {
         [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             try {
                 const std::string actorQq = request->getParameter("actorQq");
-                const Value access = db->boardAccess(isAdminRequest(request, actorQq), inviteTokenFromRequest(request));
-                if (!access["ok"].asBool()) {
-                    Value blocked = access;
-                    blocked["items"] = Value(Json::arrayValue);
-                    blocked["hasMore"] = false;
-                    blocked["nextCursor"] = Value(Json::nullValue);
-                    blocked["limit"] = 0;
-                    callback(jsonResponse(blocked, statusForResult(blocked)));
-                    return;
-                }
                 const auto teamId = request->getParameter("teamId");
                 const auto before = optionalQueryInt64(request->getParameter("before"));
                 const int limit = static_cast<int>(optionalQueryInt64(request->getParameter("limit")).value_or(200));
-                callback(jsonResponse(db->historyLogs(teamId, before, limit)));
+                callback(jsonResponse(db->historyLogs(teamId, before, limit, isAdminRequest(request, actorQq), inviteTokenFromRequest(request))));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }
@@ -4955,19 +4883,9 @@ int main() {
             try {
                 const auto qq = request->getParameter("qq");
                 const std::string actorQq = request->getParameter("actorQq").empty() ? qq : request->getParameter("actorQq");
-                const Value access = db->boardAccess(isAdminRequest(request, actorQq), inviteTokenFromRequest(request));
-                if (!access["ok"].asBool()) {
-                    Value blocked = access;
-                    blocked["items"] = Value(Json::arrayValue);
-                    blocked["hasMore"] = false;
-                    blocked["nextCursor"] = Value(Json::nullValue);
-                    blocked["limit"] = 0;
-                    callback(jsonResponse(blocked, statusForResult(blocked)));
-                    return;
-                }
                 const auto before = optionalQueryInt64(request->getParameter("before"));
                 const int limit = static_cast<int>(optionalQueryInt64(request->getParameter("limit")).value_or(200));
-                callback(jsonResponse(db->historyCancellations(qq, before, limit)));
+                callback(jsonResponse(db->historyCancellations(qq, before, limit, isAdminRequest(request, actorQq), inviteTokenFromRequest(request))));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }

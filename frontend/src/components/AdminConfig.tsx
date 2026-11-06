@@ -3,6 +3,8 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
 import { TeamWeekSelector } from './TeamWeekSelector'
+import { TeamPublicationEditor } from './TeamPublicationEditor'
+import type { TeamPublication } from '../teamPublication'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 import { formatWeekRange } from '../week'
 
@@ -14,6 +16,8 @@ interface Props {
   locked: boolean
   onlyTnSignup: boolean
   uniqueQqSignup: boolean
+  publication: TeamPublication
+  onSavePublication: (publication: TeamPublication) => Promise<boolean>
   onRename: (name: string) => void
   onSaveWeekStart: (weekStart: string) => void
   onUpdateNote: (note: string) => void
@@ -26,7 +30,7 @@ interface Props {
   onOpenSubsidyConfig: () => void
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -68,6 +72,7 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
       </div>
       {open && (
         <div className="mt-3 space-y-4 rounded-lg border border-border p-4">
+          <TeamPublicationEditor key={`${publication.publicSignup}-${publication.publicAtMs}`} {...publication} onSave={onSavePublication} />
           {serverMode && (
             <div>
               <h3 className="text-sm font-medium text-foreground mb-2">数据同步</h3>

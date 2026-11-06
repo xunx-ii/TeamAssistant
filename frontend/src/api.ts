@@ -22,6 +22,7 @@ export interface AccessGateState {
 }
 
 export interface ServerData {
+  visibilityKey?: string
   teams: Team[]
   cancellations: Cancellation[]
   archivedTeams: ArchivedTeam[]
@@ -77,6 +78,7 @@ export interface ServerVersion {
 }
 
 export interface ServerChanges {
+  visibilityKey?: string
   ok: boolean
   dataVersion: number
   lockVersion: number
@@ -504,6 +506,12 @@ function routeMutation(mutation: Mutation, actorQq?: string | null): { url: stri
         }, actorQq)),
       }
 
+    case 'updateTeamPublication':
+      return {
+        url: `${API}/teams/${encodePath(mutation.teamId)}`,
+        init: jsonRequest('PATCH', withActor({ publicSignup: mutation.publicSignup, publicAtMs: mutation.publicAtMs }, actorQq)),
+      }
+
     case 'reorderTeams':
       return { url: `${API}/teams/reorder`, init: jsonRequest('POST', withActor({ ids: mutation.ids }, actorQq)) }
 
@@ -632,11 +640,12 @@ export async function fetchServerVersion(): Promise<ServerVersion | null> {
   return null
 }
 
-export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null, qq?: string | null, signal?: AbortSignal): Promise<ServerChanges | null> {
+export async function fetchServerChanges(dataVersion?: number | null, lockVersion?: number | null, qq?: string | null, signal?: AbortSignal, visibilityKey?: string | null): Promise<ServerChanges | null> {
   const params = new URLSearchParams()
   if (typeof dataVersion === 'number') params.set('dataVersion', String(dataVersion))
   if (typeof lockVersion === 'number') params.set('lockVersion', String(lockVersion))
   if (qq) params.set('qq', qq)
+  if (visibilityKey) params.set('visibilityKey', visibilityKey)
   appendInviteToken(params)
   appendAdminToken(params)
   const suffix = params.toString() ? `?${params}` : ''
@@ -654,6 +663,7 @@ export async function fetchServerChanges(dataVersion?: number | null, lockVersio
     const locks = payload.locks
     return {
       ok: payload.ok !== false,
+      visibilityKey: typeof payload.visibilityKey === 'string' ? payload.visibilityKey : undefined,
       dataVersion: nextDataVersion,
       lockVersion: nextLockVersion,
       isAdmin: typeof (payload as { isAdmin?: unknown }).isAdmin === 'boolean' ? (payload as { isAdmin: boolean }).isAdmin : undefined,

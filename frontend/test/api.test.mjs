@@ -241,6 +241,23 @@ test('an already cancelled sync makes no network requests', async () => {
   })
 })
 
+test('sync preserves the visibility scope and publication updates use the team endpoint', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({ ok: true, dataVersion: 4, lockVersion: 8, visibilityKey: 'public' })
+  }, async () => {
+    const mod = await import('../src/api.ts?case=team-publication')
+    const result = await mod.fetchServerChanges(3, 7, '20001', undefined, 'invite:old-key')
+    assert.equal(new URL(calls[0].input, 'http://localhost').searchParams.get('visibilityKey'), 'invite:old-key')
+    assert.equal(result.visibilityKey, 'public')
+    await mod.mutateData({ type: 'updateTeamPublication', teamId: 'team-1', publicSignup: false, publicAtMs: 0 }, '10001')
+    assert.equal(calls[1].input, '/api/v2/teams/team-1')
+    assert.equal(calls[1].init.method, 'PATCH')
+    assert.deepEqual(JSON.parse(calls[1].init.body), { publicSignup: false, publicAtMs: 0, actorQq: '10001' })
+  })
+})
+
 test('cancelled sync does not retry the direct backend', async () => {
   let calls = 0
   const controller = new AbortController()

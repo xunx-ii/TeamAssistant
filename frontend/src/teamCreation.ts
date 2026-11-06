@@ -5,6 +5,7 @@ import { normalizeTeamName } from './teamName'
 import { normalizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
 import { getWeekStartKey, normalizeWeekStartKey } from './week'
 import { martialArts } from './data/martialArts'
+import { normalizeTeamPublication } from './teamPublication'
 
 export interface CreateTeamGuideValues {
   name: string
@@ -13,6 +14,8 @@ export interface CreateTeamGuideValues {
   subsidyPresetIds: string[]
   onlyTnSignup: boolean
   uniqueQqSignup: boolean
+  publicSignup?: boolean
+  publicAtMs?: number
   quickReserve: boolean
   reserveT: number
   reserveHealer: number
@@ -69,7 +72,7 @@ export function createDefaultTeam(name = '默认团队', options: { weekStart?: 
     id: generateId(),
     name: normalizeTeamName(textName, '默认团队'),
     note: '',
-    config: { reservedSlots: [], locked: false, onlyTnSignup: false, uniqueQqSignup: false },
+    config: { reservedSlots: [], locked: false, onlyTnSignup: false, uniqueQqSignup: false, publicSignup: true, publicAtMs: 0 },
     slots: createEmptySlots(),
   }
   const weekStart = normalizeWeekStartKey(options.weekStart)
@@ -87,6 +90,7 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
   })
   team.config.onlyTnSignup = values.onlyTnSignup === true
   team.config.uniqueQqSignup = values.uniqueQqSignup === true
+  Object.assign(team.config, normalizeTeamPublication(values))
 
   if (!values.quickReserve) return team
 

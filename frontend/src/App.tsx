@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { getMartialArt, martialArts } from './data/martialArts'
-import { checkAdminQq, clearAdminToken, clearInviteTokenFromUrl, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type AccessGateState, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { checkAdminQq, clearAdminToken, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatches as applySnapshotPatches, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { planMutationSync, shouldApplySyncVersion, unseenServerPatches } from './syncCursor'
 import { LOG_WINDOW } from './historyWindow'
@@ -23,6 +23,7 @@ import { createDefaultTeam, createTeamCopies, createTeamsFromGuide, type CreateT
 import { findUniqueSignupConflictSlot } from './signupRules'
 import { getCurrentWeekStartKey } from './week'
 import { startAdaptivePoll } from './polling'
+import { publicSnapshot } from './teamPublication'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -35,7 +36,6 @@ import { Button } from './components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog'
 import { useImeSafeInputHandlers } from './components/ui/imeInput'
 import { PixelHeart, PixelStar, PixelCarrot } from './components/PixelRabbit'
-import { formatShanghaiDateTimeMinute } from './time'
 
 const SubsidyConfigDialog = lazy(() => import('./components/SubsidyConfig').then(module => ({ default: module.SubsidyConfigDialog })))
 const SubsidyModal = lazy(() => import('./components/SubsidyModal').then(module => ({ default: module.SubsidyModal })))
@@ -129,7 +129,7 @@ function mutationResultErrorMessage(result: MutationResult) {
   if (result.reason === 'onlyTnSignup') return '当前团队仅限T/奶报名'
   if (result.reason === 'uniqueQqSignup') return '该QQ已在当前团队报名'
   if (result.reason === 'selfSignupOnly') return '该团队每人仅能报名一次，不能代报名'
-  if (result.reason === 'notOpen') return '报名暂未开放'
+  if (result.reason === 'notOpen') return '该团队尚未公开报名'
   return result.error || '保存失败，请稍后再试'
 }
 
@@ -146,7 +146,12 @@ function App() {
     setTeamsLocal([def])
     return [def]
   })
-  const [activeTeamId, setActiveTeamId] = useState<string>(teams[0]?.id ?? '')
+  const [activeTeamId, setActiveTeamIdState] = useState<string>(teams[0]?.id ?? '')
+  const activeTeamIdRef = useRef(activeTeamId)
+  const setActiveTeamId = useCallback((id: string) => {
+    activeTeamIdRef.current = id
+    setActiveTeamIdState(id)
+  }, [])
   const [cancellations, setCancellations] = useState<Cancellation[]>(loadCancellations)
   const [archivedTeams, setArchivedTeams] = useState<ArchivedTeam[]>(loadArchivedTeams)
   const [operationLogs, setOperationLogs] = useState<OperationLog[]>(loadOperationLogs)
@@ -174,7 +179,6 @@ function App() {
   const [showNicknameDialog, setShowNicknameDialog] = useState(false)
   const [nicknameError, setNicknameError] = useState('')
   const [serverMode, setServerMode] = useState(false)
-  const [accessGate, setAccessGate] = useState<AccessGateState | null>(null)
   const [initializing, setInitializing] = useState(true)
   const [showLoadingTransition, setShowLoadingTransition] = useState(true)
   const [loadingMessage] = useState(pickLoadingMessage)
@@ -187,6 +191,7 @@ function App() {
   const [alertOptions, setAlertOptions] = useState<AppAlertOptions | null>(null)
   const confirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const dataVersionRef = useRef<number | null>(null)
+  const visibilityKeyRef = useRef<string | null>(null)
   const lockVersionRef = useRef<number | null>(null)
   const snapshotRef = useRef<Snapshot>({ teams, cancellations, archivedTeams, logs: operationLogs, userProfiles })
   const syncingChangesRef = useRef<symbol | null>(null)
@@ -199,7 +204,6 @@ function App() {
   const notice = findPendingNotice(qq, cancellations)
   const currentWeekStart = getCurrentWeekStartKey()
   const currentNickname = qq ? (userProfiles[qq]?.nickname ?? '') : ''
-  const hasBoardAccess = !serverMode || accessGate?.authorized !== false
   const requiresNickname = Boolean(qq) && !currentNickname
   const subsidyTargets = useMemo(
     () => showSubsidy || showSubsidyStats ? createSubsidyTargets(teams, archivedTeams, qq, currentWeekStart) : [],
@@ -218,6 +222,17 @@ function App() {
     const nextLogs = snapshot.logs ?? []
     const nextUserProfiles = snapshot.userProfiles ?? {}
     snapshotRef.current = { teams: nextTeams, cancellations: nextCancellations, archivedTeams: nextArchivedTeams, logs: nextLogs, userProfiles: nextUserProfiles }
+    if (!nextTeams.some(team => team.id === activeTeamIdRef.current)) {
+      setActiveTeamId(nextTeams[0]?.id ?? '')
+      setSignupSlot(null)
+      setEditSlot(null)
+      setCancelSlot(null)
+      setSetRoleSlot(null)
+      setShowCopyTeam(false)
+      setShowLogs(false)
+      setShowSubsidy(false)
+      setShowSubsidyConfig(false)
+    }
     setTeams(nextTeams)
     setCancellations(nextCancellations)
     setArchivedTeams(nextArchivedTeams)
@@ -228,7 +243,7 @@ function App() {
     if (previous.archivedTeams !== nextArchivedTeams) setArchivedTeamsLocal(nextArchivedTeams)
     if (previous.logs !== nextLogs) setOperationLogsLocal(nextLogs)
     if (previous.userProfiles !== nextUserProfiles) setUserProfilesLocal(nextUserProfiles)
-  }, [])
+  }, [setActiveTeamId])
 
   const syncSubsidyPresets = useCallback((presets: SubsidyType[]) => {
     setSubsidyPresets(presets)
@@ -238,9 +253,7 @@ function App() {
   const syncServerData = useCallback((data: ServerData, allowVersionReset = false) => {
     if (!allowVersionReset && typeof data.dataVersion === 'number' && dataVersionRef.current !== null && data.dataVersion < dataVersionRef.current) return true
     const snapshot = normalizeServerData(data)
-    if (data.accessGate) {
-      setAccessGate(data.accessGate)
-    }
+    if (typeof data.visibilityKey === 'string') visibilityKeyRef.current = data.visibilityKey
     if (Array.isArray(data.subsidyPresets)) {
       syncSubsidyPresets(data.subsidyPresets)
     }
@@ -354,14 +367,14 @@ function App() {
 
         const requestedDataVersion = dataVersionRef.current
         const requestedLockVersion = lockVersionRef.current
-        const changes = await fetchServerChanges(requestedDataVersion, requestedLockVersion, qq)
+        const changes = await fetchServerChanges(requestedDataVersion, requestedLockVersion, qq, undefined, visibilityKeyRef.current)
         if (generation !== syncGenerationRef.current) return true
         if (!changes) return false
 
         let synced = true
         if (shouldApplySyncVersion(dataVersionRef.current, requestedDataVersion, changes.dataVersion)) {
+          if (typeof changes.visibilityKey === 'string') visibilityKeyRef.current = changes.visibilityKey
           if (typeof changes.isAdmin === 'boolean') setIsAdmin(changes.isAdmin)
-          if (changes.accessGate) setAccessGate(changes.accessGate)
           if (changes.data) {
             const snapshot = { ...changes.data }
             if (!shouldApplySyncVersion(lockVersionRef.current, requestedLockVersion, changes.data.lockVersion ?? changes.lockVersion)) {
@@ -420,6 +433,8 @@ function App() {
         if (loadedData && syncServerData(loadedData)) {
           if (loadedData.teams.length > 0) setActiveTeamId(loadedData.teams[0].id)
         }
+      } else if (qq) {
+        syncSnapshot(publicSnapshot(snapshotRef.current))
       }
       if (!active) return
       setServerMode(changes !== null)
@@ -427,6 +442,7 @@ function App() {
     }
     initialize().catch(() => {
       if (!active) return
+      if (qq) syncSnapshot(publicSnapshot(snapshotRef.current))
       setServerMode(false)
       setInitializing(false)
     })
@@ -434,7 +450,7 @@ function App() {
       active = false
       controller.abort()
     }
-  }, [qq, syncServerData])
+  }, [qq, syncServerData, syncSnapshot, setActiveTeamId])
 
   useEffect(() => {
     if (initializing || !showLoadingTransition) return
@@ -482,29 +498,6 @@ function App() {
       controller.stop()
     }
   }, [serverMode, syncServerChanges])
-
-  useEffect(() => {
-    if (!serverMode || !accessGate) return
-    if (accessGate.isOpen) {
-      clearInviteTokenFromUrl()
-      return
-    }
-    if (accessGate.publicAtMs <= 0) return
-    const generation = syncGenerationRef.current
-    const refresh = () => {
-      if (generation !== syncGenerationRef.current) return
-      dataVersionRef.current = null
-      clearInviteTokenFromUrl()
-      void syncServerChanges()
-    }
-    const delay = accessGate.publicAtMs - Date.now()
-    if (delay <= 0) {
-      refresh()
-      return
-    }
-    const timer = window.setTimeout(refresh, Math.min(delay + 250, 2_147_483_647))
-    return () => window.clearTimeout(timer)
-  }, [accessGate, serverMode, syncServerChanges])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
@@ -562,9 +555,6 @@ function App() {
     }
 
     if (!result.ok) {
-      if (result.accessGate) {
-        setAccessGate(result.accessGate)
-      }
       if (result.reason === 'teamLocked') {
         setMutationError('表格已被管理员锁定')
       } else if (result.reason === 'expired') {
@@ -585,7 +575,7 @@ function App() {
       } else if (result.reason === 'selfSignupOnly') {
         setMutationError('该团队每人仅能报名一次，不能代报名')
       } else if (result.reason === 'notOpen') {
-        setMutationError('报名暂未开放')
+        setMutationError('该团队尚未公开报名')
       } else if (result.error) {
         setMutationError(result.error)
       } else {
@@ -625,6 +615,7 @@ function App() {
     syncGenerationRef.current += 1
     syncingChangesRef.current = null
     dataVersionRef.current = null
+    visibilityKeyRef.current = null
     lockVersionRef.current = null
     pendingServerEventRef.current = null
   }
@@ -642,7 +633,6 @@ function App() {
     clearStoredAdminSession()
     removeStoredQQ()
     setIsAdmin(false)
-    setAccessGate(null)
     const check = await checkAdminQq(userQq)
     if (check.ok && check.isAdmin) {
       return { requiresAdminPassword: true, qq: userQq }
@@ -656,7 +646,6 @@ function App() {
     clearStoredAdminSession()
     removeStoredQQ()
     setIsAdmin(false)
-    setAccessGate(null)
     const result = await loginAdmin(userQq, password)
     if (!result.ok || !result.adminToken || !result.expiresAtMs) {
       throw new Error(result.error || '管理员密码验证失败')
@@ -676,7 +665,6 @@ function App() {
     removeStoredQQ()
     setQq(null)
     setIsAdmin(false)
-    setAccessGate(null)
     setShowNicknameDialog(false)
     setNicknameError('')
     setMutationError('')
@@ -1341,7 +1329,6 @@ function App() {
           <AccessGateDialog
             open={showAccessGate}
             actorQq={qq}
-            onUpdated={setAccessGate}
             onClose={() => setShowAccessGate(false)}
           />
         </DeferredDialog>
@@ -1392,35 +1379,6 @@ function App() {
     </>
   )
 
-  if (!hasBoardAccess) {
-    const publicTime = accessGate?.publicAtMs ? formatShanghaiDateTimeMinute(accessGate.publicAtMs) : ''
-    return (
-      <>
-        <div className="min-h-screen bg-background pixel-bg-pattern app-enter">
-          <div className="max-w-[960px] mx-auto px-4 py-5">
-            <div className="pixel-card p-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h1 className="text-base font-bold text-foreground pixel-font">兔扇报名助手</h1>
-                {sharedHeaderActions}
-              </div>
-            </div>
-            <div className="mt-4 pixel-card p-5">
-              <div className="flex items-center gap-2">
-                <PixelHeart size={16} className="shrink-0" />
-                <h2 className="text-sm font-bold text-foreground">报名未开放</h2>
-              </div>
-              {publicTime && (
-                <p className="mt-3 text-sm text-muted-foreground">公开时间：{publicTime}</p>
-              )}
-            </div>
-          </div>
-        </div>
-        {sharedDialogs}
-        {loadingOverlay}
-      </>
-    )
-  }
-
   return (
     <>
       {notice && (
@@ -1466,10 +1424,14 @@ function App() {
             />
           </div>
 
+          {!activeTeam && <div className="mt-4 pixel-card p-5 text-center text-sm text-muted-foreground">暂无可报名的团队</div>}
           {activeTeam && (
             <div className="mt-4">
               {isAdmin && (
                 <AdminConfig
+                  key={activeTeam.id}
+                  publication={activeTeam.config}
+                  onSavePublication={async publication => (await runMutation({ type: 'updateTeamPublication', teamId: activeTeam.id, ...publication })).ok}
                   teamName={activeTeam.name}
                   weekStart={activeTeam.weekStart ?? currentWeekStart}
                   note={activeTeam.note}

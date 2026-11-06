@@ -55,6 +55,8 @@ export interface TeamConfig {
   locked: boolean
   onlyTnSignup: boolean
   uniqueQqSignup: boolean
+  publicSignup: boolean
+  publicAtMs: number
 }
 
 export interface Team {
@@ -101,6 +103,8 @@ export const DEFAULT_TEAM_CONFIG: TeamConfig = {
   locked: false,
   onlyTnSignup: false,
   uniqueQqSignup: false,
+  publicSignup: true,
+  publicAtMs: 0,
 }
 
 export const TOTAL_SLOTS = 25

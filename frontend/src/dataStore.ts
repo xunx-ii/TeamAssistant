@@ -26,6 +26,7 @@ export type Mutation =
   | { type: 'toggleTeamConfigLock'; teamId: string; locked: boolean }
   | { type: 'setTeamLockState'; teamId: string; locked: boolean }
   | { type: 'updateTeamSignupRules'; teamId: string; onlyTnSignup: boolean; uniqueQqSignup: boolean }
+  | { type: 'updateTeamPublication'; teamId: string; publicSignup: boolean; publicAtMs: number }
   | {
       type: 'setSlotRole'
       teamId: string
@@ -300,7 +301,9 @@ function isValidTeamConfig(config: unknown) {
     config.reservedSlots.every(isSlotIndex) &&
     typeof config.locked === 'boolean' &&
     (!Object.prototype.hasOwnProperty.call(config, 'onlyTnSignup') || typeof config.onlyTnSignup === 'boolean') &&
-    (!Object.prototype.hasOwnProperty.call(config, 'uniqueQqSignup') || typeof config.uniqueQqSignup === 'boolean'),
+    (!Object.prototype.hasOwnProperty.call(config, 'uniqueQqSignup') || typeof config.uniqueQqSignup === 'boolean') &&
+    (config.publicSignup === undefined || typeof config.publicSignup === 'boolean') &&
+    (config.publicAtMs === undefined || (typeof config.publicAtMs === 'number' && Number.isSafeInteger(config.publicAtMs) && config.publicAtMs >= 0 && config.publicAtMs <= 8_640_000_000_000_000)),
   )
 }
 
@@ -586,6 +589,12 @@ export function applyMutation(snapshot: Snapshot, mutation: Mutation): Snapshot 
       return next
     }
 
+    case 'updateTeamPublication': {
+      const team = getTeamOrThrow(next, mutation.teamId)
+      team.config.publicSignup = mutation.publicSignup
+      team.config.publicAtMs = mutation.publicAtMs
+      return next
+    }
     case 'updateTeamSignupRules': {
       const team = getTeamOrThrow(next, mutation.teamId)
       team.config.onlyTnSignup = mutation.onlyTnSignup

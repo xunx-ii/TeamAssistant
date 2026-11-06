@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS teams (
   locked INTEGER NOT NULL DEFAULT 0,
   only_tn_signup INTEGER NOT NULL DEFAULT 0,
   unique_qq_signup INTEGER NOT NULL DEFAULT 0,
+  public_signup INTEGER NOT NULL DEFAULT 1,
+  public_at_ms INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   reserved_slots_json TEXT NOT NULL DEFAULT '[]',
   subsidy_types_json TEXT,
@@ -104,5 +106,10 @@ ON CONFLICT(id) DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_logs_team_timestamp ON operation_logs(team_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON operation_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_teams_sort_order ON teams(sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_teams_publication ON teams(public_signup, public_at_ms);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id TEXT PRIMARY KEY
+);
 CREATE INDEX IF NOT EXISTS idx_archives_archived_at ON archives(archived_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cancellations_timestamp ON cancellations(timestamp DESC);
