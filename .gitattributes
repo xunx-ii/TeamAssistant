@@ -1,0 +1,8 @@
+.gitattributes text eol=lf
+.dockerignore text eol=lf
+.env.example text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+docker/*.sh text eol=lf
+docker/**/*.mjs text eol=lf
+docker/*.conf text eol=lf

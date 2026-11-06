@@ -32,3 +32,6 @@ backup
 backend-cpp/build
 backend-cpp/data
 .temp/
+.env
+.env.*
+!.env.example
