@@ -39,7 +39,8 @@ RUN cmake -S backend-cpp -B backend-cpp/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_C-ARES=OFF \
     && cmake --build backend-cpp/build --target teamassistant_backend --parallel 2
-COPY qqbot/src/team.js ./qqbot/src/team.js
+# Backend integration tests use the bot API client and its configuration dependencies.
+COPY --from=qqbot-build /app/qqbot ./qqbot
 COPY docs/migration.md ./docs/migration.md
 RUN node --test backend-cpp/tests/*.test.mjs \
     && strip backend-cpp/build/teamassistant_backend
