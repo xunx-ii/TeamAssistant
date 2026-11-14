@@ -2,7 +2,7 @@ import test, { before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, writeFileSync, copyFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, copyFileSync, existsSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { resolve, join, relative, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -17,6 +17,33 @@ const password = randomUUID()
 let tempDir, backend, baseUrl, adminToken, migratedSnapshot, migratedPublicSnapshot
 const legacyPublicAt = Date.now() + 3_600_000
 let output = ''
+
+function findBackendExecutable() {
+  return ['', 'Release/', 'Debug/']
+    .flatMap(dir => ['teamassistant_backend.exe', 'teamassistant_backend'].map(name => join(root, 'backend-cpp/build', dir, name)))
+    .find(existsSync)
+}
+
+function backendEnvironment(port) {
+  return {
+    ...process.env,
+    PORT: String(port),
+    TEAMASSISTANT_DB: 'test.sqlite3',
+    TEAMASSISTANT_ADMIN_CONFIG: join(tempDir, 'admin.json'),
+    TEAMASSISTANT_ADMIN_PASSWORD: password,
+    TEAMASSISTANT_ADMIN_PASSWORD_HASH: '',
+    TEAMASSISTANT_ADMIN_PASSWORD_SALT: '',
+  }
+}
+
+async function allocatePort() {
+  const probe = createServer()
+  probe.listen(0, '127.0.0.1')
+  await once(probe, 'listening')
+  const port = probe.address().port
+  await new Promise(resolve => probe.close(resolve))
+  return port
+}
 
 async function request(path, method = 'GET', body) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -292,10 +319,85 @@ test('admin team templates persist, normalize and stay hidden from public viewer
   assert.equal(restored.data.teamTemplates[0].name, '标准开团')
 })
 
+test('admin sessions remain valid in a second backend process using the same database', async () => {
+  const checkWithSession = await request(`/admin/check?actorQq=${adminQq}&adminToken=${adminToken}`)
+  assert.equal(checkWithSession.isAdmin, true)
+  assert.equal(checkWithSession.sessionValid, true)
+
+  const checkWithoutSession = await request(`/admin/check?actorQq=${adminQq}`)
+  assert.equal(checkWithoutSession.isAdmin, true)
+  assert.equal(checkWithoutSession.sessionValid, false)
+
+  const extraLogin = await request('/admin/login', 'POST', { actorQq: adminQq, password })
+  assert.equal(extraLogin.ok, true)
+  const extraToken = extraLogin.adminToken
+  assert.equal((await request(`/admin/check?actorQq=${adminQq}&adminToken=${extraToken}`)).sessionValid, true)
+  assert.equal((await request('/admin/logout', 'POST', { actorQq: adminQq, adminToken: extraToken })).ok, true)
+  assert.equal((await request(`/admin/check?actorQq=${adminQq}&adminToken=${extraToken}`)).sessionValid, false)
+
+  const executable = findBackendExecutable()
+  assert.ok(executable, '请先构建 C++ 后端')
+  const port = await allocatePort()
+  let secondOutput = ''
+  const second = spawn(executable, [], {
+    cwd: tempDir,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: backendEnvironment(port),
+  })
+  second.stdout.on('data', chunk => { secondOutput += chunk })
+  second.stderr.on('data', chunk => { secondOutput += chunk })
+
+  try {
+    let ready = false
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (second.exitCode !== null) break
+      try {
+        const version = await fetch(`http://127.0.0.1:${port}/api/v2/version`, { signal: AbortSignal.timeout(1_000) })
+        if (version.ok) {
+          ready = true
+          break
+        }
+      } catch {
+        // Wait for the second process to bind its port.
+      }
+      await delay(50)
+    }
+    assert.equal(ready, true, `第二个后端进程启动失败: ${secondOutput}`)
+    const persisted = await fetch(
+      `http://127.0.0.1:${port}/api/v2/admin/check?actorQq=${adminQq}&adminToken=${adminToken}`,
+      { signal: AbortSignal.timeout(5_000) },
+    ).then(response => response.json())
+    assert.equal(persisted.isAdmin, true)
+    assert.equal(persisted.sessionValid, true)
+  } finally {
+    if (second.exitCode === null) {
+      const exited = once(second, 'exit')
+      second.kill()
+      await exited
+    }
+  }
+})
+
+test('admin config changes apply without restarting the backend', async () => {
+  const configPath = join(tempDir, 'admin.json')
+  const original = readFileSync(configPath, 'utf8')
+  try {
+    writeFileSync(configPath, JSON.stringify({ adminQQs: [adminQq, '313389778'] }, null, 2))
+    const added = await request('/admin/check?actorQq=313389778')
+    assert.equal(added.isAdmin, true)
+
+    await delay(20)
+    writeFileSync(configPath, original)
+    const removed = await request('/admin/check?actorQq=313389778')
+    assert.equal(removed.isAdmin, false)
+  } finally {
+    writeFileSync(configPath, original)
+  }
+})
+
 before(async () => {
-  const executable = ['', 'Release/', 'Debug/']
-    .flatMap(dir => ['teamassistant_backend.exe', 'teamassistant_backend'].map(name => join(root, 'backend-cpp/build', dir, name)))
-    .find(existsSync)
+  const executable = findBackendExecutable()
   assert.ok(executable, '请先构建 C++ 后端')
   mkdirSync(tempRoot, { recursive: true })
   tempDir = mkdtempSync(join(tempRoot, 'api-test-'))
@@ -317,19 +419,11 @@ before(async () => {
   legacy.exec('CREATE TABLE archives(id TEXT PRIMARY KEY, team_json TEXT NOT NULL, archived_at INTEGER NOT NULL, archived_by TEXT NOT NULL)')
   legacy.prepare('INSERT INTO archives VALUES(?, ?, ?, ?)').run('legacy-archive', JSON.stringify(emptyTeam('legacy-archived-team')), Date.now(), adminQq)
   legacy.close()
-  const portProbe = createServer()
-  portProbe.listen(0, '127.0.0.1')
-  await once(portProbe, 'listening')
-  const port = portProbe.address().port
-  await new Promise(resolve => portProbe.close(resolve))
+  const port = await allocatePort()
   baseUrl = `http://127.0.0.1:${port}/api/v2`
   backend = spawn(executable, [], {
     cwd: tempDir, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env, PORT: String(port), TEAMASSISTANT_DB: 'test.sqlite3',
-      TEAMASSISTANT_ADMIN_CONFIG: configPath, TEAMASSISTANT_ADMIN_PASSWORD: password,
-      TEAMASSISTANT_ADMIN_PASSWORD_HASH: '', TEAMASSISTANT_ADMIN_PASSWORD_SALT: '',
-    },
+    env: backendEnvironment(port),
   })
   backend.stdout.on('data', chunk => { output += chunk })
   backend.stderr.on('data', chunk => { output += chunk })

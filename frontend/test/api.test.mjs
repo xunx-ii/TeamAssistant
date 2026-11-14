@@ -354,6 +354,20 @@ test('admin login stores returned token for later requests', async () => {
   assert.equal(calls[1].input, '/api/v2/sync?dataVersion=1&lockVersion=1&qq=10001&adminToken=stored-admin-token')
 })
 
+test('admin logout cannot clear a newer login token', async () => {
+  let mod
+  await withMockedFetch(async () => {
+    mod.setAdminToken('newer-admin-token')
+    return createJsonResponse({ ok: true })
+  }, async () => {
+    mod = await import(`../src/api.ts?case=${Date.now()}-admin-logout-race`)
+    mod.setAdminToken('older-admin-token')
+    const loggedOut = await mod.logoutAdmin('10001')
+    assert.equal(loggedOut, true)
+    assert.equal(mod.getAdminToken(), 'newer-admin-token')
+  })
+})
+
 test('admin check queries qq without requiring a password', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {
@@ -361,18 +375,24 @@ test('admin check queries qq without requiring a password', async () => {
     return createJsonResponse({
       ok: true,
       isAdmin: true,
+      sessionValid: true,
       passwordConfigured: true,
     })
   }, async () => {
     const mod = await import(`../src/api.ts?case=${Date.now()}-admin-check`)
+    await mod.checkAdminQq('10001')
+    mod.setAdminToken('admin-session-token')
     const checked = await mod.checkAdminQq('10001')
     assert.equal(checked.ok, true)
     assert.equal(checked.isAdmin, true)
+    assert.equal(checked.sessionValid, true)
     assert.equal(checked.passwordConfigured, true)
   })
 
   assert.equal(calls[0].input, '/api/v2/admin/check?actorQq=10001')
   assert.equal(calls[0].init.cache, 'no-store')
+  assert.equal(calls[1].input, '/api/v2/admin/check?actorQq=10001&adminToken=admin-session-token')
+  assert.equal(calls[1].init.cache, 'no-store')
 })
 
 test('access gate helpers parse admin gate responses', async () => {

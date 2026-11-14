@@ -183,6 +183,7 @@ export interface AdminLoginResult {
 export interface AdminCheckResult {
   ok: boolean
   isAdmin?: boolean
+  sessionValid?: boolean
   passwordConfigured?: boolean
   reason?: string
   error?: string
@@ -766,12 +767,14 @@ export async function loginAdmin(actorQq: string, password: string): Promise<Adm
 export async function checkAdminQq(actorQq: string): Promise<AdminCheckResult> {
   const params = new URLSearchParams()
   params.set('actorQq', actorQq)
+  appendAdminToken(params)
   return requestResult<AdminCheckResult>(`${API}/admin/check?${params}`, noCache)
 }
 
 export async function logoutAdmin(actorQq?: string | null): Promise<boolean> {
+  const tokenAtStart = adminToken
   const result = await requestResult<{ ok: boolean }>(`${API}/admin/logout`, jsonRequest('POST', withActor({}, actorQq)))
-  clearAdminToken()
+  if (adminToken === tokenAtStart) clearAdminToken()
   return result.ok
 }
 

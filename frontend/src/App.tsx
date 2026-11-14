@@ -25,6 +25,7 @@ import { getCurrentWeekStartKey } from './week'
 import { startAdaptivePoll } from './polling'
 import { publicSnapshot } from './teamPublication'
 import { createTeamTemplateFromTeam, loadTeamTemplates, normalizeTeamTemplates, saveTeamTemplates } from './teamTemplates'
+import { clearStoredAdminSession, readStoredAdminSession, storeAdminSession } from './adminSession'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -69,12 +70,6 @@ interface AppAlertOptions {
   closeText: string
 }
 
-interface AdminSessionState {
-  qq: string
-  token: string
-  expiresAtMs: number
-}
-
 interface LoginAttemptResult {
   requiresAdminPassword: boolean
   qq?: string
@@ -89,38 +84,6 @@ const LOADING_MESSAGES = [
 ]
 
 initializeInviteTokenFromUrl()
-
-const ADMIN_SESSION_KEY = 'team_admin_session_v1'
-
-function readStoredAdminSession(qq: string | null): AdminSessionState | null {
-  if (!qq) return null
-  try {
-    const raw = sessionStorage.getItem(ADMIN_SESSION_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<AdminSessionState>
-    if (
-      parsed.qq === qq &&
-      typeof parsed.token === 'string' &&
-      parsed.token &&
-      typeof parsed.expiresAtMs === 'number' &&
-      parsed.expiresAtMs > Date.now()
-    ) {
-      return parsed as AdminSessionState
-    }
-  } catch {
-    // Ignore malformed session state.
-  }
-  sessionStorage.removeItem(ADMIN_SESSION_KEY)
-  return null
-}
-
-function storeAdminSession(session: AdminSessionState) {
-  sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session))
-}
-
-function clearStoredAdminSession() {
-  sessionStorage.removeItem(ADMIN_SESSION_KEY)
-}
 
 function mutationResultErrorMessage(result: MutationResult) {
   if (result.reason === 'teamLocked') return '表格已被管理员锁定'
@@ -160,6 +123,13 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
   const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>(loadTeamTemplates)
+  const applyAdminStatus = useCallback((nextIsAdmin: boolean) => {
+    setIsAdmin(nextIsAdmin)
+    if (!nextIsAdmin) {
+      clearAdminToken()
+      clearStoredAdminSession()
+    }
+  }, [])
   // 服务器告诉我们 bootstrap 里的 logs 是否被截断了。截断时弹日志窗口会暴露
   // 「加载更早」入口，去 /api/v2/logs 拿更老的分页。
   const [logsTruncated, setLogsTruncated] = useState(false)
@@ -269,7 +239,7 @@ function App() {
       syncTeamTemplates(data.teamTemplates)
     }
     if (typeof data.isAdmin === 'boolean') {
-      setIsAdmin(data.isAdmin)
+      applyAdminStatus(data.isAdmin)
     }
     // 只有 bootstrap / 全量替换的 ServerData 才会带 truncated 字段，
     // 增量 patch 的路径不会进到这里。这里直接覆盖即可。
@@ -290,7 +260,7 @@ function App() {
     }
     syncSnapshot(snapshot)
     return true
-  }, [syncSnapshot, syncSubsidyPresets, syncTeamTemplates])
+  }, [applyAdminStatus, syncSnapshot, syncSubsidyPresets, syncTeamTemplates])
 
   const syncLockState = useCallback((state: LockState, allowVersionReset = false) => {
     const previousLockVersion = lockVersionRef.current
@@ -385,7 +355,7 @@ function App() {
         let synced = true
         if (shouldApplySyncVersion(dataVersionRef.current, requestedDataVersion, changes.dataVersion)) {
           if (typeof changes.visibilityKey === 'string') visibilityKeyRef.current = changes.visibilityKey
-          if (typeof changes.isAdmin === 'boolean') setIsAdmin(changes.isAdmin)
+          if (typeof changes.isAdmin === 'boolean') applyAdminStatus(changes.isAdmin)
           if (changes.data) {
             const snapshot = { ...changes.data }
             if (!shouldApplySyncVersion(lockVersionRef.current, requestedLockVersion, changes.data.lockVersion ?? changes.lockVersion)) {
@@ -415,7 +385,7 @@ function App() {
     } finally {
       if (syncingChangesRef.current === requestId) syncingChangesRef.current = null
     }
-  }, [applyServerPatches, qq, syncLockState, syncServerData])
+  }, [applyAdminStatus, applyServerPatches, qq, syncLockState, syncServerData])
 
   useEffect(() => {
     let active = true
@@ -426,7 +396,7 @@ function App() {
         setAdminToken(storedAdminSession.token)
       } else {
         clearAdminToken()
-        setIsAdmin(false)
+        applyAdminStatus(false)
       }
       // 登录页无需等待报名数据；进入看板时一次同步即可完成初始化。
       const changes = qq ? await initializeServerData(qq, controller.signal) : null
@@ -434,11 +404,7 @@ function App() {
       if (changes) {
         const viewerIsAdmin = changes.isAdmin === true
         if (typeof changes.isAdmin === 'boolean') {
-          setIsAdmin(viewerIsAdmin)
-        }
-        if (changes.isAdmin === false && storedAdminSession) {
-          clearAdminToken()
-          clearStoredAdminSession()
+          applyAdminStatus(viewerIsAdmin)
         }
         const loadedData = changes.data
         if (loadedData && syncServerData(loadedData)) {
@@ -461,7 +427,7 @@ function App() {
       active = false
       controller.abort()
     }
-  }, [qq, syncServerData, syncSnapshot, setActiveTeamId])
+  }, [applyAdminStatus, qq, syncServerData, syncSnapshot, setActiveTeamId])
 
   useEffect(() => {
     if (initializing || !showLoadingTransition) return
@@ -509,6 +475,24 @@ function App() {
       controller.stop()
     }
   }, [serverMode, syncServerChanges])
+
+  useEffect(() => {
+    if (!serverMode || !qq || !isAdmin) return
+    let active = true
+    const refreshAdminStatus = async () => {
+      const status = await checkAdminQq(qq)
+      if (!active || !status.ok) return
+      if (!status.isAdmin || status.sessionValid !== true) {
+        applyAdminStatus(false)
+      }
+    }
+    void refreshAdminStatus()
+    const interval = window.setInterval(() => { void refreshAdminStatus() }, 60_000)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [applyAdminStatus, isAdmin, qq, serverMode])
 
   const clearModals = () => {
     setSignupSlot(null); setEditSlot(null); setCancelSlot(null); setSetRoleSlot(null)
@@ -566,6 +550,7 @@ function App() {
     }
 
     if (!result.ok) {
+      if (result.reason === 'forbidden') void syncServerChanges()
       if (result.reason === 'teamLocked') {
         setMutationError('表格已被管理员锁定')
       } else if (result.reason === 'expired') {
@@ -674,6 +659,7 @@ function App() {
   }
   const handleLogout = () => {
     void logoutAdmin(qq)
+    clearAdminToken()
     clearStoredAdminSession()
     resetServerCursor()
     removeStoredQQ()

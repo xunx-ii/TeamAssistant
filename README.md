@@ -67,7 +67,7 @@ docker compose up -d
 - `/data/qqbot/`：机器人 SQLite 记录、扫码凭据及自动生成的模型配置。
 - `/data/home/`：机器人使用的用户目录，包括 pi 登录配置。
 
-环境变量中的管理员名单在每次启动时同步到 `/data/backend/admin.json`；密码和模型密钥通过进程环境传入。也可以将自己的 `admin.json` 只读挂载到该路径，此时从 `.env` 删除 `TEAMASSISTANT_ADMIN_QQS`，密码仍可使用 `TEAMASSISTANT_ADMIN_PASSWORD` 或 `TEAMASSISTANT_ADMIN_PASSWORD_SALT` / `TEAMASSISTANT_ADMIN_PASSWORD_HASH`。镜像构建会排除本地数据库、`.env`、管理员配置和机器人凭据。
+环境变量中的管理员名单在每次启动时同步到 `/data/backend/admin.json`；运行时修改该文件会被后端自动重载，但下一次容器启动仍会以 `TEAMASSISTANT_ADMIN_QQS` 为准。密码和模型密钥通过进程环境传入。管理员登录会话持久化在业务 SQLite 中，默认有效期 168 小时，可通过 `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` 调整。也可以将自己的 `admin.json` 只读挂载到该路径，此时从 `.env` 删除 `TEAMASSISTANT_ADMIN_QQS`，密码仍可使用 `TEAMASSISTANT_ADMIN_PASSWORD` 或 `TEAMASSISTANT_ADMIN_PASSWORD_SALT` / `TEAMASSISTANT_ADMIN_PASSWORD_HASH`。镜像构建会排除本地数据库、`.env`、管理员配置和机器人凭据。
 
 ```bash
 docker compose pull

@@ -93,11 +93,6 @@ struct AccessGateConfig {
     std::string updatedBy;
 };
 
-struct AdminSession {
-    std::string qq;
-    long long expiresAtMs = 0;
-};
-
 struct CreatedAdminSession {
     std::string token;
     long long expiresAtMs = 0;
@@ -234,15 +229,22 @@ public:
         load(std::move(path));
     }
 
-    bool isAdmin(const std::string &qq) const {
-        return !qq.empty() && adminQqs_.contains(qq);
+    bool isAdmin(const std::string &qq) {
+        std::lock_guard lock(mutex_);
+        refreshIfChangedLocked();
+        const std::string normalizedQq = trimAscii(qq);
+        return !normalizedQq.empty() && adminQqs_.contains(normalizedQq);
     }
 
-    bool hasPassword() const {
+    bool hasPassword() {
+        std::lock_guard lock(mutex_);
+        refreshIfChangedLocked();
         return !passwordHash_.empty();
     }
 
-    bool verifyPassword(const std::string &password) const {
+    bool verifyPassword(const std::string &password) {
+        std::lock_guard lock(mutex_);
+        refreshIfChangedLocked();
         if (passwordHash_.empty() || password.empty()) {
             return false;
         }
@@ -250,6 +252,9 @@ public:
     }
 
 private:
+    std::mutex mutex_;
+    std::filesystem::path path_;
+    std::optional<std::filesystem::file_time_type> lastWriteTime_;
     std::unordered_set<std::string> adminQqs_;
     std::string passwordSalt_;
     std::string passwordHash_;
@@ -290,41 +295,7 @@ private:
         return diff == 0;
     }
 
-    void load(std::filesystem::path path) {
-        std::ifstream input;
-        auto open = [&input](const std::filesystem::path &candidate) {
-            input.close();
-            input.clear();
-            input.open(candidate);
-        };
-        open(path);
-        if (!input && path != "backend-cpp/admin.json") {
-            open("backend-cpp/admin.json");
-        }
-        if (!input && path != "admin.json") {
-            open("admin.json");
-        }
-        if (!input) {
-            return;
-        }
-
-        std::stringstream buffer;
-        buffer << input.rdbuf();
-        const Value config = parseJsonText(buffer.str(), Value(Json::objectValue));
-        const Value list = config["adminQQs"].isArray()
-            ? config["adminQQs"]
-            : (config["admins"].isArray() ? config["admins"] : Value(Json::arrayValue));
-        for (const auto &item : list) {
-            if (item.isString() && !item.asString().empty()) {
-                adminQqs_.insert(item.asString());
-            }
-        }
-
-        passwordSalt_ = config["adminPasswordSalt"].isString() ? config["adminPasswordSalt"].asString() : "";
-        passwordHash_ = config["adminPasswordHash"].isString() ? normalizeHash(config["adminPasswordHash"].asString()) : "";
-        if (passwordHash_.empty() && config["adminPassword"].isString() && !config["adminPassword"].asString().empty()) {
-            passwordHash_ = sha256Hex(passwordSalt_ + config["adminPassword"].asString());
-        }
+    void applyEnvironmentPasswordLocked() {
         const char *envPassword = std::getenv("TEAMASSISTANT_ADMIN_PASSWORD");
         if (envPassword != nullptr && *envPassword != '\0') {
             passwordSalt_ = std::getenv("TEAMASSISTANT_ADMIN_PASSWORD_SALT") != nullptr
@@ -340,18 +311,107 @@ private:
             passwordHash_ = normalizeHash(envPasswordHash);
         }
     }
+
+    void reloadFromFileLocked() {
+        adminQqs_.clear();
+        passwordSalt_.clear();
+        passwordHash_.clear();
+        lastWriteTime_.reset();
+
+        std::ifstream input(path_);
+        if (!input) {
+            applyEnvironmentPasswordLocked();
+            return;
+        }
+        std::stringstream buffer;
+        buffer << input.rdbuf();
+        const Value config = parseJsonText(buffer.str(), Value(Json::objectValue));
+        const Value list = config["adminQQs"].isArray()
+            ? config["adminQQs"]
+            : (config["admins"].isArray() ? config["admins"] : Value(Json::arrayValue));
+        for (const auto &item : list) {
+            if (item.isString()) {
+                const std::string qq = trimAscii(item.asString());
+                if (!qq.empty()) {
+                    adminQqs_.insert(qq);
+                }
+            }
+        }
+
+        passwordSalt_ = config["adminPasswordSalt"].isString() ? config["adminPasswordSalt"].asString() : "";
+        passwordHash_ = config["adminPasswordHash"].isString() ? normalizeHash(config["adminPasswordHash"].asString()) : "";
+        if (passwordHash_.empty() && config["adminPassword"].isString() && !config["adminPassword"].asString().empty()) {
+            passwordHash_ = sha256Hex(passwordSalt_ + config["adminPassword"].asString());
+        }
+        applyEnvironmentPasswordLocked();
+
+        std::error_code error;
+        const auto modifiedAt = std::filesystem::last_write_time(path_, error);
+        if (!error) {
+            lastWriteTime_ = modifiedAt;
+        }
+    }
+
+    void refreshIfChangedLocked() {
+        if (path_.empty()) {
+            return;
+        }
+        std::error_code error;
+        const auto modifiedAt = std::filesystem::last_write_time(path_, error);
+        if (error) {
+            adminQqs_.clear();
+            passwordSalt_.clear();
+            passwordHash_.clear();
+            applyEnvironmentPasswordLocked();
+            lastWriteTime_.reset();
+            return;
+        }
+        if (lastWriteTime_.has_value() && *lastWriteTime_ == modifiedAt) {
+            return;
+        }
+        reloadFromFileLocked();
+    }
+
+    void load(std::filesystem::path path) {
+        const std::array<std::filesystem::path, 3> candidates{path, "backend-cpp/admin.json", "admin.json"};
+        for (const auto &candidate : candidates) {
+            std::ifstream input(candidate);
+            if (!input) {
+                continue;
+            }
+            path_ = candidate;
+            reloadFromFileLocked();
+            return;
+        }
+        path_ = std::move(path);
+        reloadFromFileLocked();
+    }
 };
 
 class AdminSessions {
 public:
+    using PersistSession = std::function<void(const std::string &, const std::string &, long long, long long)>;
+    using LookupSession = std::function<bool(const std::string &, const std::string &, long long)>;
+    using RemoveSession = std::function<void(const std::string &)>;
+    using ExpireSessions = std::function<void(long long)>;
+
+    AdminSessions(PersistSession persist, LookupSession lookup, RemoveSession remove, ExpireSessions expire)
+        : persist_(std::move(persist)),
+          lookup_(std::move(lookup)),
+          remove_(std::move(remove)),
+          expire_(std::move(expire)) {}
+
     CreatedAdminSession create(const std::string &qq) {
         const long long now = nowMs();
+        const long long expiresAtMs = now + sessionTtlMs();
         CreatedAdminSession created;
         created.token = generateToken();
-        created.expiresAtMs = now + kSessionTtlMs;
-        std::lock_guard lock(mutex_);
-        cleanExpiredLocked(now);
-        sessions_[created.token] = AdminSession{qq, created.expiresAtMs};
+        created.expiresAtMs = expiresAtMs;
+        try {
+            expire_(now);
+        } catch (...) {
+        }
+        persist_(hashToken(created.token), qq, now, expiresAtMs);
         return created;
     }
 
@@ -359,25 +419,28 @@ public:
         if (qq.empty() || token.empty()) {
             return false;
         }
-        const long long now = nowMs();
-        std::lock_guard lock(mutex_);
-        cleanExpiredLocked(now);
-        const auto found = sessions_.find(token);
-        return found != sessions_.end() && found->second.qq == qq && found->second.expiresAtMs > now;
+        try {
+            return lookup_(hashToken(token), qq, nowMs());
+        } catch (...) {
+            return false;
+        }
     }
 
     void revoke(const std::string &token) {
         if (token.empty()) {
             return;
         }
-        std::lock_guard lock(mutex_);
-        sessions_.erase(token);
+        try {
+            remove_(hashToken(token));
+        } catch (...) {
+        }
     }
 
 private:
-    static constexpr long long kSessionTtlMs = 12LL * 60 * 60 * 1000;
-    std::mutex mutex_;
-    std::unordered_map<std::string, AdminSession> sessions_;
+    PersistSession persist_;
+    LookupSession lookup_;
+    RemoveSession remove_;
+    ExpireSessions expire_;
 
     static long long nowMs() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -395,14 +458,23 @@ private:
         return trantor::utils::toHexString(bytes.data(), bytes.size());
     }
 
-    void cleanExpiredLocked(long long now) {
-        for (auto iterator = sessions_.begin(); iterator != sessions_.end();) {
-            if (iterator->second.expiresAtMs <= now) {
-                iterator = sessions_.erase(iterator);
-            } else {
-                ++iterator;
+    static std::string hashToken(const std::string &token) {
+        return trantor::utils::toHexString(trantor::utils::sha256(token));
+    }
+
+    static long long sessionTtlMs() {
+        long long hours = 168;
+        const char *configured = std::getenv("TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS");
+        if (configured != nullptr && *configured != '\0') {
+            try {
+                const long long parsed = std::stoll(configured);
+                if (parsed >= 1 && parsed <= 720) {
+                    hours = parsed;
+                }
+            } catch (...) {
             }
         }
+        return hours * 60LL * 60LL * 1000LL;
     }
 };
 
@@ -438,6 +510,62 @@ public:
 
     SqliteDb(const SqliteDb &) = delete;
     SqliteDb &operator=(const SqliteDb &) = delete;
+
+    void saveAdminSession(
+        const std::string &tokenHash,
+        const std::string &qq,
+        long long createdAtMs,
+        long long expiresAtMs
+    ) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "INSERT OR REPLACE INTO admin_sessions(token_hash, qq, created_at_ms, expires_at_ms) "
+            "VALUES(?, ?, ?, ?)",
+            &stmt);
+        bindString(stmt, 1, tokenHash);
+        bindString(stmt, 2, qq);
+        sqlite3_bind_int64(stmt, 3, createdAtMs);
+        sqlite3_bind_int64(stmt, 4, expiresAtMs);
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    bool isAdminSessionValid(const std::string &tokenHash, const std::string &qq, long long nowMsValue) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "SELECT 1 FROM admin_sessions WHERE token_hash = ? AND qq = ? AND expires_at_ms > ? LIMIT 1",
+            &stmt);
+        bindString(stmt, 1, tokenHash);
+        bindString(stmt, 2, qq);
+        sqlite3_bind_int64(stmt, 3, nowMsValue);
+        const bool valid = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        return valid;
+    }
+
+    void revokeAdminSession(const std::string &tokenHash) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare("DELETE FROM admin_sessions WHERE token_hash = ?", &stmt);
+        bindString(stmt, 1, tokenHash);
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    void cleanExpiredAdminSessions(long long nowMsValue) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", &stmt);
+        sqlite3_bind_int64(stmt, 1, nowMsValue);
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
 
     void exec(const std::string &sql) {
         char *error = nullptr;
@@ -4156,7 +4284,19 @@ int main() {
 
     auto db = std::make_shared<SqliteDb>(dbPath);
     auto admins = std::make_shared<AdminConfig>(adminPath);
-    auto adminSessions = std::make_shared<AdminSessions>();
+    auto adminSessions = std::make_shared<AdminSessions>(
+        [db](const std::string &tokenHash, const std::string &qq, long long createdAtMs, long long expiresAtMs) {
+            db->saveAdminSession(tokenHash, qq, createdAtMs, expiresAtMs);
+        },
+        [db](const std::string &tokenHash, const std::string &qq, long long nowMsValue) {
+            return db->isAdminSessionValid(tokenHash, qq, nowMsValue);
+        },
+        [db](const std::string &tokenHash) {
+            db->revokeAdminSession(tokenHash);
+        },
+        [db](long long nowMsValue) {
+            db->cleanExpiredAdminSessions(nowMsValue);
+        });
     auto events = std::make_shared<VersionEventHub>();
     setupCors();
 
@@ -4265,6 +4405,15 @@ int main() {
     drogon::app().getLoop()->runEvery(15.0, [events]() {
         events->heartbeat();
     });
+    drogon::app().getLoop()->runEvery(3600.0, [db]() {
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        try {
+            db->cleanExpiredAdminSessions(now);
+        } catch (const std::exception &error) {
+            std::cerr << "[admin-session] cleanup failed: " << error.what() << "\n";
+        }
+    });
     drogon::app().getLoop()->runEvery(kAutomaticBackupIntervalSeconds, [db]() {
         std::thread([db]() {
             try {
@@ -4284,12 +4433,19 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/admin/check",
-        [admins](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
-            Value result;
-            result["ok"] = true;
-            result["isAdmin"] = admins->isAdmin(request->getParameter("actorQq"));
-            result["passwordConfigured"] = admins->hasPassword();
-            callback(jsonResponse(result));
+        [admins, adminSessions, adminTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            try {
+                const std::string actorQq = request->getParameter("actorQq");
+                const bool configuredAdmin = admins->isAdmin(actorQq);
+                Value result;
+                result["ok"] = true;
+                result["isAdmin"] = configuredAdmin;
+                result["sessionValid"] = configuredAdmin && adminSessions->isValid(actorQq, adminTokenFromRequest(request));
+                result["passwordConfigured"] = admins->hasPassword();
+                callback(jsonResponse(result));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
         },
         {drogon::Get});
 
@@ -4327,13 +4483,17 @@ int main() {
                 return;
             }
 
-            const auto session = adminSessions->create(actorQq);
-            Value result;
-            result["ok"] = true;
-            result["isAdmin"] = true;
-            result["adminToken"] = session.token;
-            result["expiresAtMs"] = static_cast<Json::Int64>(session.expiresAtMs);
-            callback(jsonResponse(result));
+            try {
+                const auto session = adminSessions->create(actorQq);
+                Value result;
+                result["ok"] = true;
+                result["isAdmin"] = true;
+                result["adminToken"] = session.token;
+                result["expiresAtMs"] = static_cast<Json::Int64>(session.expiresAtMs);
+                callback(jsonResponse(result));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
         },
         {drogon::Post});
 

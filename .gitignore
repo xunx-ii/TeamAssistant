@@ -27,6 +27,8 @@ data.json
 locks.json
 leveldb
 backup
+teamassistant-*.json.gz
+teamassistant-*.json/
 *.tmp
 .storage.lock
 backend-cpp/build

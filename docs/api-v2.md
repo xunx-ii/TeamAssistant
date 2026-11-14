@@ -49,6 +49,7 @@ npm run dev
 | `TEAMASSISTANT_ADMIN_PASSWORD` | 空 | 管理员明文密码，仅建议通过环境变量注入 |
 | `TEAMASSISTANT_ADMIN_PASSWORD_SALT` | 空 | 管理员密码盐值 |
 | `TEAMASSISTANT_ADMIN_PASSWORD_HASH` | 空 | `SHA-256(salt + password)` 的大写十六进制值 |
+| `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` | `168` | 管理员登录有效期，范围 1 到 720 小时 |
 
 例如：
 
@@ -72,6 +73,8 @@ node scripts/admin-password-hash.mjs "请替换为强密码"
   "adminQQs": ["89906502", "2722788501"]
 }
 ```
+
+后端会检测 `admin.json` 的修改并自动重新加载管理员名单。使用 Docker 且设置了 `TEAMASSISTANT_ADMIN_QQS` 时，该环境变量会在下一次容器启动时重新同步为权威管理员名单。
 
 ### 1.3 请求约定
 
@@ -119,9 +122,9 @@ Authorization: Bearer <adminToken>
 管理员请求必须同时满足：
 
 1. `actorQq` 在 `admin.json` 的管理员列表中。
-2. `adminToken` 是当前后端进程签发且尚未过期的 Token。
+2. `adminToken` 是后端签发、尚未过期且已持久化到 SQLite 的 Token。
 
-管理员登录 Token 有效期为 12 小时，后端重启后全部失效。
+管理员登录 Token 默认有效期为 168 小时（7 天），可以通过 `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` 调整。Token 只以哈希形式保存在 SQLite 中，后端或容器重启后仍然有效；管理员主动退出时立即失效。
 
 ### 2.3 本人或管理员权限
 
@@ -247,9 +250,12 @@ GET /api/v2/admin/check?actorQq=89906502
 {
   "ok": true,
   "isAdmin": true,
+  "sessionValid": false,
   "passwordConfigured": true
 }
 ```
+
+`isAdmin` 表示 QQ 是否在管理员名单中；`sessionValid` 表示请求携带的 `adminToken` 是否仍有效。未携带 Token 时两者分别为 `true` 和 `false`。
 
 ### 4.2 管理员登录
 
