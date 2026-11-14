@@ -70,6 +70,18 @@ export interface Team {
   memberSubsidies?: Record<string, MemberSubsidySelection[]>
 }
 
+export interface TeamTemplate {
+  id: string
+  name: string
+  note: string
+  config: TeamConfig
+  slots: Slot[]
+  subsidyTypes?: SubsidyType[]
+  createdAt: number
+  updatedAt: number
+  createdBy: string
+}
+
 export interface ArchivedTeam {
   id: string
   team: Team

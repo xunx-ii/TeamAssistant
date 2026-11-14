@@ -1,5 +1,5 @@
-import type { SubsidyType, Team } from './types'
-import { createEmptySlots, generateId } from './types'
+import type { Slot, SubsidyType, Team, TeamTemplate } from './types'
+import { createEmptySlots, generateId, TOTAL_SLOTS } from './types'
 import { applyMutation, type Snapshot } from './dataStore'
 import { normalizeTeamName } from './teamName'
 import { normalizeTextInput, TEXT_INPUT_LIMITS } from './textInput'
@@ -24,6 +24,7 @@ export interface CreateTeamGuideValues {
     martialArtIndex: number
     count: number
   }>
+  template?: TeamTemplate
 }
 
 export const DEFAULT_INITIAL_RESERVE_COUNTS = {
@@ -82,6 +83,9 @@ export function createDefaultTeam(name = '默认团队', options: { weekStart?: 
 }
 
 export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPresets: SubsidyType[], now: Date | number = new Date()): Team {
+  if (values.template) {
+    return createTeamFromTemplate(values, values.template, now)
+  }
   const selectedPresetIds = new Set(values.subsidyPresetIds)
   const selectedSubsidyPresets = subsidyPresets.filter(preset => selectedPresetIds.has(preset.id))
   const team = createDefaultTeam(values.name, {
@@ -138,6 +142,38 @@ export function createTeamFromGuide(values: CreateTeamGuideValues, subsidyPreset
   }
 
   return snapshot.teams[0] ?? team
+}
+
+function createTeamFromTemplate(values: CreateTeamGuideValues, template: TeamTemplate, now: Date | number): Team {
+  const team = createDefaultTeam(values.name, {
+    weekStart: normalizeWeekStartKey(values.weekStart, getWeekStartKey(now)),
+    subsidyTypes: template.subsidyTypes ?? [],
+  })
+  team.note = template.note
+  team.config = {
+    ...team.config,
+    reservedSlots: [...template.config.reservedSlots],
+    locked: false,
+    onlyTnSignup: template.config.onlyTnSignup,
+    uniqueQqSignup: template.config.uniqueQqSignup,
+    ...normalizeTeamPublication(values),
+  }
+
+  const reserved = new Set(template.config.reservedSlots)
+  team.slots = Array.from({ length: TOTAL_SLOTS }, (_, index): Slot => {
+    const source = template.slots[index]
+    const fixedRole = source?.fixedRole ?? null
+    const fixedMartialArtIndex = source?.fixedMartialArtIndex ?? null
+    const isFixed = fixedRole !== null || fixedMartialArtIndex !== null
+    return {
+      index,
+      status: isFixed ? 'fixed' : reserved.has(index) ? 'reserved' : 'empty',
+      member: null,
+      fixedRole,
+      fixedMartialArtIndex,
+    }
+  })
+  return team
 }
 
 export function createTeamsFromGuide(values: CreateTeamGuideValues, subsidyPresets: SubsidyType[], now: Date | number = new Date()): Team[] {

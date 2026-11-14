@@ -1,4 +1,4 @@
-import type { SubsidyType } from '../types'
+import type { SubsidyType, TeamTemplate } from '../types'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
@@ -11,6 +11,7 @@ import { TeamPublicationFields } from './TeamPublicationFields'
 import { resolveTeamPublicationDraft } from '../teamPublication'
 import { formatSubsidyPresetPreview } from '../subsidyPresetPreview'
 import { normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
+import { formatTeamTemplateSummary } from '../teamTemplates'
 import {
   DEFAULT_INITIAL_RESERVE_COUNTS,
   normalizeCreateTeamReserveCount,
@@ -27,11 +28,13 @@ const dpsMartialArtOptions = martialArts
 interface Props {
   open: boolean
   subsidyPresets: SubsidyType[]
+  teamTemplates: TeamTemplate[]
   onConfirm: (values: CreateTeamGuideValues) => void
   onClose: () => void
 }
 
-export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: Props) {
+export function CreateTeamDialog({ open, subsidyPresets, teamTemplates, onConfirm, onClose }: Props) {
+  const [templateId, setTemplateId] = useState('')
   const [name, setName] = useState('')
   const [count, setCount] = useState(1)
   const [weekStart, setWeekStart] = useState(getCurrentWeekStartKey)
@@ -51,6 +54,10 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     const loadedIds = new Set(loadedPresetIds)
     return subsidyPresets.filter(preset => loadedIds.has(preset.id))
   }, [loadedPresetIds, subsidyPresets])
+  const selectedTemplate = useMemo(
+    () => teamTemplates.find(template => template.id === templateId) ?? null,
+    [teamTemplates, templateId],
+  )
 
   useEffect(() => {
     if (!open || weekTouched) return
@@ -60,8 +67,8 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
     return () => window.clearInterval(interval)
   }, [open, weekTouched])
 
-
   const reset = () => {
+    setTemplateId('')
     setName('')
     setCount(1)
     setWeekStart(getCurrentWeekStartKey())
@@ -99,6 +106,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
       reserveHealer,
       reserveBoss,
       reserveDps: onlyTnSignup ? [] : reserveDps,
+      template: selectedTemplate ?? undefined,
     })
     reset()
   }
@@ -119,6 +127,24 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
   const handleWeekStartChange = (value: string) => {
     setWeekTouched(true)
     setWeekStart(value)
+  }
+
+  const handleTemplateChange = (value: string) => {
+    const nextId = value === 'none' ? '' : value
+    const template = teamTemplates.find(item => item.id === nextId) ?? null
+    setTemplateId(nextId)
+    if (!template) {
+      setOnlyTnSignup(false)
+      setUniqueQqSignup(false)
+      setQuickReserve(false)
+      return
+    }
+    setOnlyTnSignup(template.config.onlyTnSignup)
+    setUniqueQqSignup(template.config.uniqueQqSignup)
+    setQuickReserve(false)
+    setPresetDraftIds(new Set())
+    setLoadedPresetIds([])
+    if (!name.trim()) setName(template.name)
   }
 
   const addDpsReserve = () => {
@@ -143,6 +169,26 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
           <DialogTitle>创建团队</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
+          {teamTemplates.length > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor="create-team-template">开团模板</Label>
+              <Select value={selectedTemplate?.id ?? 'none'} onValueChange={handleTemplateChange}>
+                <SelectTrigger id="create-team-template">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">不使用模板</SelectItem>
+                  {teamTemplates.map(template => (
+                    <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedTemplate && (
+                <p className="text-xs text-muted-foreground">{formatTeamTemplateSummary(selectedTemplate)}</p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="create-team-name">团队名称</Label>
             <Input
@@ -171,7 +217,7 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
 
           <TeamPublicationFields id="create-team" nonPublicSignup={nonPublicSignup} publicAtInput={publicAtInput} onNonPublicSignupChange={setNonPublicSignup} onPublicAtChange={setPublicAtInput} />
 
-          <div className="space-y-3">
+          {!selectedTemplate && <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <SubsidyPresetLoader
                 presets={subsidyPresets}
@@ -219,9 +265,9 @@ export function CreateTeamDialog({ open, subsidyPresets, onConfirm, onClose }: P
               />
               一键限坑
             </label>
-          </div>
+          </div>}
 
-          {quickReserve && (
+          {!selectedTemplate && quickReserve && (
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1.5">

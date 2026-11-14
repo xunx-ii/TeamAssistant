@@ -21,7 +21,8 @@ Supported backup payload:
     "cancellations": [],
     "archivedTeams": [],
     "logs": [],
-    "userProfiles": {}
+    "userProfiles": {},
+    "teamTemplates": []
   },
   "locks": {
     "slots": [],

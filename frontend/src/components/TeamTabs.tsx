@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, memo } from 'react'
-import { GripVertical, Plus } from 'lucide-react'
+import { GripVertical, Plus, Star } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { isTextInputComposing, normalizeTextInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 
 interface Props {
-  teams: { id: string; name: string }[]
+  teams: { id: string; name: string; signedUp: boolean }[]
   activeId: string
   isAdmin: boolean
   onSwitch: (id: string) => void
@@ -112,6 +112,11 @@ export const TeamTabs = memo(function TeamTabs({ teams, activeId, isAdmin, onSwi
               >
                 <GripVertical className="h-3.5 w-3.5" />
               </button>
+            )}
+            {team.signedUp && (
+              <span className="inline-flex shrink-0 text-amber-500" role="img" aria-label="已报名" title="已报名">
+                <Star className="h-3.5 w-3.5 fill-current" />
+              </span>
             )}
             {editingId === team.id ? (
               <Input

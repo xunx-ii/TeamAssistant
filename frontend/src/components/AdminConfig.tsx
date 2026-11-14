@@ -5,6 +5,8 @@ import { Textarea } from './ui/textarea'
 import { TeamWeekSelector } from './TeamWeekSelector'
 import { TeamPublicationEditor } from './TeamPublicationEditor'
 import type { TeamPublication } from '../teamPublication'
+import type { TeamTemplate } from '../types'
+import type { TeamTemplateDeleteResult } from '../teamTemplates'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 import { formatWeekRange } from '../week'
 
@@ -28,14 +30,20 @@ interface Props {
   onCopyTeam: () => void
   onArchive: () => void
   onOpenSubsidyConfig: () => void
+  teamTemplates: TeamTemplate[]
+  onSaveTeamTemplate: (name: string) => Promise<boolean>
+  onDeleteTeamTemplate: (templateId: string) => Promise<TeamTemplateDeleteResult>
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig, teamTemplates, onSaveTeamTemplate, onDeleteTeamTemplate }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
   const [reserveB, setReserveB] = useState(0)
   const [editName, setEditName] = useState(teamName)
+  const [templateName, setTemplateName] = useState(teamName)
+  const [templateError, setTemplateError] = useState('')
+  const [savingTemplate, setSavingTemplate] = useState(false)
   const [weekDraft, setWeekDraft] = useState(() => ({ source: weekStart, value: weekStart }))
   const normalizeReserveCount = (value: string) => Math.min(25, Math.max(0, parseInt(sanitizeIntegerInput(value, 2)) || 0))
   const editWeekStart = weekDraft.source === weekStart ? weekDraft.value : weekStart
@@ -45,7 +53,39 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
 
   useEffect(() => {
     setEditName(teamName)
+    setTemplateName(teamName)
   }, [teamName])
+
+  const handleSaveTemplate = async () => {
+    if (savingTemplate) return
+    const name = normalizeTextInput(templateName, { maxLength: TEXT_INPUT_LIMITS.teamTemplateName })
+    if (!name) {
+      setTemplateError('请输入模板名称')
+      return
+    }
+    if (teamTemplates.some(template => template.name.trim().toLowerCase() === name.toLowerCase())) {
+      setTemplateError('模板名称已存在')
+      return
+    }
+    setSavingTemplate(true)
+    setTemplateError('')
+    try {
+      const saved = await onSaveTeamTemplate(name)
+      if (!saved) {
+        setTemplateError('保存失败，请稍后重试')
+        return
+      }
+      setTemplateName('')
+    } finally {
+      setSavingTemplate(false)
+    }
+  }
+
+  const handleDeleteTemplate = async (templateId: string) => {
+    setTemplateError('')
+    const result = await onDeleteTeamTemplate(templateId)
+    if (result === 'failed') setTemplateError('删除失败，请稍后重试')
+  }
 
   return (
     <div className="mb-4">
@@ -90,6 +130,37 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
               />
               <Button size="xs" variant="outline" onClick={() => onRename(normalizeTextInput(editName, { maxLength: TEXT_INPUT_LIMITS.teamName }) || teamName)}>保存</Button>
             </div>
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-foreground">开团模板</h3>
+            <div className="flex gap-2">
+              <Input
+                className="h-8 text-sm"
+                value={templateName}
+                maxLength={TEXT_INPUT_LIMITS.teamTemplateName}
+                placeholder="模板名称"
+                onChange={e => {
+                  setTemplateName(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.teamTemplateName }))
+                  setTemplateError('')
+                }}
+              />
+              <Button size="xs" variant="outline" disabled={savingTemplate} onClick={() => { void handleSaveTemplate() }}>
+                保存模板
+              </Button>
+            </div>
+            {teamTemplates.length > 0 && (
+              <div className="space-y-1">
+                {teamTemplates.map(template => (
+                  <div key={template.id} className="flex items-center justify-between gap-2 rounded border border-border px-2 py-1">
+                    <span className="min-w-0 truncate text-xs text-foreground">{template.name}</span>
+                    <Button size="xs" variant="ghost" onClick={() => { void handleDeleteTemplate(template.id) }}>
+                      删除
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {templateError && <p className="text-xs text-destructive">{templateError}</p>}
           </div>
           <div className="space-y-2">
             <h3 className="text-sm font-medium text-foreground">团队时间</h3>

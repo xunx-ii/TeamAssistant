@@ -49,6 +49,41 @@ function publicationTeam(id, publicSignup, publicAtMs = 0) {
   return team
 }
 
+function createTeamTemplate() {
+  const team = emptyTeam('template-source')
+  team.name = '模板来源'
+  team.note = '固定打法与补贴'
+  Object.assign(team.config, {
+    reservedSlots: [0],
+    locked: true,
+    onlyTnSignup: true,
+    uniqueQqSignup: true,
+    publicSignup: false,
+    publicAtMs: Date.now() + 60_000,
+  })
+  team.slots[0] = { index: 0, status: 'reserved', member: null, fixedRole: null, fixedMartialArtIndex: null }
+  team.slots[1] = { index: 1, status: 'fixed', member: null, fixedRole: 'T', fixedMartialArtIndex: 1 }
+  team.slots[2] = {
+    index: 2,
+    status: 'occupied',
+    member: { qq: '20001', martialArtIndex: '3', gearScore: '1200', characterId: '角色A', note: '' },
+    fixedRole: 'DPS',
+    fixedMartialArtIndex: 3,
+  }
+  team.subsidyTypes = [{ id: 'damage', name: '伤害补贴', levels: [{ name: '第一', gold: 8000 }] }]
+  return {
+    id: 'template-1',
+    name: '标准开团',
+    note: team.note,
+    config: team.config,
+    slots: team.slots,
+    subsidyTypes: team.subsidyTypes,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    createdBy: adminQq,
+  }
+}
+
 async function seedPublicationData(extra = {}) {
   const result = await request('/data', 'PUT', adminBody({
     teams: [publicationTeam('public-team', true), publicationTeam('private-team', false), publicationTeam('future-team', true, Date.now() + 60_000)],
@@ -204,6 +239,59 @@ test('invalid publication settings fail atomically', async () => {
   }
 })
 
+test('admin team templates persist, normalize and stay hidden from public viewers', async () => {
+  const template = createTeamTemplate()
+  const unauthorized = await request('/team-templates', 'POST', { template })
+  assert.equal(unauthorized.status, 403)
+
+  const created = await request('/team-templates', 'POST', adminBody({ template }))
+  assert.equal(created.status, 200)
+  assert.equal(created.ok, true)
+  assert.equal(created.template.config.locked, false)
+  assert.equal(created.template.config.publicSignup, true)
+  assert.equal(created.template.config.publicAtMs, 0)
+  assert.equal(created.template.slots[0].status, 'reserved')
+  assert.equal(created.template.slots[1].status, 'fixed')
+  assert.equal(created.template.slots[2].status, 'fixed')
+  assert.equal(created.template.slots[2].member, null)
+
+  const adminSnapshot = await request(`/bootstrap?qq=${adminQq}&adminToken=${adminToken}`)
+  assert.equal(adminSnapshot.teamTemplates.length, 1)
+  assert.equal(adminSnapshot.teamTemplates[0].name, '标准开团')
+
+  const publicSnapshot = await request('/bootstrap')
+  assert.equal(Object.prototype.hasOwnProperty.call(publicSnapshot, 'teamTemplates'), false)
+  const publicSync = await request('/sync')
+  assert.equal(Object.prototype.hasOwnProperty.call(publicSync.data, 'teamTemplates'), false)
+
+  const duplicate = await request('/team-templates', 'POST', adminBody({
+    template: { ...template, id: 'template-2' },
+  }))
+  assert.equal(duplicate.status, 409)
+  assert.equal(duplicate.reason, 'templateNameExists')
+
+  const backup = await request('/backups', 'POST', adminBody({}))
+  assert.equal(backup.ok, true)
+  assert.ok(backup.name)
+
+  const removed = await request(
+    `/team-templates/template-1?actorQq=${adminQq}&adminToken=${adminToken}`,
+    'DELETE',
+  )
+  assert.equal(removed.ok, true)
+  const afterDelete = await request(`/bootstrap?qq=${adminQq}&adminToken=${adminToken}`)
+  assert.deepEqual(afterDelete.teamTemplates, [])
+
+  const restored = await request(
+    `/backups/${encodeURIComponent(backup.name)}/restore`,
+    'POST',
+    adminBody({}),
+  )
+  assert.equal(restored.ok, true)
+  assert.equal(restored.data.teamTemplates.length, 1)
+  assert.equal(restored.data.teamTemplates[0].name, '标准开团')
+})
+
 before(async () => {
   const executable = ['', 'Release/', 'Debug/']
     .flatMap(dir => ['teamassistant_backend.exe', 'teamassistant_backend'].map(name => join(root, 'backend-cpp/build', dir, name)))
@@ -267,7 +355,7 @@ before(async () => {
 beforeEach(async () => {
   assert.equal((await request('/access-gate', 'PUT', adminBody({ publicAtMs: 0 }))).ok, true)
   const result = await request('/data', 'PUT', adminBody({
-    teams: [emptyTeam()], cancellations: [], archivedTeams: [], logs: [], userProfiles: {}, subsidyPresets: [],
+    teams: [emptyTeam()], cancellations: [], archivedTeams: [], logs: [], userProfiles: {}, subsidyPresets: [], teamTemplates: [],
   }))
   assert.equal(result.ok, true)
 })

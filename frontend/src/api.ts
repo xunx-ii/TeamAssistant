@@ -1,4 +1,4 @@
-import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team, UserProfiles } from './types'
+import type { ArchivedTeam, Cancellation, OperationLog, SubsidyType, Team, TeamTemplate, UserProfiles } from './types'
 import type { LockToken, Mutation } from './dataStore'
 
 const API = '/api/v2'
@@ -30,6 +30,7 @@ export interface ServerData {
   userProfiles: UserProfiles
   isAdmin?: boolean
   subsidyPresets?: SubsidyType[]
+  teamTemplates?: TeamTemplate[]
   locks?: SlotLock[]
   teamLocks?: TeamLockInfo[]
   dataVersion?: number
@@ -127,6 +128,13 @@ export interface MutationResult {
   lockedAt?: number
   currentMemberQq?: string | null
   error?: string
+}
+
+export interface TeamTemplateActionResult {
+  ok: boolean
+  template?: TeamTemplate
+  error?: string
+  reason?: string
 }
 
 export type AccessGateResult = AccessGateState & {
@@ -849,6 +857,21 @@ export async function pushSubsidyPresets(presets: SubsidyType[], actorQq?: strin
   const result = await requestResult<{ ok: boolean }>(`${API}/subsidy-presets`, jsonRequest('PUT', withActor({ presets }, actorQq)))
   return result.ok
 }
+
+export async function pushTeamTemplate(template: TeamTemplate, actorQq?: string | null): Promise<TeamTemplateActionResult> {
+  return requestResult<TeamTemplateActionResult>(
+    `${API}/team-templates`,
+    jsonRequest('POST', withActor({ template }, actorQq)),
+  )
+}
+
+export async function removeTeamTemplate(templateId: string, actorQq?: string | null): Promise<TeamTemplateActionResult> {
+  return requestResult<TeamTemplateActionResult>(
+    `${API}/team-templates/${encodePath(templateId)}${actorQuery(actorQq)}`,
+    jsonRequest('DELETE'),
+  )
+}
+
 function actorQuery(actorQq?: string | null) {
   const params = new URLSearchParams()
   if (actorQq) params.set('actorQq', actorQq)

@@ -2,6 +2,7 @@ export const TEXT_INPUT_LIMITS = {
   qq: 20,
   nickname: 20,
   teamName: 40,
+  teamTemplateName: 40,
   characterId: 40,
   gearScore: 8,
   note: 300,

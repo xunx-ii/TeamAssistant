@@ -513,6 +513,9 @@ public:
         data["isAdmin"] = isAdmin;
         data["visibilityKey"] = viewer.key;
         data["accessGate"] = accessGateJson(readAccessGateConfigUnlocked(), false);
+        if (!isAdmin) {
+            data.removeMember("teamTemplates");
+        }
         if (!viewer.unrestricted) {
             const auto condition = historyVisibilityConditionUnlocked(viewer);
             data["logs"] = historyPageUnlocked(true, "", std::nullopt, kBootstrapLogLimit, condition)["items"];
@@ -1026,6 +1029,92 @@ public:
         }
         Value result = versionsUnlocked();
         result["ok"] = true;
+        return result;
+    }
+
+    Value saveTeamTemplate(const Value &templateValue, const std::string &actorQq) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        if (!templateValue.isObject() || !templateValue["id"].isString() || templateValue["id"].asString().empty()) {
+            return errorJson("Invalid team template");
+        }
+        if (!templateValue["name"].isString() || normalizeTeamName(templateValue["name"].asString(), "").empty()) {
+            return errorJson("Missing team template name");
+        }
+
+        Value normalized = normalizeTeamTemplate(templateValue, actorQq);
+        if (!normalized.isObject()) {
+            return errorJson("Invalid team template");
+        }
+
+        Value result;
+        exec("BEGIN IMMEDIATE;");
+        try {
+            sqlite3_stmt *stmt = nullptr;
+            prepare("SELECT 1 FROM team_templates WHERE id = ? LIMIT 1", &stmt);
+            bindString(stmt, 1, normalized["id"].asString());
+            const bool duplicateId = sqlite3_step(stmt) == SQLITE_ROW;
+            sqlite3_finalize(stmt);
+            if (duplicateId) {
+                exec("ROLLBACK;");
+                Value conflict = conflictJson("templateExists");
+                conflict["error"] = "模板已存在";
+                return conflict;
+            }
+
+            prepare("SELECT 1 FROM team_templates WHERE name = ? COLLATE NOCASE AND id <> ? LIMIT 1", &stmt);
+            bindString(stmt, 1, normalized["name"].asString());
+            bindString(stmt, 2, normalized["id"].asString());
+            const bool duplicateName = sqlite3_step(stmt) == SQLITE_ROW;
+            sqlite3_finalize(stmt);
+            if (duplicateName) {
+                exec("ROLLBACK;");
+                Value conflict = conflictJson("templateNameExists");
+                conflict["error"] = "模板名称已存在";
+                return conflict;
+            }
+
+            insertTeamTemplateUnlocked(normalized);
+            bumpDataVersionAndClearPatchesUnlocked();
+            result = versionsUnlocked();
+            result["ok"] = true;
+            result["template"] = normalized;
+            exec("COMMIT;");
+        } catch (...) {
+            exec("ROLLBACK;");
+            throw;
+        }
+        return result;
+    }
+
+    Value deleteTeamTemplate(const std::string &templateId) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        if (templateId.empty()) {
+            return errorJson("Missing team template id");
+        }
+
+        Value result;
+        exec("BEGIN IMMEDIATE;");
+        try {
+            sqlite3_stmt *stmt = nullptr;
+            prepare("DELETE FROM team_templates WHERE id = ?", &stmt);
+            bindString(stmt, 1, templateId);
+            stepDone(stmt);
+            sqlite3_finalize(stmt);
+            if (sqlite3_changes(db_) == 0) {
+                exec("ROLLBACK;");
+                return conflictJson("notFound");
+            }
+            bumpDataVersionAndClearPatchesUnlocked();
+            result = versionsUnlocked();
+            result["ok"] = true;
+            result["templateId"] = templateId;
+            exec("COMMIT;");
+        } catch (...) {
+            exec("ROLLBACK;");
+            throw;
+        }
         return result;
     }
 
@@ -2499,6 +2588,53 @@ private:
         return normalized;
     }
 
+    static Value normalizeTeamTemplate(const Value &templateValue, const std::string &actorQq) {
+        if (!templateValue.isObject()) {
+            return Value(Json::nullValue);
+        }
+        Value team = normalizeTeam(templateValue, "开团模板");
+        const Value reserved = team["config"]["reservedSlots"];
+        for (int index = 0; index < 25; ++index) {
+            Value slot = team["slots"][index];
+            const bool fixedRole = slot["fixedRole"].isString();
+            const bool fixedMartialArt = slot["fixedMartialArtIndex"].isInt();
+            slot["member"] = Value(Json::nullValue);
+            if (fixedRole || fixedMartialArt) {
+                slot["status"] = "fixed";
+            } else if (reservedContains(reserved, index)) {
+                slot["status"] = "reserved";
+            } else {
+                slot["status"] = "empty";
+            }
+            team["slots"][index] = slot;
+        }
+
+        Value config = team["config"];
+        config["locked"] = false;
+        config["publicSignup"] = true;
+        config["publicAtMs"] = static_cast<Json::Int64>(0);
+
+        const long long now = nowMs();
+        Value normalized;
+        normalized["id"] = team["id"];
+        normalized["name"] = team["name"];
+        normalized["note"] = team["note"];
+        normalized["config"] = config;
+        normalized["slots"] = team["slots"];
+        if (team["subsidyTypes"].isArray()) {
+            normalized["subsidyTypes"] = normalizeSubsidyTypes(team["subsidyTypes"]);
+        }
+        const long long createdAt = toInt64(templateValue["createdAt"], now);
+        normalized["createdAt"] = static_cast<Json::Int64>(createdAt);
+        normalized["updatedAt"] = static_cast<Json::Int64>(actorQq.empty()
+            ? (std::max)(createdAt, toInt64(templateValue["updatedAt"], createdAt))
+            : now);
+        normalized["createdBy"] = !actorQq.empty()
+            ? Value(actorQq)
+            : (templateValue["createdBy"].isString() ? templateValue["createdBy"] : Value(""));
+        return normalized;
+    }
+
     static std::string normalizeNickname(const std::string &value) {
         return normalizeSpaceLimited(value, 20);
     }
@@ -3152,6 +3288,7 @@ private:
     }
 
     void replaceDataUnlocked(const Value &data) {
+        exec("DELETE FROM team_templates;");
         exec("DELETE FROM slots;");
         exec("DELETE FROM teams;");
         exec("DELETE FROM archives;");
@@ -3264,6 +3401,15 @@ private:
                 });
         }
 
+        const Value teamTemplates = arrayOrEmpty(data["teamTemplates"]);
+        for (const auto &templateValue : teamTemplates) {
+            Value normalized = normalizeTeamTemplate(templateValue, "");
+            if (!normalized.isObject()) {
+                continue;
+            }
+            insertTeamTemplateUnlocked(normalized);
+        }
+
         if (data["subsidyPresets"].isArray()) {
             replaceSubsidyPresetsUnlocked(data["subsidyPresets"]);
         }
@@ -3297,6 +3443,7 @@ private:
         data["archivedTeams"] = snapshot["archivedTeams"];
         data["logs"] = snapshot["logs"];
         data["userProfiles"] = snapshot["userProfiles"];
+        data["teamTemplates"] = snapshot["teamTemplates"];
         payload["data"] = data;
         Value liveLocks = publicLocksSnapshot();
         Value locks;
@@ -3628,6 +3775,36 @@ private:
         return json;
     }
 
+    void insertTeamTemplateUnlocked(const Value &templateValue) {
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "INSERT INTO team_templates(id, name, payload_json, created_at, updated_at, created_by) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
+            &stmt);
+        bindString(stmt, 1, templateValue["id"].asString());
+        bindString(stmt, 2, templateValue["name"].asString());
+        bindString(stmt, 3, writeJson(templateValue));
+        sqlite3_bind_int64(stmt, 4, toInt64(templateValue["createdAt"], nowMs()));
+        sqlite3_bind_int64(stmt, 5, toInt64(templateValue["updatedAt"], nowMs()));
+        bindString(stmt, 6, templateValue["createdBy"].isString() ? templateValue["createdBy"].asString() : "");
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    Value readTeamTemplatesUnlocked() {
+        Value templates(Json::arrayValue);
+        sqlite3_stmt *stmt = nullptr;
+        prepare("SELECT payload_json FROM team_templates ORDER BY updated_at DESC, name COLLATE NOCASE, id", &stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            Value templateValue = parseJson(textColumn(stmt, 0), Value(Json::nullValue));
+            if (templateValue.isObject()) {
+                templates.append(templateValue);
+            }
+        }
+        sqlite3_finalize(stmt);
+        return templates;
+    }
+
     Value readSubsidyPresetsUnlocked() {
         Value presets(Json::arrayValue);
         sqlite3_stmt *stmt = nullptr;
@@ -3663,6 +3840,7 @@ private:
         json["logs"] = Value(Json::arrayValue);
         json["userProfiles"] = Value(Json::objectValue);
         json["subsidyPresets"] = Value(Json::arrayValue);
+        json["teamTemplates"] = Value(Json::arrayValue);
 
         // First pass: load every team in sort order. We remember the index in
         // json["teams"] for each id so the second pass can drop slots into the
@@ -3806,6 +3984,7 @@ private:
         sqlite3_finalize(stmt);
 
         json["subsidyPresets"] = readSubsidyPresetsUnlocked();
+        json["teamTemplates"] = readTeamTemplatesUnlocked();
 
         return json;
     }
@@ -3908,6 +4087,8 @@ drogon::HttpStatusCode statusForResult(const Value &json) {
         reason == "uniqueQqSignup" ||
         reason == "selfSignupOnly" ||
         reason == "slotRestriction" ||
+        reason == "templateExists" ||
+        reason == "templateNameExists" ||
         json["lockedBy"].isString()
     ) {
         return drogon::k409Conflict;
@@ -4694,6 +4875,37 @@ int main() {
             }
         },
         {drogon::Put});
+
+    drogon::app().registerHandler("/api/v2/team-templates",
+        [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            if (json == nullptr || !(*json)["template"].isObject()) {
+                callback(jsonResponse(errorJson("Missing team template"), drogon::k400BadRequest));
+                return;
+            }
+            if (!requireAdmin(request, *json, callback)) return;
+            try {
+                const auto result = db->saveTeamTemplate(
+                    (*json)["template"],
+                    (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "");
+                respondMutation(std::move(callback), result);
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler("/api/v2/team-templates/{1}",
+        [db, respondMutation, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,
+             const std::string &templateId) {
+            if (!requireAdminQq(request, request->getParameter("actorQq"), callback)) return;
+            try {
+                respondMutation(std::move(callback), db->deleteTeamTemplate(templateId));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Delete});
 
     drogon::app().registerHandler("/api/v2/teams/{1}/subsidy-types",
         [db, respondMutation, requireAdmin](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback,

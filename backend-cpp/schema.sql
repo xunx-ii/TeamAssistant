@@ -91,6 +91,15 @@ CREATE TABLE IF NOT EXISTS subsidy_preset_levels (
   FOREIGN KEY (preset_id) REFERENCES subsidy_presets(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS team_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS access_gate (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   public_at_ms INTEGER NOT NULL DEFAULT 0,
@@ -113,3 +122,4 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 CREATE INDEX IF NOT EXISTS idx_archives_archived_at ON archives(archived_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cancellations_timestamp ON cancellations(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_team_templates_updated_at ON team_templates(updated_at DESC);

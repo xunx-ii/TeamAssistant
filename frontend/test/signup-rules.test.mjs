@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   findUniqueSignupConflictSlot,
   getSlotRoleMartialArtOptions,
+  hasTeamSignup,
   isTnRole,
 } from '../src/signupRules.ts'
 import { martialArts } from '../src/data/martialArts.ts'
@@ -50,4 +51,19 @@ test('getSlotRoleMartialArtOptions filters DPS while preserving original martial
 
 test('getSlotRoleMartialArtOptions returns all options when TN-only is disabled', () => {
   assert.equal(getSlotRoleMartialArtOptions(false).length, martialArts.length)
+})
+
+test('hasTeamSignup marks only teams containing the current QQ', () => {
+  const slots = createSlots()
+  slots[6].member = {
+    qq: '10001',
+    martialArtIndex: '3',
+    gearScore: '1200',
+    characterId: '角色A',
+    note: '',
+  }
+
+  assert.equal(hasTeamSignup({ slots }, '10001'), true)
+  assert.equal(hasTeamSignup({ slots }, '10002'), false)
+  assert.equal(hasTeamSignup({ slots }, null), false)
 })

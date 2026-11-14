@@ -553,6 +553,39 @@ test('subsidy preset API helpers use the preset endpoints', async () => {
   assert.equal(calls[1].init.method, 'PUT')
 })
 
+test('team template API helpers use admin endpoints and preserve the template payload', async () => {
+  const calls = []
+  const template = {
+    id: 'template-1',
+    name: '标准开团',
+    note: '',
+    config: { reservedSlots: [0], locked: false, onlyTnSignup: false, uniqueQqSignup: false, publicSignup: true, publicAtMs: 0 },
+    slots: [],
+    createdAt: 1,
+    updatedAt: 1,
+    createdBy: '10001',
+  }
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({ ok: true, template })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-team-templates`)
+
+    const created = await mod.pushTeamTemplate(template, '10001')
+    assert.equal(created.ok, true)
+    assert.equal(created.template.name, '标准开团')
+
+    const removed = await mod.removeTeamTemplate(template.id, '10001')
+    assert.equal(removed.ok, true)
+  })
+
+  assert.equal(calls[0].input, '/api/v2/team-templates')
+  assert.equal(calls[0].init.method, 'POST')
+  assert.deepEqual(JSON.parse(calls[0].init.body), { template, actorQq: '10001' })
+  assert.equal(calls[1].input, '/api/v2/team-templates/template-1?actorQq=10001')
+  assert.equal(calls[1].init.method, 'DELETE')
+})
+
 test('mutateData routes slot signup to atomic v2 member endpoint', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {

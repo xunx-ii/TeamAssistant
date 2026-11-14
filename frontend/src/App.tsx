@@ -9,9 +9,9 @@ import {
   loadUserProfiles, setUserProfilesLocal,
   initializeServerData, normalizeServerData,
 } from './storage'
-import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
+import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, TeamTemplate, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { getMartialArt, martialArts } from './data/martialArts'
-import { checkAdminQq, clearAdminToken, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, setAdminToken, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { checkAdminQq, clearAdminToken, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, pushTeamTemplate, removeTeamTemplate, setAdminToken, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatches as applySnapshotPatches, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { planMutationSync, shouldApplySyncVersion, unseenServerPatches } from './syncCursor'
 import { LOG_WINDOW } from './historyWindow'
@@ -20,10 +20,11 @@ import { hasNonTextTransfer, normalizeTextInput, sanitizeIntegerInput, sanitizeT
 import { createSubsidyTargets, getSubsidyRegistrationTargets } from './subsidy'
 import { loadSubsidyPresets, saveSubsidyPresets } from './subsidyPresets'
 import { createDefaultTeam, createTeamCopies, createTeamsFromGuide, type CreateTeamGuideValues } from './teamCreation'
-import { findUniqueSignupConflictSlot } from './signupRules'
+import { findUniqueSignupConflictSlot, hasTeamSignup } from './signupRules'
 import { getCurrentWeekStartKey } from './week'
 import { startAdaptivePoll } from './polling'
 import { publicSnapshot } from './teamPublication'
+import { createTeamTemplateFromTeam, loadTeamTemplates, normalizeTeamTemplates, saveTeamTemplates } from './teamTemplates'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -158,6 +159,7 @@ function App() {
   const [userProfiles, setUserProfiles] = useState<UserProfiles>(loadUserProfiles)
   const [isAdmin, setIsAdmin] = useState(false)
   const [subsidyPresets, setSubsidyPresets] = useState<SubsidyType[]>(loadSubsidyPresets)
+  const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>(loadTeamTemplates)
   // 服务器告诉我们 bootstrap 里的 logs 是否被截断了。截断时弹日志窗口会暴露
   // 「加载更早」入口，去 /api/v2/logs 拿更老的分页。
   const [logsTruncated, setLogsTruncated] = useState(false)
@@ -250,12 +252,21 @@ function App() {
     saveSubsidyPresets(presets)
   }, [])
 
+  const syncTeamTemplates = useCallback((templates: TeamTemplate[]) => {
+    const normalized = normalizeTeamTemplates(templates)
+    setTeamTemplates(normalized)
+    saveTeamTemplates(normalized)
+  }, [])
+
   const syncServerData = useCallback((data: ServerData, allowVersionReset = false) => {
     if (!allowVersionReset && typeof data.dataVersion === 'number' && dataVersionRef.current !== null && data.dataVersion < dataVersionRef.current) return true
     const snapshot = normalizeServerData(data)
     if (typeof data.visibilityKey === 'string') visibilityKeyRef.current = data.visibilityKey
     if (Array.isArray(data.subsidyPresets)) {
       syncSubsidyPresets(data.subsidyPresets)
+    }
+    if (Array.isArray(data.teamTemplates)) {
+      syncTeamTemplates(data.teamTemplates)
     }
     if (typeof data.isAdmin === 'boolean') {
       setIsAdmin(data.isAdmin)
@@ -279,7 +290,7 @@ function App() {
     }
     syncSnapshot(snapshot)
     return true
-  }, [syncSnapshot, syncSubsidyPresets])
+  }, [syncSnapshot, syncSubsidyPresets, syncTeamTemplates])
 
   const syncLockState = useCallback((state: LockState, allowVersionReset = false) => {
     const previousLockVersion = lockVersionRef.current
@@ -593,6 +604,9 @@ function App() {
     if (Array.isArray(data.subsidyPresets)) {
       syncSubsidyPresets(data.subsidyPresets)
     }
+    if (Array.isArray(data.teamTemplates)) {
+      syncTeamTemplates(data.teamTemplates)
+    }
     setActiveTeamId(snapshot.teams[0]?.id ?? '')
     clearModals()
   }
@@ -744,6 +758,51 @@ function App() {
       setActiveTeamId(createdTeams[0]?.id ?? '')
       clearModals()
       setShowCreateTeam(false)
+    }
+  }
+
+  const handleSaveTeamTemplate = async (name: string) => {
+    if (!activeTeam || !qq) return false
+    try {
+      const template = createTeamTemplateFromTeam(activeTeam, name, qq)
+      if (!serverMode) {
+        syncTeamTemplates([...teamTemplates.filter(item => item.id !== template.id), template])
+        return true
+      }
+      const result = await pushTeamTemplate(template, qq)
+      if (!result.ok || !result.template) return false
+      const savedTemplate = result.template
+      syncTeamTemplates([...teamTemplates.filter(item => item.id !== savedTemplate.id), savedTemplate])
+      void syncServerChanges()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const handleDeleteTeamTemplate = async (templateId: string) => {
+    const template = teamTemplates.find(item => item.id === templateId)
+    if (!template) return 'failed' as const
+    const confirmed = await requestConfirm({
+      title: '删除模板',
+      message: `确定删除「${template.name}」？`,
+      confirmText: '删除',
+      cancelText: '取消',
+      destructive: true,
+    })
+    if (!confirmed) return 'cancelled' as const
+    try {
+      if (!serverMode) {
+        syncTeamTemplates(teamTemplates.filter(item => item.id !== templateId))
+        return 'deleted' as const
+      }
+      const result = await removeTeamTemplate(templateId, qq)
+      if (!result.ok) return 'failed' as const
+      syncTeamTemplates(teamTemplates.filter(item => item.id !== templateId))
+      void syncServerChanges()
+      return 'deleted' as const
+    } catch {
+      return 'failed' as const
     }
   }
 
@@ -1209,6 +1268,7 @@ function App() {
         <DeferredDialog onClose={() => setShowCreateTeam(false)}>
           <CreateTeamDialog
             subsidyPresets={subsidyPresets}
+            teamTemplates={teamTemplates}
             open={showCreateTeam}
             onConfirm={handleCreateTeam}
             onClose={() => setShowCreateTeam(false)}
@@ -1411,7 +1471,7 @@ function App() {
           {/* Tabs */}
           <div className="mt-3">
             <TeamTabs
-              teams={teams.map(t => ({ id: t.id, name: t.name }))}
+              teams={teams.map(t => ({ id: t.id, name: t.name, signedUp: hasTeamSignup(t, qq) }))}
               activeId={resolvedActiveTeamId}
               isAdmin={isAdmin}
               onSwitch={switchTeam}
@@ -1453,6 +1513,9 @@ function App() {
                   onCopyTeam={() => setShowCopyTeam(true)}
                   onArchive={handleArchiveTeam}
                   onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
+                  teamTemplates={teamTemplates}
+                  onSaveTeamTemplate={handleSaveTeamTemplate}
+                  onDeleteTeamTemplate={handleDeleteTeamTemplate}
                 />
               )}
               <div className="mb-3 pixel-card p-3">

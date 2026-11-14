@@ -376,6 +376,7 @@ GET /api/v2/bootstrap?qq=10001&inviteToken=<inviteToken>
 - `logs`
 - `userProfiles`
 - `subsidyPresets`
+- `teamTemplates`（仅管理员）
 - `locks`
 - `teamLocks`
 - `dataVersion`
@@ -752,6 +753,49 @@ Authorization: Bearer <adminToken>
 
 运行时团队锁存在于内存中，适合在团队配置或批量操作期间暂时阻止槽位锁竞争。
 
+### 6.11 团队模板
+
+管理员可以把当前团队的报名规则、槽位布局、备注和补贴类型保存为复用模板。模板不会保存成员、团队名称、团队时间、运行时锁和公开时间；创建团队时由客户端重新选择时间。
+
+保存模板：
+
+```http
+POST /api/v2/team-templates
+Authorization: Bearer <adminToken>
+```
+
+```json
+{
+  "actorQq": "89906502",
+  "template": {
+    "id": "template-1",
+    "name": "标准开团",
+    "note": "固定打法与补贴",
+    "config": {
+      "reservedSlots": [0],
+      "locked": false,
+      "onlyTnSignup": true,
+      "uniqueQqSignup": true,
+      "publicSignup": true,
+      "publicAtMs": 0
+    },
+    "slots": [],
+    "subsidyTypes": []
+  }
+}
+```
+
+`slots` 应包含 25 个槽位定义；服务端会清除其中的成员信息，并只保留 `empty`、`reserved`、`fixed` 三种模板状态。模板名称在管理员范围内不区分大小写且不可重复。
+
+删除模板：
+
+```http
+DELETE /api/v2/team-templates/{templateId}?actorQq=89906502
+Authorization: Bearer <adminToken>
+```
+
+管理员通过 `/bootstrap` 或 `/sync` 获取 `teamTemplates`；普通用户和其他未认证请求不会收到该字段。
+
 ## 7. 槽位锁和报名 API
 
 报名写入必须按照“获取锁、写入、释放”的顺序执行。
@@ -1047,11 +1091,12 @@ Content-Type: application/json
   "archivedTeams": [],
   "logs": [],
   "userProfiles": {},
-  "subsidyPresets": []
+  "subsidyPresets": [],
+  "teamTemplates": []
 }
 ```
 
-该接口会删除并重建团队、槽位、归档、取消记录、操作日志、用户资料和补贴预设。运行时槽位锁、团队锁不会导入，并会被清空。生产环境应优先使用备份恢复，而不是直接调用此接口。
+该接口会删除并重建团队、槽位、归档、取消记录、操作日志、用户资料、补贴预设和团队模板。运行时槽位锁、团队锁不会导入，并会被清空。生产环境应优先使用备份恢复，而不是直接调用此接口。
 
 ### 10.2 查询备份
 
@@ -1171,7 +1216,8 @@ Invoke-WebRequest `
     "cancellations": [],
     "archivedTeams": [],
     "logs": [],
-    "userProfiles": {}
+    "userProfiles": {},
+    "teamTemplates": []
   },
   "locks": {
     "slots": [],
@@ -1203,7 +1249,7 @@ Invoke-WebRequest `
 | 400 | 参数缺失、格式错误、`slotRestriction` 等 |
 | 403 | `forbidden`、`notOpen`、管理员密码错误 |
 | 404 | `notFound`，团队、归档或备份不存在 |
-| 409 | `teamLocked`、`expired`、`slotChanged`、`onlyTnSignup`、`uniqueQqSignup`、`selfSignupOnly` |
+| 409 | `teamLocked`、`expired`、`slotChanged`、`onlyTnSignup`、`uniqueQqSignup`、`selfSignupOnly`、`templateExists`、`templateNameExists` |
 | 500 | SQLite、文件或其他未预期服务端异常 |
 | 501 | 未注册的 `/api/v2/*` 路由 |
 

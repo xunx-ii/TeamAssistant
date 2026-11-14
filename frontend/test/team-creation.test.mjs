@@ -11,6 +11,7 @@ import {
   normalizeTeamBatchCount,
 } from '../src/teamCreation.ts'
 import { validateSnapshotData } from '../src/dataStore.ts'
+import { createTeamTemplateFromTeam } from '../src/teamTemplates.ts'
 
 const now = new Date('2026-05-09T10:00:00+08:00')
 
@@ -121,6 +122,62 @@ test('createTeamsFromGuide creates numbered teams with identical settings', () =
   assert.equal(teams.every(team => team.config.uniqueQqSignup), true)
   assert.equal(teams.every(team => team.slots[20].fixedRole === 'T'), true)
   assert.equal(teams.every(team => team.subsidyTypes?.[0]?.id === 'damage'), true)
+})
+
+test('createTeamFromGuide applies an exact team template without copying members', () => {
+  const source = createTeamFromGuide(createGuide({
+    name: '模板来源',
+    onlyTnSignup: true,
+    uniqueQqSignup: true,
+  }), presets, now)
+  source.note = '固定打法与补贴'
+  source.config.locked = true
+  source.config.reservedSlots = [0, 4]
+  source.slots[0] = { index: 0, status: 'reserved', member: null, fixedRole: null, fixedMartialArtIndex: null }
+  source.slots[2] = {
+    index: 2,
+    status: 'occupied',
+    member: { qq: '10001', martialArtIndex: '3', gearScore: '1200', characterId: '角色A', note: '' },
+    fixedRole: 'DPS',
+    fixedMartialArtIndex: 3,
+  }
+
+  const template = createTeamTemplateFromTeam(source, '固定打法模板', '10001', now.getTime())
+  const team = createTeamFromGuide(createGuide({
+    name: '新开团',
+    subsidyPresetIds: [],
+    quickReserve: false,
+    template,
+  }), presets, now)
+
+  assert.equal(team.note, '固定打法与补贴')
+  assert.equal(team.config.locked, false)
+  assert.equal(team.config.onlyTnSignup, true)
+  assert.equal(team.config.uniqueQqSignup, true)
+  assert.deepEqual(team.config.reservedSlots, [0, 4])
+  assert.equal(team.slots[2].status, 'fixed')
+  assert.equal(team.slots[2].fixedMartialArtIndex, 3)
+  assert.equal(team.slots.every(slot => slot.member === null), true)
+  assert.deepEqual(team.subsidyTypes, source.subsidyTypes)
+  assert.equal(team.memberSubsidies, undefined)
+})
+
+test('template batch creation preserves layout independently for every team', () => {
+  const source = createTeamFromGuide(createGuide({ name: '模板来源', quickReserve: false }), presets, now)
+  source.slots[5] = { index: 5, status: 'fixed', member: null, fixedRole: '治疗', fixedMartialArtIndex: 4 }
+  const template = createTeamTemplateFromTeam(source, '治疗模板', '10001', now.getTime())
+  const teams = createTeamsFromGuide(createGuide({
+    name: '批量模板团',
+    count: 2,
+    subsidyPresetIds: [],
+    quickReserve: false,
+    template,
+  }), presets, now)
+
+  assert.deepEqual(teams.map(team => team.name), ['批量模板团 1', '批量模板团 2'])
+  assert.equal(teams.every(team => team.slots[5].status === 'fixed'), true)
+  assert.equal(teams.every(team => team.slots[5].member === null), true)
+  assert.notEqual(teams[0].slots, teams[1].slots)
 })
 
 test('createTeamCopies preserves configuration and clears runtime member data', () => {
