@@ -1529,6 +1529,15 @@ function App() {
                   </div>
                 </div>
               </div>
+              {activeTeam.note && (
+                <div className="mb-3 pixel-card p-3 border-l-4 border-l-amber-400">
+                  <div className="flex items-center gap-2 mb-1">
+                    <PixelCarrot size={16} />
+                    <p className="text-xs font-bold text-amber-600 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
+                  </div>
+                  <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
+                </div>
+              )}
               <SlotGrid
                 slots={activeTeam.slots}
                 config={activeTeam.config}
@@ -1545,15 +1554,6 @@ function App() {
               {mutationError && (
                 <div className="mt-3 pixel-notification bg-red-50 px-3 py-2 text-xs text-red-600">
                   ⚠️ {mutationError}
-                </div>
-              )}
-              {activeTeam.note && (
-                <div className="mt-4 pixel-card p-3 border-l-4 border-l-amber-400">
-                  <div className="flex items-center gap-2 mb-1">
-                    <PixelCarrot size={16} />
-                    <p className="text-xs font-bold text-amber-600 pixel-font" style={{ fontSize: '10px' }}>团队备注</p>
-                  </div>
-                  <p className="text-sm text-foreground whitespace-pre-wrap">{activeTeam.note}</p>
                 </div>
               )}
             </div>
