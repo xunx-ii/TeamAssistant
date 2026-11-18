@@ -1,4 +1,4 @@
-import { useEffect, useState, memo } from 'react'
+import { useEffect, useRef, useState, memo } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -7,10 +7,13 @@ import { TeamPublicationEditor } from './TeamPublicationEditor'
 import type { TeamPublication } from '../teamPublication'
 import type { TeamTemplate } from '../types'
 import type { TeamTemplateDeleteResult } from '../teamTemplates'
+import { clearTeamNoteDraft, loadTeamNoteDraft, saveTeamNoteDraft } from '../teamNoteDraft'
 import { normalizeTextInput, sanitizeIntegerInput, sanitizeTextInput, TEXT_INPUT_LIMITS } from '../textInput'
 import { formatWeekRange } from '../week'
 
 interface Props {
+  teamId: string
+  actorQq: string
   teamName: string
   weekStart: string
   note: string
@@ -22,7 +25,7 @@ interface Props {
   onSavePublication: (publication: TeamPublication) => Promise<boolean>
   onRename: (name: string) => void
   onSaveWeekStart: (weekStart: string) => void
-  onUpdateNote: (note: string) => void
+  onUpdateNote: (note: string) => Promise<boolean>
   onQuickReserve: (type: 'T' | '治疗' | 'boss', count: number) => void
   onToggleLock: () => void
   onUpdateSignupRules: (rules: { onlyTnSignup: boolean; uniqueQqSignup: boolean }) => void
@@ -31,11 +34,11 @@ interface Props {
   onArchive: () => void
   onOpenSubsidyConfig: () => void
   teamTemplates: TeamTemplate[]
-  onSaveTeamTemplate: (name: string) => Promise<boolean>
+  onSaveTeamTemplate: (name: string, note: string) => Promise<boolean>
   onDeleteTeamTemplate: (templateId: string) => Promise<TeamTemplateDeleteResult>
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig, teamTemplates, onSaveTeamTemplate, onDeleteTeamTemplate }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamId, actorQq, teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig, teamTemplates, onSaveTeamTemplate, onDeleteTeamTemplate }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -44,6 +47,20 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
   const [templateName, setTemplateName] = useState(teamName)
   const [templateError, setTemplateError] = useState('')
   const [savingTemplate, setSavingTemplate] = useState(false)
+  // Keep note editing local so slow responses never replace newer keystrokes.
+  const [noteDraft, setNoteDraft] = useState(() => {
+    const stored = loadTeamNoteDraft(teamId, actorQq)
+    return stored === null
+      ? note
+      : sanitizeTextInput(stored, { maxLength: TEXT_INPUT_LIMITS.note, multiline: true })
+  })
+  const [noteSaveStatus, setNoteSaveStatus] = useState<'idle' | 'saving' | 'error'>('idle')
+  const noteDraftRef = useRef(noteDraft)
+  const savedNoteRef = useRef(note)
+  const noteDirtyRef = useRef(noteDraft !== note)
+  const noteSaveInFlightRef = useRef(false)
+  const noteMountedRef = useRef(true)
+  const onUpdateNoteRef = useRef(onUpdateNote)
   const [weekDraft, setWeekDraft] = useState(() => ({ source: weekStart, value: weekStart }))
   const normalizeReserveCount = (value: string) => Math.min(25, Math.max(0, parseInt(sanitizeIntegerInput(value, 2)) || 0))
   const editWeekStart = weekDraft.source === weekStart ? weekDraft.value : weekStart
@@ -55,6 +72,79 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
     setEditName(teamName)
     setTemplateName(teamName)
   }, [teamName])
+
+  onUpdateNoteRef.current = onUpdateNote
+
+  useEffect(() => {
+    if (note === noteDraftRef.current) {
+      savedNoteRef.current = note
+      noteDirtyRef.current = false
+      clearTeamNoteDraft(teamId, actorQq, note)
+      if (!noteSaveInFlightRef.current) setNoteSaveStatus('idle')
+      return
+    }
+    if (noteDirtyRef.current || noteSaveInFlightRef.current) return
+    noteDraftRef.current = note
+    savedNoteRef.current = note
+    setNoteDraft(note)
+    clearTeamNoteDraft(teamId, actorQq)
+    setNoteSaveStatus('idle')
+  }, [actorQq, note, teamId])
+
+  useEffect(() => {
+    noteMountedRef.current = true
+    return () => {
+      noteMountedRef.current = false
+    }
+  }, [])
+
+  const persistNote = async (value: string): Promise<boolean> => {
+    if (value === savedNoteRef.current) {
+      noteDirtyRef.current = false
+      if (noteMountedRef.current) setNoteSaveStatus('idle')
+      return true
+    }
+    if (noteSaveInFlightRef.current) return false
+
+    noteSaveInFlightRef.current = true
+    if (noteMountedRef.current) setNoteSaveStatus('saving')
+    let saved = false
+    try {
+      // Only one note request may run at a time; newer text is saved afterwards.
+      saved = await onUpdateNoteRef.current(value)
+      if (!saved) {
+        if (noteMountedRef.current) setNoteSaveStatus('error')
+        return false
+      }
+      savedNoteRef.current = value
+      if (noteDraftRef.current === value) {
+        noteDirtyRef.current = false
+        clearTeamNoteDraft(teamId, actorQq, value)
+        if (noteMountedRef.current) setNoteSaveStatus('idle')
+      }
+      return true
+    } finally {
+      noteSaveInFlightRef.current = false
+      if (saved && noteDraftRef.current !== value) {
+        void persistNote(noteDraftRef.current)
+      }
+    }
+  }
+
+  const handleNoteChange = (value: string) => {
+    const next = sanitizeTextInput(value, { maxLength: TEXT_INPUT_LIMITS.note, multiline: true })
+    noteDraftRef.current = next
+    setNoteDraft(next)
+    noteDirtyRef.current = next !== savedNoteRef.current
+    if (noteDirtyRef.current) saveTeamNoteDraft(teamId, actorQq, next)
+    else clearTeamNoteDraft(teamId, actorQq, next)
+    setNoteSaveStatus(noteSaveInFlightRef.current ? 'saving' : 'idle')
+  }
+
+  const flushNote = () => {
+    if (!noteDirtyRef.current) return
+    void persistNote(noteDraftRef.current)
+  }
 
   const handleSaveTemplate = async () => {
     if (savingTemplate) return
@@ -70,7 +160,7 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
     setSavingTemplate(true)
     setTemplateError('')
     try {
-      const saved = await onSaveTeamTemplate(name)
+      const saved = await onSaveTeamTemplate(name, noteDraftRef.current)
       if (!saved) {
         setTemplateError('保存失败，请稍后重试')
         return
@@ -223,11 +313,29 @@ export const AdminConfig = memo(function AdminConfig({ teamName, weekStart, note
               </label>
             </div>
           </div>
-          <div>
-            <h3 className="text-sm font-medium text-foreground mb-2">团队备注</h3>
-            <Textarea value={note} onChange={e => onUpdateNote(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.note, multiline: true }))}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-foreground">团队备注</h3>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={!noteDirtyRef.current || noteSaveStatus === 'saving'}
+                onClick={flushNote}
+              >
+                {noteSaveStatus === 'saving' ? '保存中' : '保存备注'}
+              </Button>
+            </div>
+            <Textarea
+              value={noteDraft}
+              onChange={e => handleNoteChange(e.target.value)}
+              onBlur={flushNote}
               maxLength={TEXT_INPUT_LIMITS.note}
-              placeholder="填写团队备注，显示在表格下方" rows={3} />
+              placeholder="填写团队备注，显示在表格下方"
+              rows={3}
+            />
+            {noteSaveStatus === 'error' && (
+              <p className="text-xs text-destructive">保存失败，文字已保留，请重试</p>
+            )}
           </div>
           <div>
             <h3 className="text-sm font-medium text-foreground mb-2">表格归档</h3>

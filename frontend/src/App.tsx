@@ -747,10 +747,10 @@ function App() {
     }
   }
 
-  const handleSaveTeamTemplate = async (name: string) => {
+  const handleSaveTeamTemplate = async (name: string, note: string) => {
     if (!activeTeam || !qq) return false
     try {
-      const template = createTeamTemplateFromTeam(activeTeam, name, qq)
+      const template = createTeamTemplateFromTeam({ ...activeTeam, note }, name, qq)
       if (!serverMode) {
         syncTeamTemplates([...teamTemplates.filter(item => item.id !== template.id), template])
         return true
@@ -863,10 +863,11 @@ function App() {
     void runMutation({ type: 'renameTeam', teamId: id, name: normalizeTeamName(teamName, currentName) })
   }
 
-  const handleUpdateNote = (note: string) => {
-    if (!activeTeam) return
+  const handleUpdateNote = async (note: string) => {
+    if (!activeTeam) return false
     const textNote = sanitizeTextInput(note, { maxLength: TEXT_INPUT_LIMITS.note, multiline: true })
-    void runMutation({ type: 'updateTeamNote', teamId: activeTeam.id, note: textNote })
+    const result = await runMutation({ type: 'updateTeamNote', teamId: activeTeam.id, note: textNote })
+    return result.ok
   }
 
   const handleUpdateWeekStart = (weekStart: string) => {
@@ -1476,6 +1477,8 @@ function App() {
               {isAdmin && (
                 <AdminConfig
                   key={activeTeam.id}
+                  teamId={activeTeam.id}
+                  actorQq={qq ?? ''}
                   publication={activeTeam.config}
                   onSavePublication={async publication => (await runMutation({ type: 'updateTeamPublication', teamId: activeTeam.id, ...publication })).ok}
                   teamName={activeTeam.name}
