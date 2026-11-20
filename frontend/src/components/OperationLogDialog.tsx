@@ -4,10 +4,13 @@ import type { HistoryPageResult } from '../api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { formatShanghaiMonthDayTimeSecond } from '../time'
+import { formatOperationLogActor } from '../operationLogs'
 
 interface Props {
   open: boolean
-  teamName: string
+  title: string
+  showTeamName?: boolean
+  isAdmin: boolean
   logs: OperationLog[]
   /**
    * 是否提示「服务器还有更早的日志可以加载」。bootstrap 已经只下发最近一段，
@@ -24,7 +27,7 @@ interface Props {
 
 const PAGE_SIZE_HINT = 200
 
-export function OperationLogDialog({ open, teamName, logs, hasMore, onLoadMore, onClose }: Props) {
+export function OperationLogDialog({ open, title, showTeamName = false, isAdmin, logs, hasMore, onLoadMore, onClose }: Props) {
   const [olderLogs, setOlderLogs] = useState<OperationLog[]>([])
   const [serverHasMore, setServerHasMore] = useState<boolean>(Boolean(hasMore))
   const [loading, setLoading] = useState(false)
@@ -69,6 +72,9 @@ export function OperationLogDialog({ open, teamName, logs, hasMore, onLoadMore, 
   const oldestLoadedTimestamp = sortedLogs.length > 0 ? sortedLogs[sortedLogs.length - 1].timestamp : null
 
   const canLoadMore = Boolean(onLoadMore && serverHasMore && oldestLoadedTimestamp != null)
+  const gridColumns = showTeamName
+    ? 'grid-cols-[88px_84px_110px_1fr]'
+    : 'grid-cols-[92px_96px_1fr]'
 
   const loadMore = async () => {
     if (!onLoadMore || oldestLoadedTimestamp == null || loading) return
@@ -103,22 +109,24 @@ export function OperationLogDialog({ open, teamName, logs, hasMore, onLoadMore, 
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose() }}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>{teamName ? `${teamName} 日志` : '操作日志'}</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto rounded-md border border-border">
           {sortedLogs.length === 0 ? (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">暂无日志</div>
           ) : (
             <div className="divide-y divide-border text-sm">
-              <div className="grid grid-cols-[92px_96px_1fr] gap-2 bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <div className={`grid ${gridColumns} gap-2 bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground`}>
                 <span>时间</span>
                 <span>用户</span>
+                {showTeamName && <span>团队</span>}
                 <span>操作</span>
               </div>
               {sortedLogs.map(log => (
-                <div key={log.id} className="grid grid-cols-[92px_96px_1fr] gap-2 px-3 py-2">
+                <div key={log.id} className={`grid ${gridColumns} gap-2 px-3 py-2`}>
                   <span className="font-mono text-[11px] text-muted-foreground">{formatShanghaiMonthDayTimeSecond(log.timestamp)}</span>
-                  <span className="truncate font-mono text-xs text-foreground">{log.actorQq || '-'}</span>
+                  <span className="truncate font-mono text-xs text-foreground">{formatOperationLogActor(log.actorQq, isAdmin)}</span>
+                  {showTeamName && <span className="truncate text-xs text-muted-foreground">{log.teamName || '-'}</span>}
                   <span className="break-words text-foreground">{log.action}</span>
                 </div>
               ))}

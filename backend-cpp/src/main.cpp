@@ -644,20 +644,26 @@ public:
         if (!isAdmin) {
             data.removeMember("teamTemplates");
         }
-        if (!viewer.unrestricted) {
-            const auto condition = historyVisibilityConditionUnlocked(viewer);
-            data["logs"] = historyPageUnlocked(true, "", std::nullopt, kBootstrapLogLimit, condition)["items"];
+        if (!isAdmin) {
+            const auto visibilityCondition = historyVisibilityConditionUnlocked(viewer);
+            const auto logCondition = visibilityCondition + " AND " + publicTeamLogCondition();
+            data["logs"] = historyPageUnlocked(true, "", std::nullopt, kBootstrapLogLimit, logCondition, true)["items"];
             std::reverse(data["logs"].begin(), data["logs"].end());
-            data["cancellations"] = historyPageUnlocked(false, "", std::nullopt, kBootstrapCancellationLimit, condition)["items"];
-            for (const auto &[table, totalKey, truncatedKey, limit] : {
-                std::tuple{"operation_logs", "logsTotal", "logsTruncated", kBootstrapLogLimit},
-                std::tuple{"cancellations", "cancellationsTotal", "cancellationsTruncated", kBootstrapCancellationLimit}}) {
+            const auto countHistory = [&](const std::string &table, const std::string &condition) {
                 sqlite3_stmt *stmt = nullptr;
                 prepare(std::string("SELECT COUNT(*) FROM ") + table + " WHERE " + condition, &stmt);
                 const auto total = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0;
                 sqlite3_finalize(stmt);
-                data[totalKey] = static_cast<Json::Int64>(total);
-                data[truncatedKey] = total > limit;
+                return total;
+            };
+            const auto logsTotal = countHistory("operation_logs", logCondition);
+            data["logsTotal"] = static_cast<Json::Int64>(logsTotal);
+            data["logsTruncated"] = logsTotal > kBootstrapLogLimit;
+            if (!viewer.unrestricted) {
+                data["cancellations"] = historyPageUnlocked(false, "", std::nullopt, kBootstrapCancellationLimit, visibilityCondition, false)["items"];
+                const auto cancellationsTotal = countHistory("cancellations", visibilityCondition);
+                data["cancellationsTotal"] = static_cast<Json::Int64>(cancellationsTotal);
+                data["cancellationsTruncated"] = cancellationsTotal > kBootstrapCancellationLimit;
             }
         }
         return data;
@@ -2066,13 +2072,17 @@ public:
     Value historyLogs(const std::string &teamId, std::optional<long long> beforeTimestamp, int limit, bool isAdmin = false, const std::string &inviteToken = "") {
         std::lock_guard lock(mutex_);
         const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
-        return historyPageUnlocked(true, teamId, beforeTimestamp, limit, historyVisibilityConditionUnlocked(viewer));
+        std::string condition = historyVisibilityConditionUnlocked(viewer);
+        if (!isAdmin) {
+            condition += " AND " + publicTeamLogCondition();
+        }
+        return historyPageUnlocked(true, teamId, beforeTimestamp, limit, condition, !isAdmin);
     }
 
     Value historyCancellations(const std::string &qq, std::optional<long long> beforeTimestamp, int limit, bool isAdmin = false, const std::string &inviteToken = "") {
         std::lock_guard lock(mutex_);
         const auto viewer = viewerVisibilityUnlocked(isAdmin, inviteToken);
-        return historyPageUnlocked(false, qq, beforeTimestamp, limit, historyVisibilityConditionUnlocked(viewer));
+        return historyPageUnlocked(false, qq, beforeTimestamp, limit, historyVisibilityConditionUnlocked(viewer), false);
     }
 
 private:
@@ -2203,7 +2213,30 @@ private:
         return "(team_id = '' OR team_id IN (SELECT id FROM temp.visible_history_teams))";
     }
 
-    Value historyPageUnlocked(bool logs, const std::string &filter, std::optional<long long> before, int limit, const std::string &visibilityCondition) {
+    static std::string publicTeamLogCondition() {
+        return "("
+            "action LIKE '报名 #%' OR "
+            "action LIKE '修改 #%' OR "
+            "action LIKE '退出 #%' OR "
+            "action LIKE '取消 #%' OR "
+            "action LIKE '指定 #%'"
+            ")";
+    }
+
+    static std::string maskActorQq(const std::string &qq) {
+        if (qq.empty()) return "";
+        if (qq.size() <= 4) return "***";
+        return qq.substr(0, 2) + "***" + qq.substr(qq.size() - 2);
+    }
+
+    Value historyPageUnlocked(
+        bool logs,
+        const std::string &filter,
+        std::optional<long long> before,
+        int limit,
+        const std::string &visibilityCondition,
+        bool maskActor
+    ) {
         const auto boundedLimit = std::clamp(limit, 1, kHistoryPageSizeMax);
         std::string sql = logs
             ? "SELECT id, team_id, team_name, timestamp, actor_qq, action FROM operation_logs WHERE "
@@ -2237,7 +2270,8 @@ private:
                 item["teamId"] = textColumn(stmt.get(), 1);
                 item["teamName"] = textColumn(stmt.get(), 2);
                 item["timestamp"] = static_cast<Json::Int64>(sqlite3_column_int64(stmt.get(), 3));
-                item["actorQq"] = textColumn(stmt.get(), 4);
+                const std::string actorQq = textColumn(stmt.get(), 4);
+                item["actorQq"] = maskActor ? maskActorQq(actorQq) : actorQq;
                 item["action"] = textColumn(stmt.get(), 5);
             } else {
                 item["qq"] = textColumn(stmt.get(), 0);

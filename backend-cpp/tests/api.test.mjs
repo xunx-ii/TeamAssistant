@@ -169,7 +169,7 @@ test('history applies visibility before pagination and bootstrap limits', async 
   }))
   logs.unshift(...Array.from({ length: 3 }, (_, index) => ({
     id: `public-log-${index}`, teamId: 'public-team', teamName: 'public-team', timestamp: 100 + index,
-    actorQq: '20001', action: '公开日志',
+    actorQq: '20001', action: `报名 #${index + 1}：公开用户`,
   })))
   const cancellations = Array.from({ length: 220 }, (_, index) => ({
     qq: '20001', reason: '隐藏取消', cancelledBy: adminQq, teamId: 'private-team', teamName: 'private-team', slotIndex: 0, timestamp: 10_000 + index,
@@ -180,6 +180,7 @@ test('history applies visibility before pagination and bootstrap limits', async 
   assert.equal(snapshot.logs.length, 3)
   assert.equal(snapshot.logsTotal, 3)
   assert.equal(snapshot.logsTruncated, false)
+  assert.equal(snapshot.logs.every(log => log.actorQq === '20***01'), true)
   assert.equal(snapshot.cancellations.length, 1)
   assert.equal(snapshot.cancellationsTotal, 1)
   const first = await request('/logs?limit=2')
@@ -192,6 +193,57 @@ test('history applies visibility before pagination and bootstrap limits', async 
   assert.deepEqual((await request('/logs?teamId=private-team')).items, [])
   assert.equal((await request('/cancellations?qq=20001')).items.length, 1)
   assert.equal((await request(`/cancellations?qq=20001&inviteToken=${inviteToken}`)).items.length, 200)
+})
+
+test('non-admin team logs expose only signup-related actions', async () => {
+  const actions = [
+    ['signup', '报名 #1：甲'],
+    ['modify', '修改 #1 报名：甲'],
+    ['leave', '退出 #1 报名'],
+    ['cancel', '取消 #1 报名：甲'],
+    ['assign', '指定 #1 报名：10002'],
+    ['subsidy', '登记补贴'],
+    ['archive', '归档表格'],
+  ]
+  const inviteToken = await seedPublicationData({
+    logs: [
+      ...actions.map(([id, action], index) => ({
+        id: `public-action-${id}`,
+        teamId: 'public-team',
+        teamName: 'public-team',
+        timestamp: 1_000 + index,
+        actorQq: '20001',
+        action,
+      })),
+      {
+        id: 'global-nickname',
+        teamId: '',
+        teamName: '',
+        timestamp: 2_000,
+        actorQq: '20001',
+        action: '修改昵称：旧昵称 -> 新昵称',
+      },
+    ],
+  })
+
+  const expectedIds = ['public-action-signup', 'public-action-modify', 'public-action-leave', 'public-action-cancel', 'public-action-assign']
+  const snapshot = await request('/bootstrap')
+  assert.deepEqual(snapshot.logs.map(log => log.id), expectedIds)
+  assert.equal(snapshot.logsTotal, expectedIds.length)
+  const page = await request('/logs?teamId=public-team&limit=50')
+  assert.deepEqual(page.items.map(log => log.id), [...expectedIds].reverse())
+  assert.equal(page.items.every(log => log.actorQq === '20***01'), true)
+
+  const invitedSnapshot = await request(`/bootstrap?inviteToken=${inviteToken}`)
+  assert.deepEqual(invitedSnapshot.logs.map(log => log.id), expectedIds)
+  assert.equal(invitedSnapshot.logs.every(log => log.actorQq === '20***01'), true)
+  const invitedPage = await request(`/logs?teamId=public-team&limit=50&inviteToken=${inviteToken}`)
+  assert.deepEqual(invitedPage.items.map(log => log.id), [...expectedIds].reverse())
+  assert.equal(invitedPage.items.every(log => log.actorQq === '20***01'), true)
+
+  const adminSnapshot = await request(`/bootstrap?qq=${adminQq}&adminToken=${adminToken}`)
+  assert.equal(adminSnapshot.logs.length, actions.length + 1)
+  assert.equal(adminSnapshot.logs.every(log => log.actorQq === '20001'), true)
 })
 
 test('scheduled publication updates existing cursors without another admin mutation', async () => {

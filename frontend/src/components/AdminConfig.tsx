@@ -14,6 +14,7 @@ import { formatWeekRange } from '../week'
 interface Props {
   teamId: string
   actorQq: string
+  isAdmin: boolean
   teamName: string
   weekStart: string
   note: string
@@ -38,7 +39,7 @@ interface Props {
   onDeleteTeamTemplate: (templateId: string) => Promise<TeamTemplateDeleteResult>
 }
 
-export const AdminConfig = memo(function AdminConfig({ teamId, actorQq, teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig, teamTemplates, onSaveTeamTemplate, onDeleteTeamTemplate }: Props) {
+export const AdminConfig = memo(function AdminConfig({ teamId, actorQq, isAdmin, teamName, weekStart, note, serverMode, locked, onlyTnSignup, uniqueQqSignup, publication, onSavePublication, onRename, onSaveWeekStart, onUpdateNote, onQuickReserve, onToggleLock, onUpdateSignupRules, onViewLogs, onCopyTeam, onArchive, onOpenSubsidyConfig, teamTemplates, onSaveTeamTemplate, onDeleteTeamTemplate }: Props) {
   const [open, setOpen] = useState(false)
   const [reserveT, setReserveT] = useState(0)
   const [reserveH, setReserveH] = useState(0)
@@ -180,27 +181,35 @@ export const AdminConfig = memo(function AdminConfig({ teamId, actorQq, teamName
   return (
     <div className="mb-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
-          {open ? '收起设置' : '团队设置'}
-        </Button>
-        <Button
-          variant={locked ? 'default' : 'outline'}
-          size="sm"
-          onClick={onToggleLock}
-        >
-          {locked ? '已锁定' : '锁定表格'}
-        </Button>
+        {isAdmin && (
+          <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>
+            {open ? '收起设置' : '团队设置'}
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            variant={locked ? 'default' : 'outline'}
+            size="sm"
+            onClick={onToggleLock}
+          >
+            {locked ? '已锁定' : '锁定表格'}
+          </Button>
+        )}
         <Button variant="outline" size="sm" onClick={onViewLogs}>
-          查看日志
+          查看团队日志
         </Button>
-        <Button variant="outline" size="sm" onClick={onOpenSubsidyConfig}>
-          补贴设置
-        </Button>
-        <Button variant="outline" size="sm" onClick={onCopyTeam}>
-          复制团队
-        </Button>
+        {isAdmin && (
+          <Button variant="outline" size="sm" onClick={onOpenSubsidyConfig}>
+            补贴设置
+          </Button>
+        )}
+        {isAdmin && (
+          <Button variant="outline" size="sm" onClick={onCopyTeam}>
+            复制团队
+          </Button>
+        )}
       </div>
-      {open && (
+      {isAdmin && open && (
         <div className="mt-3 space-y-4 rounded-lg border border-border p-4">
           <TeamPublicationEditor key={`${publication.publicSignup}-${publication.publicAtMs}`} {...publication} onSave={onSavePublication} />
           {serverMode && (

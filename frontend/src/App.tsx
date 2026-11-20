@@ -26,6 +26,7 @@ import { startAdaptivePoll } from './polling'
 import { publicSnapshot } from './teamPublication'
 import { createTeamTemplateFromTeam, loadTeamTemplates, normalizeTeamTemplates, saveTeamTemplates } from './teamTemplates'
 import { clearStoredAdminSession, readStoredAdminSession, storeAdminSession } from './adminSession'
+import { getOperationLogsForScope, type OperationLogScope } from './operationLogs'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -141,7 +142,7 @@ function App() {
   const [showCreateTeam, setShowCreateTeam] = useState(false)
   const [showCopyTeam, setShowCopyTeam] = useState(false)
   const [showArchives, setShowArchives] = useState(false)
-  const [showLogs, setShowLogs] = useState(false)
+  const [logScope, setLogScope] = useState<OperationLogScope | null>(null)
   const [showSubsidy, setShowSubsidy] = useState(false)
   const [showSubsidyConfig, setShowSubsidyConfig] = useState(false)
   const [showSubsidyStats, setShowSubsidyStats] = useState(false)
@@ -201,7 +202,7 @@ function App() {
       setCancelSlot(null)
       setSetRoleSlot(null)
       setShowCopyTeam(false)
-      setShowLogs(false)
+      setLogScope(null)
       setShowSubsidy(false)
       setShowSubsidyConfig(false)
     }
@@ -1115,9 +1116,9 @@ function App() {
   const sharedHeaderActions = (
     <div className="flex items-center gap-2 flex-wrap justify-end">
       {isAdmin && (
-        <span className="pixel-badge bg-amber-100 text-amber-700">
-          GM
-        </span>
+        <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setLogScope('all')} disabled={!serverMode}>
+          查看总日志
+        </Button>
       )}
       {isAdmin && (
         <Button variant="outline" size="sm" className="pixel-btn text-xs" onClick={() => setShowBackupSettings(true)} disabled={!serverMode}>
@@ -1273,20 +1274,21 @@ function App() {
           />
         </DeferredDialog>
       )}
-      {showLogs && (
-        <DeferredDialog onClose={() => setShowLogs(false)}>
+      {logScope && (
+        <DeferredDialog onClose={() => setLogScope(null)}>
           <OperationLogDialog
-            open={showLogs}
-            teamName={activeTeam?.name ?? ''}
-            logs={activeTeam ? operationLogs.filter(log => log.teamId === activeTeam.id || !log.teamId) : operationLogs.filter(log => !log.teamId)}
-            // bootstrap 或增量更新超出本地历史窗口时可继续加载服务端日志。
-            hasMore={serverMode && logsTruncated}
+            open={true}
+            title={logScope === 'team' ? `${activeTeam?.name ?? ''} 团队日志` : '全部团队日志'}
+            showTeamName={logScope === 'all'}
+            isAdmin={isAdmin}
+            logs={getOperationLogsForScope(operationLogs, logScope, activeTeam?.id, isAdmin)}
+            hasMore={serverMode && (logScope === 'team' || logsTruncated)}
             onLoadMore={serverMode ? (cursor) => fetchLogsPage({
               before: cursor,
-              teamId: activeTeam?.id ?? null,
+              teamId: logScope === 'team' ? activeTeam?.id ?? null : null,
               actorQq: qq,
             }) : undefined}
-            onClose={() => setShowLogs(false)}
+            onClose={() => setLogScope(null)}
           />
         </DeferredDialog>
       )}
@@ -1474,39 +1476,38 @@ function App() {
           {!activeTeam && <div className="mt-4 pixel-card p-5 text-center text-sm text-muted-foreground">暂无可报名的团队</div>}
           {activeTeam && (
             <div className="mt-4">
-              {isAdmin && (
-                <AdminConfig
-                  key={activeTeam.id}
-                  teamId={activeTeam.id}
-                  actorQq={qq ?? ''}
-                  publication={activeTeam.config}
-                  onSavePublication={async publication => (await runMutation({ type: 'updateTeamPublication', teamId: activeTeam.id, ...publication })).ok}
-                  teamName={activeTeam.name}
-                  weekStart={activeTeam.weekStart ?? currentWeekStart}
-                  note={activeTeam.note}
-                  serverMode={serverMode}
-                  locked={activeTeam.config.locked}
-                  onlyTnSignup={activeTeam.config.onlyTnSignup}
-                  uniqueQqSignup={activeTeam.config.uniqueQqSignup}
-                  onRename={handleAdminRename}
-                  onSaveWeekStart={handleUpdateWeekStart}
-                  onUpdateNote={handleUpdateNote}
-                  onQuickReserve={handleQuickReserve}
-                  onToggleLock={async () => {
-                    if (!activeTeam) return
-                    const newLocked = !activeTeam.config.locked
-                    await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
-                  }}
-                  onUpdateSignupRules={handleUpdateSignupRules}
-                  onViewLogs={() => setShowLogs(true)}
-                  onCopyTeam={() => setShowCopyTeam(true)}
-                  onArchive={handleArchiveTeam}
-                  onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
-                  teamTemplates={teamTemplates}
-                  onSaveTeamTemplate={handleSaveTeamTemplate}
-                  onDeleteTeamTemplate={handleDeleteTeamTemplate}
-                />
-              )}
+              <AdminConfig
+                key={activeTeam.id}
+                teamId={activeTeam.id}
+                actorQq={qq ?? ''}
+                isAdmin={isAdmin}
+                publication={activeTeam.config}
+                onSavePublication={async publication => (await runMutation({ type: 'updateTeamPublication', teamId: activeTeam.id, ...publication })).ok}
+                teamName={activeTeam.name}
+                weekStart={activeTeam.weekStart ?? currentWeekStart}
+                note={activeTeam.note}
+                serverMode={serverMode}
+                locked={activeTeam.config.locked}
+                onlyTnSignup={activeTeam.config.onlyTnSignup}
+                uniqueQqSignup={activeTeam.config.uniqueQqSignup}
+                onRename={handleAdminRename}
+                onSaveWeekStart={handleUpdateWeekStart}
+                onUpdateNote={handleUpdateNote}
+                onQuickReserve={handleQuickReserve}
+                onToggleLock={async () => {
+                  if (!activeTeam) return
+                  const newLocked = !activeTeam.config.locked
+                  await runMutation({ type: 'setTeamLockState', teamId: activeTeam.id, locked: newLocked })
+                }}
+                onUpdateSignupRules={handleUpdateSignupRules}
+                onViewLogs={() => setLogScope('team')}
+                onCopyTeam={() => setShowCopyTeam(true)}
+                onArchive={handleArchiveTeam}
+                onOpenSubsidyConfig={() => setShowSubsidyConfig(true)}
+                teamTemplates={teamTemplates}
+                onSaveTeamTemplate={handleSaveTeamTemplate}
+                onDeleteTeamTemplate={handleDeleteTeamTemplate}
+              />
               <div className="mb-3 pixel-card p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
