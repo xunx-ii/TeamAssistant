@@ -1484,7 +1484,8 @@ function App() {
           {!activeTeam && <div className="mt-4 pixel-card p-5 text-center text-sm text-muted-foreground">暂无可报名的团队</div>}
           {activeTeam && (
             <div className="mt-4">
-              <AdminConfig
+              {isAdmin && (
+                <AdminConfig
                 key={activeTeam.id}
                 teamId={activeTeam.id}
                 actorQq={qq ?? ''}
@@ -1515,7 +1516,8 @@ function App() {
                 teamTemplates={teamTemplates}
                 onSaveTeamTemplate={handleSaveTeamTemplate}
                 onDeleteTeamTemplate={handleDeleteTeamTemplate}
-              />
+                />
+              )}
               <div className="mb-3 pixel-card p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">

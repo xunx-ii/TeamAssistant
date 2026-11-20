@@ -645,25 +645,18 @@ public:
             data.removeMember("teamTemplates");
         }
         if (!isAdmin) {
-            const auto visibilityCondition = historyVisibilityConditionUnlocked(viewer);
-            const auto logCondition = visibilityCondition + " AND " + publicTeamLogCondition();
-            data["logs"] = historyPageUnlocked(true, "", std::nullopt, kBootstrapLogLimit, logCondition, true)["items"];
-            std::reverse(data["logs"].begin(), data["logs"].end());
-            const auto countHistory = [&](const std::string &table, const std::string &condition) {
+            data["logs"] = Value(Json::arrayValue);
+            data["logsTotal"] = static_cast<Json::Int64>(0);
+            data["logsTruncated"] = false;
+            if (!viewer.unrestricted) {
+                const auto visibilityCondition = historyVisibilityConditionUnlocked(viewer);
+                data["cancellations"] = historyPageUnlocked(false, "", std::nullopt, kBootstrapCancellationLimit, visibilityCondition, false)["items"];
                 sqlite3_stmt *stmt = nullptr;
-                prepare(std::string("SELECT COUNT(*) FROM ") + table + " WHERE " + condition, &stmt);
+                prepare(std::string("SELECT COUNT(*) FROM cancellations WHERE ") + visibilityCondition, &stmt);
                 const auto total = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0;
                 sqlite3_finalize(stmt);
-                return total;
-            };
-            const auto logsTotal = countHistory("operation_logs", logCondition);
-            data["logsTotal"] = static_cast<Json::Int64>(logsTotal);
-            data["logsTruncated"] = logsTotal > kBootstrapLogLimit;
-            if (!viewer.unrestricted) {
-                data["cancellations"] = historyPageUnlocked(false, "", std::nullopt, kBootstrapCancellationLimit, visibilityCondition, false)["items"];
-                const auto cancellationsTotal = countHistory("cancellations", visibilityCondition);
-                data["cancellationsTotal"] = static_cast<Json::Int64>(cancellationsTotal);
-                data["cancellationsTruncated"] = cancellationsTotal > kBootstrapCancellationLimit;
+                data["cancellationsTotal"] = static_cast<Json::Int64>(total);
+                data["cancellationsTruncated"] = total > kBootstrapCancellationLimit;
             }
         }
         return data;
@@ -5271,13 +5264,14 @@ int main() {
     // dedicated handlers using a `before` cursor (timestamp of the oldest
     // item already seen). Both teamId and qq filters are optional.
     drogon::app().registerHandler("/api/v2/logs",
-        [db, inviteTokenFromRequest, isAdminRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, requireAdminQq](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const std::string actorQq = request->getParameter("actorQq");
+            if (!requireAdminQq(request, actorQq, callback)) return;
             try {
-                const std::string actorQq = request->getParameter("actorQq");
                 const auto teamId = request->getParameter("teamId");
                 const auto before = optionalQueryInt64(request->getParameter("before"));
-                const int limit = static_cast<int>(optionalQueryInt64(request->getParameter("limit")).value_or(200));
-                callback(jsonResponse(db->historyLogs(teamId, before, limit, isAdminRequest(request, actorQq), inviteTokenFromRequest(request))));
+                const int limit = static_cast<int>(optionalQueryInt64(request->getParameter("limit")).value_or(50));
+                callback(jsonResponse(db->historyLogs(teamId, before, limit, true, "")));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
             }

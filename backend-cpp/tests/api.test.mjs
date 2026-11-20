@@ -177,25 +177,25 @@ test('history applies visibility before pagination and bootstrap limits', async 
   cancellations.unshift({ ...cancellations[0], teamId: 'public-team', teamName: 'public-team', reason: '公开取消', timestamp: 100 })
   const inviteToken = await seedPublicationData({ logs, cancellations })
   const snapshot = await request('/bootstrap')
-  assert.equal(snapshot.logs.length, 3)
-  assert.equal(snapshot.logsTotal, 3)
+  assert.deepEqual(snapshot.logs, [])
+  assert.equal(snapshot.logsTotal, 0)
   assert.equal(snapshot.logsTruncated, false)
-  assert.equal(snapshot.logs.every(log => log.actorQq === '20***01'), true)
   assert.equal(snapshot.cancellations.length, 1)
   assert.equal(snapshot.cancellationsTotal, 1)
-  const first = await request('/logs?limit=2')
-  assert.equal(first.items.length, 2)
-  assert.equal(first.hasMore, true)
-  assert.equal(first.items.every(item => item.teamId === 'public-team'), true)
-  const second = await request(`/logs?limit=2&before=${first.nextCursor}`)
-  assert.equal(second.items.length, 1)
-  assert.equal(second.hasMore, false)
-  assert.deepEqual((await request('/logs?teamId=private-team')).items, [])
+  const denied = await request('/logs?limit=2')
+  assert.equal(denied.status, 403)
+  assert.equal(denied.reason, 'forbidden')
+  const adminFirst = await request(`/logs?limit=2&actorQq=${adminQq}&adminToken=${adminToken}`)
+  assert.equal(adminFirst.items.length, 2)
+  assert.equal(adminFirst.hasMore, true)
+  const adminPublic = await request(`/logs?teamId=public-team&limit=50&actorQq=${adminQq}&adminToken=${adminToken}`)
+  assert.equal(adminPublic.items.length, 3)
+  assert.equal(adminPublic.hasMore, false)
   assert.equal((await request('/cancellations?qq=20001')).items.length, 1)
   assert.equal((await request(`/cancellations?qq=20001&inviteToken=${inviteToken}`)).items.length, 200)
 })
 
-test('non-admin team logs expose only signup-related actions', async () => {
+test('team logs are admin-only and non-admin bootstrap omits logs', async () => {
   const actions = [
     ['signup', '报名 #1：甲'],
     ['modify', '修改 #1 报名：甲'],
@@ -226,24 +226,29 @@ test('non-admin team logs expose only signup-related actions', async () => {
     ],
   })
 
-  const expectedIds = ['public-action-signup', 'public-action-modify', 'public-action-leave', 'public-action-cancel', 'public-action-assign']
   const snapshot = await request('/bootstrap')
-  assert.deepEqual(snapshot.logs.map(log => log.id), expectedIds)
-  assert.equal(snapshot.logsTotal, expectedIds.length)
+  assert.deepEqual(snapshot.logs, [])
+  assert.equal(snapshot.logsTotal, 0)
+  assert.equal(snapshot.logsTruncated, false)
   const page = await request('/logs?teamId=public-team&limit=50')
-  assert.deepEqual(page.items.map(log => log.id), [...expectedIds].reverse())
-  assert.equal(page.items.every(log => log.actorQq === '20***01'), true)
+  assert.equal(page.status, 403)
+  assert.equal(page.reason, 'forbidden')
 
   const invitedSnapshot = await request(`/bootstrap?inviteToken=${inviteToken}`)
-  assert.deepEqual(invitedSnapshot.logs.map(log => log.id), expectedIds)
-  assert.equal(invitedSnapshot.logs.every(log => log.actorQq === '20***01'), true)
+  assert.deepEqual(invitedSnapshot.logs, [])
   const invitedPage = await request(`/logs?teamId=public-team&limit=50&inviteToken=${inviteToken}`)
-  assert.deepEqual(invitedPage.items.map(log => log.id), [...expectedIds].reverse())
-  assert.equal(invitedPage.items.every(log => log.actorQq === '20***01'), true)
+  assert.equal(invitedPage.status, 403)
+  assert.equal(invitedPage.reason, 'forbidden')
 
   const adminSnapshot = await request(`/bootstrap?qq=${adminQq}&adminToken=${adminToken}`)
   assert.equal(adminSnapshot.logs.length, actions.length + 1)
   assert.equal(adminSnapshot.logs.every(log => log.actorQq === '20001'), true)
+  const adminPage = await request(`/logs?teamId=public-team&limit=50&actorQq=${adminQq}&adminToken=${adminToken}`)
+  assert.deepEqual(
+    adminPage.items.map(log => log.id),
+    [...actions.map(([id]) => `public-action-${id}`)].reverse(),
+  )
+  assert.equal(adminPage.items.every(log => log.actorQq === '20001'), true)
 })
 
 test('scheduled publication updates existing cursors without another admin mutation', async () => {
