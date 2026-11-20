@@ -94,9 +94,9 @@ test('incremental history stays within the bootstrap window', () => {
     log: { id: `log-${timestamp}`, timestamp },
   }))
   const next = applyServerPatches(createSnapshot(), patches)
-  assert.equal(next.logs.length, 500)
+  assert.equal(next.logs.length, 100)
   assert.equal(next.cancellations.length, 200)
-  assert.equal(next.logs[0].timestamp, 50)
+  assert.equal(next.logs[0].timestamp, 450)
   assert.equal(next.cancellations[0].timestamp, 350)
 })
 

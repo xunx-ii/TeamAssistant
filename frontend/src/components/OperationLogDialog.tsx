@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { OperationLog } from '../types'
 import type { HistoryPageResult } from '../api'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog'
 import { Button } from './ui/button'
 import { formatShanghaiMonthDayTimeSecond } from '../time'
-import { formatOperationLogActor } from '../operationLogs'
+import { formatOperationLogActor, OPERATION_LOG_LOCAL_FALLBACK_LIMIT, OPERATION_LOG_PAGE_SIZE } from '../operationLogs'
 
 interface Props {
   open: boolean
@@ -21,39 +21,79 @@ interface Props {
    * 由调用方负责拉分页：调用方知道当前作用域（按团 / 全局）以及 actorQq 等上下文。
    * 未提供时弹窗只展示父组件传入的 logs。
    */
-  onLoadMore?: (cursor: number) => Promise<HistoryPageResult<OperationLog>>
+  onLoadInitial?: (signal: AbortSignal) => Promise<HistoryPageResult<OperationLog>>
+  onLoadMore?: (cursor: number, signal: AbortSignal) => Promise<HistoryPageResult<OperationLog>>
   onClose: () => void
 }
 
-const PAGE_SIZE_HINT = 200
-
-export function OperationLogDialog({ open, title, showTeamName = false, isAdmin, logs, hasMore, onLoadMore, onClose }: Props) {
+export function OperationLogDialog({ open, title, showTeamName = false, isAdmin, logs, hasMore, onLoadInitial, onLoadMore, onClose }: Props) {
+  const [initialLogs, setInitialLogs] = useState<OperationLog[]>([])
   const [olderLogs, setOlderLogs] = useState<OperationLog[]>([])
   const [serverHasMore, setServerHasMore] = useState<boolean>(Boolean(hasMore))
+  const [loadingInitial, setLoadingInitial] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const onLoadInitialRef = useRef(onLoadInitial)
+  const onLoadMoreRef = useRef(onLoadMore)
 
-  // 关闭弹窗时清掉「更早日志」这部分缓存，避免下次打开看到旧数据
-  // 同时根据父组件最新的 hasMore 重新初始化按钮可见性
   useEffect(() => {
+    onLoadInitialRef.current = onLoadInitial
+  }, [onLoadInitial])
+
+  useEffect(() => {
+    onLoadMoreRef.current = onLoadMore
+  }, [onLoadMore])
+
+  useEffect(() => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     queueMicrotask(() => {
-      if (open) {
-        setServerHasMore(Boolean(hasMore))
-        setError(null)
-      } else {
-        setOlderLogs([])
-        setServerHasMore(false)
-        setLoading(false)
-        setError(null)
-      }
+      if (controller.signal.aborted) return
+      setInitialLogs([])
+      setOlderLogs([])
+      setServerHasMore(Boolean(hasMore))
+      setLoading(false)
+      setError(null)
+      const loadInitial = onLoadInitialRef.current
+      setLoadingInitial(Boolean(open && loadInitial))
+      if (!open || !loadInitial) return
+
+      void (async () => {
+        try {
+          const page = await loadInitial(controller.signal)
+          if (controller.signal.aborted) return
+          if (!page.ok) {
+            setError(page.error ?? '加载日志失败')
+            return
+          }
+          setInitialLogs(page.items)
+          setServerHasMore(Boolean(page.hasMore))
+        } catch (loadError) {
+          if (!controller.signal.aborted) {
+            setError(loadError instanceof Error ? loadError.message : '加载日志失败')
+          }
+        } finally {
+          if (!controller.signal.aborted) setLoadingInitial(false)
+        }
+      })()
     })
+
+    return () => controller.abort()
   }, [open, hasMore])
 
   const sortedLogs = useMemo(() => {
     // 按 id 去重，避免本地 logs 与分页拉到的更早日志在边界上重复
     const seen = new Set<string>()
     const merged: OperationLog[] = []
-    for (const log of logs) {
+    for (const log of logs.slice(-OPERATION_LOG_LOCAL_FALLBACK_LIMIT)) {
+      if (log.id && !seen.has(log.id)) {
+        seen.add(log.id)
+        merged.push(log)
+      }
+    }
+    for (const log of initialLogs) {
       if (log.id && !seen.has(log.id)) {
         seen.add(log.id)
         merged.push(log)
@@ -67,21 +107,25 @@ export function OperationLogDialog({ open, title, showTeamName = false, isAdmin,
     }
     merged.sort((left, right) => right.timestamp - left.timestamp)
     return merged
-  }, [logs, olderLogs])
+  }, [initialLogs, logs, olderLogs])
 
   const oldestLoadedTimestamp = sortedLogs.length > 0 ? sortedLogs[sortedLogs.length - 1].timestamp : null
 
-  const canLoadMore = Boolean(onLoadMore && serverHasMore && oldestLoadedTimestamp != null)
+  const canLoadMore = Boolean(!loadingInitial && onLoadMore && serverHasMore && oldestLoadedTimestamp != null)
   const gridColumns = showTeamName
     ? 'grid-cols-[88px_84px_110px_1fr]'
     : 'grid-cols-[92px_96px_1fr]'
 
   const loadMore = async () => {
-    if (!onLoadMore || oldestLoadedTimestamp == null || loading) return
+    const loadMoreHandler = onLoadMoreRef.current
+    if (!loadMoreHandler || oldestLoadedTimestamp == null || loading) return
+    const controller = abortRef.current ?? new AbortController()
+    abortRef.current = controller
     setLoading(true)
     setError(null)
     try {
-      const page = await onLoadMore(oldestLoadedTimestamp)
+      const page = await loadMoreHandler(oldestLoadedTimestamp, controller.signal)
+      if (controller.signal.aborted) return
       if (!page.ok) {
         setError(page.error ?? '加载更早日志失败')
         return
@@ -99,9 +143,11 @@ export function OperationLogDialog({ open, title, showTeamName = false, isAdmin,
       })
       setServerHasMore(Boolean(page.hasMore))
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载更早日志失败')
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : '加载更早日志失败')
+      }
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }
 
@@ -112,8 +158,13 @@ export function OperationLogDialog({ open, title, showTeamName = false, isAdmin,
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto rounded-md border border-border">
+          {loadingInitial && (
+            <div className="border-b border-border px-3 py-2 text-center text-xs text-muted-foreground">正在加载最新日志…</div>
+          )}
           {sortedLogs.length === 0 ? (
-            <div className="px-3 py-6 text-center text-sm text-muted-foreground">暂无日志</div>
+            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+              {loadingInitial ? '正在加载日志…' : error ? '日志加载失败' : '暂无日志'}
+            </div>
           ) : (
             <div className="divide-y divide-border text-sm">
               <div className={`grid ${gridColumns} gap-2 bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground`}>
@@ -139,17 +190,17 @@ export function OperationLogDialog({ open, title, showTeamName = false, isAdmin,
                     onClick={loadMore}
                     disabled={loading}
                   >
-                    {loading ? '加载中…' : `加载更早 ${PAGE_SIZE_HINT} 条`}
+                    {loading ? '加载中…' : `加载更早 ${OPERATION_LOG_PAGE_SIZE} 条`}
                   </Button>
                 </div>
-              )}
-              {error && (
-                <div className="px-3 py-2 text-center text-xs text-destructive">{error}</div>
               )}
               {!canLoadMore && onLoadMore && !serverHasMore && sortedLogs.length > 0 && (
                 <div className="px-3 py-2 text-center text-xs text-muted-foreground">已加载全部历史日志</div>
               )}
             </div>
+          )}
+          {error && (
+            <div className="border-t border-border px-3 py-2 text-center text-xs text-destructive">{error}</div>
           )}
         </div>
       </DialogContent>

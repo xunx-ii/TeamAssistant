@@ -1,5 +1,5 @@
 export const CANCELLATION_WINDOW = 200
-export const LOG_WINDOW = 500
+export const LOG_WINDOW = 100
 
 export function trimRecentByTimestamp<T extends { timestamp: number }>(items: T[], limit: number): T[] {
   if (items.length <= limit) return items

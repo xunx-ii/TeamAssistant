@@ -391,7 +391,7 @@ GET /api/v2/bootstrap?qq=10001&inviteToken=<inviteToken>
 - `accessGate`
 - `visibilityKey`
 
-为了限制初始响应大小，快照默认最多返回最近 200 条取消记录和 500 条操作日志，并提供：
+为了限制初始响应大小，快照默认最多返回最近 200 条取消记录和 100 条操作日志，并提供：
 
 ```json
 {
@@ -492,7 +492,7 @@ SSE 只负责通知版本变化，不携带完整业务数据。收到事件后�
 操作日志：
 
 ```http
-GET /api/v2/logs?teamId=team-1&before=1780000000000&limit=200
+GET /api/v2/logs?teamId=team-1&before=1780000000000&limit=50
 ```
 
 取消记录：
@@ -509,11 +509,11 @@ GET /api/v2/cancellations?qq=10001&before=1780000000000&limit=200
   "items": [],
   "hasMore": true,
   "nextCursor": 1779999000000,
-  "limit": 200
+  "limit": 50
 }
 ```
 
-下一页请求时，把上一次响应的 `nextCursor` 作为新的 `before`。服务端会把 `limit` 限制在 1 到 500 之间。
+下一页请求时，把上一次响应的 `nextCursor` 作为新的 `before`。服务端会把 `limit` 限制在 1 到 500 之间；Web 客户端默认每页读取 50 条，以降低弱网首屏和渲染压力。
 
 非管理员查询团队日志时，服务端只返回报名、修改报名、退出报名、取消报名和指定报名这类报名流水；补贴、归档、昵称、门禁和其他管理操作不会返回。非管理员的日志响应中，`actorQq` 会做脱敏处理；管理员仍可查看完整日志和完整 QQ。
 

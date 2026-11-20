@@ -26,7 +26,7 @@ import { startAdaptivePoll } from './polling'
 import { publicSnapshot } from './teamPublication'
 import { createTeamTemplateFromTeam, loadTeamTemplates, normalizeTeamTemplates, saveTeamTemplates } from './teamTemplates'
 import { clearStoredAdminSession, readStoredAdminSession, storeAdminSession } from './adminSession'
-import { getOperationLogsForScope, type OperationLogScope } from './operationLogs'
+import { getOperationLogsForScope, OPERATION_LOG_PAGE_SIZE, type OperationLogScope } from './operationLogs'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
 import { SlotGrid } from './components/SlotGrid'
@@ -1283,10 +1283,18 @@ function App() {
             isAdmin={isAdmin}
             logs={getOperationLogsForScope(operationLogs, logScope, activeTeam?.id, isAdmin)}
             hasMore={serverMode && (logScope === 'team' || logsTruncated)}
-            onLoadMore={serverMode ? (cursor) => fetchLogsPage({
-              before: cursor,
+            onLoadInitial={serverMode ? (signal) => fetchLogsPage({
+              limit: OPERATION_LOG_PAGE_SIZE,
               teamId: logScope === 'team' ? activeTeam?.id ?? null : null,
               actorQq: qq,
+              signal,
+            }) : undefined}
+            onLoadMore={serverMode ? (cursor, signal) => fetchLogsPage({
+              before: cursor,
+              limit: OPERATION_LOG_PAGE_SIZE,
+              teamId: logScope === 'team' ? activeTeam?.id ?? null : null,
+              actorQq: qq,
+              signal,
             }) : undefined}
             onClose={() => setLogScope(null)}
           />

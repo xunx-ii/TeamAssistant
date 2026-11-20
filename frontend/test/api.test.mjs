@@ -606,6 +606,36 @@ test('team template API helpers use admin endpoints and preserve the template pa
   assert.equal(calls[1].init.method, 'DELETE')
 })
 
+test('fetchLogsPage sends bounded pagination and an abort signal', async () => {
+  const calls = []
+  const controller = new AbortController()
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    return createJsonResponse({
+      ok: true,
+      items: [{ id: 'log-1', teamId: 'team-1', teamName: '一团', timestamp: 10, actorQq: '10001', action: '报名 #1：甲' }],
+      hasMore: false,
+      nextCursor: 10,
+      limit: 50,
+    })
+  }, async () => {
+    const { fetchLogsPage } = await import(`../src/api.ts?case=${Date.now()}-logs-page`)
+    const result = await fetchLogsPage({
+      teamId: 'team-1',
+      before: 100,
+      limit: 50,
+      actorQq: '10001',
+      signal: controller.signal,
+    })
+    assert.equal(result.ok, true)
+    assert.equal(result.items.length, 1)
+  })
+
+  assert.equal(calls[0].input, '/api/v2/logs?teamId=team-1&before=100&limit=50&actorQq=10001')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.equal(calls[0].init.cache, 'no-store')
+})
+
 test('mutateData routes slot signup to atomic v2 member endpoint', async () => {
   const calls = []
   await withMockedFetch(async (input, init = {}) => {

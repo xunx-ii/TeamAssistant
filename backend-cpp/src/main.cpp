@@ -2106,7 +2106,7 @@ private:
     // Bootstrap and history page sizes. The bootstrap caps protect the
     // initial snapshot payload (which is also written to localStorage on
     // the client) and the page sizes bound the dedicated history endpoints.
-    static constexpr int kBootstrapLogLimit = 500;
+    static constexpr int kBootstrapLogLimit = 100;
     static constexpr int kBootstrapCancellationLimit = 200;
     static constexpr int kHistoryPageSizeMax = 500;
     std::uint64_t nextLockToken_ = 1;

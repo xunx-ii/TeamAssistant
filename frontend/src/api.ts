@@ -919,6 +919,7 @@ interface HistoryQueryParams {
   before?: number | null
   limit?: number | null
   actorQq?: string | null
+  signal?: AbortSignal
 }
 
 function buildHistoryQuery(extra: Record<string, string | null | undefined>, params: HistoryQueryParams) {
@@ -1020,14 +1021,14 @@ function normalizeCancellationRow(raw: unknown): Cancellation | null {
 
 export async function fetchLogsPage(options: HistoryQueryParams & { teamId?: string | null } = {}): Promise<HistoryPageResult<OperationLog>> {
   const suffix = buildHistoryQuery({ teamId: options.teamId ?? null }, options)
-  const data = await requestData<unknown>(`${API}/logs${suffix}`, noCache)
+  const data = await requestData<unknown>(`${API}/logs${suffix}`, { ...noCache, signal: options.signal })
   if (!data) return emptyHistoryPage<OperationLog>(SERVER_UNAVAILABLE_ERROR)
   return parseHistoryPage<unknown, OperationLog>(data, normalizeOperationLog)
 }
 
 export async function fetchCancellationsPage(options: HistoryQueryParams & { qq?: string | null } = {}): Promise<HistoryPageResult<Cancellation>> {
   const suffix = buildHistoryQuery({ qq: options.qq ?? null }, options)
-  const data = await requestData<unknown>(`${API}/cancellations${suffix}`, noCache)
+  const data = await requestData<unknown>(`${API}/cancellations${suffix}`, { ...noCache, signal: options.signal })
   if (!data) return emptyHistoryPage<Cancellation>(SERVER_UNAVAILABLE_ERROR)
   return parseHistoryPage<unknown, Cancellation>(data, normalizeCancellationRow)
 }
