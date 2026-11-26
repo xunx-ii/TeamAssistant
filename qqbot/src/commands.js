@@ -73,6 +73,41 @@ function splitCommandArgs(text) {
   return args;
 }
 
+function compactIntentText(text) {
+  return String(text ?? "")
+    .replace(/^\//, "")
+    .replace(/[？?！!。]+$/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
+
+/** 识别常见自然语言查询，避免误把身份问题交给没有数据上下文的闲聊模型。 */
+function resolveImplicitCommand(text) {
+  const compact = compactIntentText(text);
+  const withoutPolitePrefix = compact.replace(/^(?:请|麻烦你?|帮我|帮忙|给我)/, "");
+  const myRegistration = /^(?:我的?|自己的?)报名(?:情况|记录|状态|信息)?$/;
+  const registrationQuestion = /^(?:我|自己)(?:都|已经|有)?(?:报了|报名了?)(?:哪些|什么)(?:团队|团|槽位)?$/;
+  const registrationLookup = /^(?:看看|看一下|看下|查看一下|查看|查询一下|查询|查一下|查)(?:我的?|自己的?)?报名(?:情况|记录|状态|信息)?$/;
+
+  if (
+    registrationLookup.test(withoutPolitePrefix) ||
+    myRegistration.test(withoutPolitePrefix) ||
+    registrationQuestion.test(withoutPolitePrefix)
+  ) {
+    return { name: "我的报名", argsText: "" };
+  }
+  if (/^(?:看看|查看|查询|查一下|列出)?(?:当前|现在)?(?:所有)?(?:团队|团)(?:列表|情况)?$/.test(withoutPolitePrefix)) {
+    return { name: "团队", argsText: "" };
+  }
+  if (/^(?:有哪些|有什么)(?:团队|团)$/.test(withoutPolitePrefix)) {
+    return { name: "团队", argsText: "" };
+  }
+  if (/^(?:怎么用|指令帮助|使用帮助|帮助)$/.test(withoutPolitePrefix)) {
+    return { name: "帮助", argsText: "" };
+  }
+  return null;
+}
+
 function normalizeSingleLine(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -606,22 +641,28 @@ export function createCommandHandler({ isGroupMember } = {}) {
   async function handle({ senderId, text: rawText, kind = "private" } = {}) {
     const text = stripMentions(rawText);
     const explicitPrefix = text.startsWith("/");
-    const match = text.match(/^\/?([\u4e00-\u9fa5A-Za-z]+)\s*(.*)$/s);
-    if (!match) return { handled: false };
+    const directMatch = text.match(/^\/?([\u4e00-\u9fa5A-Za-z]+)\s*(.*)$/s);
+    const directName = directMatch?.[1] ?? "";
+    let command = COMMANDS[directName];
+    let commandArgs = directMatch?.[2] ?? "";
 
-    const name = match[1];
-    const rest = match[2];
-    const command = COMMANDS[name];
     if (!command) {
-      if (!explicitPrefix) return { handled: false };
-      return { handled: true, reply: `❌ 未知指令 ${name}，发送 帮助 查看可用指令` };
+      const implicit = resolveImplicitCommand(text);
+      if (implicit) {
+        command = COMMANDS[implicit.name];
+        commandArgs = implicit.argsText;
+      } else if (!explicitPrefix) {
+        return { handled: false };
+      } else {
+        return { handled: true, reply: `❌ 未知指令 ${directName || "该消息"}，发送 帮助 查看可用指令` };
+      }
     }
 
     const throttleMessage = checkThrottle(senderId);
     if (throttleMessage) return { handled: true, reply: throttleMessage };
 
     try {
-      return { handled: true, reply: await command(senderId, splitCommandArgs(rest), kind) };
+      return { handled: true, reply: await command(senderId, splitCommandArgs(commandArgs), kind) };
     } catch (err) {
       console.error("[cmd] 指令执行失败:", err.message ?? err);
       return { handled: true, reply: `❌ 处理失败：${describeError(err)}` };

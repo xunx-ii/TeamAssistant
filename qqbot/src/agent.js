@@ -19,6 +19,7 @@ import { dirname } from "node:path";
 import { buildCustomModelsJson, config } from "./config.js";
 import { appendMessage, getRecentMessages } from "./db.js";
 import { Semaphore } from "./limiter.js";
+import { buildTurnPrompt } from "./message-context.js";
 
 /** 把 SQLite 中的历史消息格式化为 pi 可读的文本 */
 function formatHistory(messages) {
@@ -31,7 +32,7 @@ function formatHistory(messages) {
 
 /**
  * 创建机器人智能体运行时。
- * @returns {{ handleMessage(conv, text): Promise<object>, dispose(): Promise<void> }}
+ * @returns {{ handleMessage(conv, text, actor): Promise<object>, dispose(): Promise<void> }}
  */
 export async function createBotAgent() {
   // 自定义模型：把 CUSTOM_* 配置生成为 pi models.json（apiKey 走环境变量插值，不落盘），
@@ -169,7 +170,7 @@ export async function createBotAgent() {
    *   { busy: true }                 - 队列已满或排队超时
    *   { reply: string }              - 正常回复（可能为空字符串）
    */
-  async function handleMessage(conv, text) {
+  async function handleMessage(conv, text, actor = {}) {
     // 1. 用户级限速（基于到达时间判断，不受排队时长影响）
     const now = Date.now();
     const last = lastRequestAt.get(conv.id) ?? 0;
@@ -189,13 +190,14 @@ export async function createBotAgent() {
       if (!ok) return { busy: true };
       try {
         appendMessage(conv.id, "user", text);
+        const prompt = buildTurnPrompt(text, actor);
 
         let reply = "";
         entry.onText = (delta) => {
           reply += delta;
         };
         try {
-          await entry.session.prompt(text);
+          await entry.session.prompt(prompt);
         } finally {
           entry.onText = null;
         }

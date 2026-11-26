@@ -70,9 +70,11 @@ test("OneBot group messages only count as addressed when the bot is mentioned", 
     user_id: 10001,
     group_id: 1013228497,
     message_id: 1,
+    sender: { card: "群名片", nickname: "昵称" },
     message: [{ type: "at", data: { qq: "10000" } }, { type: "text", data: { text: "/帮助" } }],
   });
   assert.equal(message.senderId, "10001");
+  assert.equal(message.senderName, "群名片");
   assert.equal(message.content, "/帮助");
   assert.equal(message.mentionedSelf, true);
 });

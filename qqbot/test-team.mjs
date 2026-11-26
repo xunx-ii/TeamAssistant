@@ -183,8 +183,8 @@ try {
   check("OneBot QQ 号自动关联", member?.qq === "10001", JSON.stringify(member));
   check("装分可省略并保存为空", member?.gearScore === "", JSON.stringify(member));
 
-  result = await commands.handle({ senderId: "10001", text: "我的报名", kind: "group" });
-  check("我的报名列出当前槽位", result.reply.includes("周常一团") && result.reply.includes("张三"), result.reply);
+  result = await commands.handle({ senderId: "10001", text: "帮我看看我的报名情况", kind: "group" });
+  check("自然语言报名查询使用 OneBot QQ", result.handled && result.reply.includes("周常一团") && result.reply.includes("张三"), result.reply);
 
   result = await commands.handle({ senderId: "10001", text: "取消 周常一团 临时有事", kind: "group" });
   check("群成员取消报名", result.reply.includes("已取消") && result.reply.includes("临时有事"), result.reply);

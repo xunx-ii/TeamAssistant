@@ -74,7 +74,12 @@ async function main() {
       console.log(`[msg] ${message.kind} ${conversation.peerId} QQ=${message.senderId}: ${message.content}`);
       await send.typing(message);
 
-      const result = await agent.handleMessage(conversation, message.content);
+      const result = await agent.handleMessage(conversation, message.content, {
+        senderQq: message.senderId,
+        senderName: message.senderName,
+        kind: message.kind,
+        groupId: message.groupId,
+      });
       if (result.rateLimited) {
         await send.reply(message, `请求太频繁了，请 ${result.waitSec} 秒后再试。`);
       } else if (result.busy) {

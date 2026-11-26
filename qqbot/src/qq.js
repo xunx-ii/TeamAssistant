@@ -4,6 +4,14 @@ import { config } from "./config.js";
 const MAX_TEXT_LENGTH = 3900;
 const MESSAGE_DEDUP_LIMIT = 2_000;
 
+function normalizeSenderName(event) {
+  const sender = event?.sender ?? {};
+  return String(sender.card || sender.nickname || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 128);
+}
+
 function normalizeEvent(event) {
   if (event?.post_type !== "message" || String(event.user_id ?? "") === String(event.self_id ?? "")) return null;
   const userId = String(event.user_id ?? "").trim();
@@ -14,6 +22,7 @@ function normalizeEvent(event) {
     return {
       kind: "group",
       senderId: userId,
+      senderName: normalizeSenderName(event),
       groupId,
       content: messageToText(event.message),
       messageId: String(event.message_id ?? ""),
@@ -27,6 +36,7 @@ function normalizeEvent(event) {
     return {
       kind: "private",
       senderId: userId,
+      senderName: normalizeSenderName(event),
       groupId: "",
       content: messageToText(event.message),
       messageId: String(event.message_id ?? ""),
