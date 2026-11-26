@@ -49,6 +49,13 @@ export function getReservedSlotLabel(isLocked: boolean): string {
   return isLocked ? '⏳ 报名中' : '老板位'
 }
 
+export function getGearScoreDisplay(gearScore: string, role: string | null | undefined, compact = false): string | null {
+  const value = String(gearScore ?? '').trim()
+  if (!value) return null
+  if (role === 'DPS') return compact ? value : `装分：${value}`
+  return compact ? `${value}层` : `层数：${value}`
+}
+
 export function getFixedSlotLabel(
   slot: Pick<Slot, 'fixedRole' | 'fixedMartialArtIndex'>,
   isLocked: boolean,

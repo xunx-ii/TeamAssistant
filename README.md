@@ -11,7 +11,7 @@ TeamAssistant 已拆分为独立 React/Vite 前端和 Drogon/SQLite C++ 后端�
 
 ## Docker 快速部署
 
-镜像包含 QQ BOT、构建后的 frontend、backend-cpp 和 Nginx，仅支持 `linux/amd64`（AMD / Intel x86-64）。对外统一提供 `8080` 端口，前端通过同源 `/api/v2` 访问后端；不需要另外部署 Node、Vite 或 C++ 环境。
+镜像包含 OpenQQ 机器人客户端、构建后的 frontend、backend-cpp 和 Nginx，仅支持 `linux/amd64`（AMD / Intel x86-64）。对外统一提供 `8080` 端口，前端通过同源 `/api/v2` 访问后端；不需要另外部署 Node、Vite 或 C++ 环境。
 
 ### GitHub Actions 自动发布
 
@@ -24,7 +24,7 @@ TeamAssistant 已拆分为独立 React/Vite 前端和 Drogon/SQLite C++ 后端�
 
 镜像发布到 `ghcr.io/<仓库所有者>/<仓库名>`，地址自动转成小写。当前仓库默认地址为 `ghcr.io/xunx-ii/teamassistant:latest`，每次发布同时提供 `sha-<完整提交哈希>` 标签。工作流使用仓库自带的 `GITHUB_TOKEN`，无需额外配置 Docker Hub 账号或密钥；仓库 Actions 设置需允许工作流写入 Packages。
 
-发布前会执行前端测试、lint、生产构建、QQ BOT 客户端测试及真实 C++ 后端集成测试，然后启动容器检查静态资源、API、机器人依赖、重建容器后的数据持久化和服务退出行为。构建使用 GitHub Actions 缓存，不进行 ARM 构建或 QEMU 模拟。发布结果和镜像摘要显示在 Actions 的运行摘要中。
+发布前会执行前端测试、lint、生产构建、OpenQQ 机器人客户端测试及真实 C++ 后端集成测试，然后启动容器检查静态资源、API、机器人依赖、重建容器后的数据持久化和服务退出行为。构建使用 GitHub Actions 缓存，不进行 ARM 构建或 QEMU 模拟。发布结果和镜像摘要显示在 Actions 的运行摘要中。
 
 ### 启动服务
 
@@ -34,7 +34,9 @@ TeamAssistant 已拆分为独立 React/Vite 前端和 Drogon/SQLite C++ 后端�
 cp .env.example .env
 ```
 
-编辑 `.env`，填写 `TEAMASSISTANT_ADMIN_QQS`（管理员 QQ，多人用英文逗号分隔）、`TEAMASSISTANT_ADMIN_PASSWORD`、`QQ_APP_ID` / `QQ_APP_SECRET`，以及机器人使用的模型配置。模型相关配置参考 `qqbot/.env.example`，可以直接将 `CUSTOM_*` 或所用 provider 的 API Key 加入根目录 `.env`。
+编辑 `.env`，填写 `TEAMASSISTANT_ADMIN_QQS`（管理员 QQ，多人用英文逗号分隔）、`TEAMASSISTANT_ADMIN_PASSWORD`、OpenQQ 的正向 WebSocket 地址与 Token、`TEAMASSISTANT_BOT_TOKEN`，以及机器人使用的模型配置。QQ 群默认固定为 `1013228497`，可通过 `TEAMASSISTANT_QQ_GROUP_ID` 修改。
+
+`TEAMASSISTANT_BOT_TOKEN` 可用 `openssl rand -hex 32` 生成。它与 OpenQQ 的 `OPENQQ_ACCESS_TOKEN` 必须使用不同值。
 
 ```bash
 docker compose pull
@@ -50,21 +52,16 @@ docker compose logs -f
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u 你的GitHub用户名 --password-stdin
 ```
 
-如果使用扫码绑定，可先保留 `.env` 中的 QQ 凭据为空，运行：
+QQ 机器人通过 OpenQQ OneBot v11 正向 WebSocket 连接。机器人启动后会拉取目标群完整成员列表，定时同步并在入群、退群、群名片变化时立即刷新白名单。群成员无需绑定即可使用 QQ 号登录，退群成员会失去登录与报名权限。仅运行网站时设置 `QQBOT_ENABLED=false`；正常启用机器人时，缺少 `OPENQQ_WS_URL`、`OPENQQ_ACCESS_TOKEN` 或 `TEAMASSISTANT_BOT_TOKEN` 会让容器启动失败。
 
-```bash
-docker compose run --rm --no-deps teamassistant node /app/qqbot/src/bind.js
-docker compose up -d
-```
-
-绑定凭据会保存在同一个持久卷中。仅运行网站时设置 `QQBOT_ENABLED=false`；机器人仍保留在镜像中。正常启用机器人时，缺少 QQ 凭据会让容器启动失败。CI 不连接真实 QQ 网关或模型服务，正式部署仍需有效的机器人和模型凭据。
+报名网站的普通用户只输入 QQ 号登录。后端会同时校验会员 Token 和当前群成员白名单，非群成员会收到加入 QQ 群的提示。报名中的装分/层数可留空，空值不会在报名列表展示。
 
 ### 数据与更新
 
 服务使用非 root 用户（UID / GID `1000:1000`）运行。命名卷 `teamassistant-data` 挂载到 `/data`，包含：
 
 - `/data/backend/`：业务 SQLite 数据库、备份及管理员配置。
-- `/data/qqbot/`：机器人 SQLite 记录、扫码凭据及自动生成的模型配置。
+- `/data/qqbot/`：机器人对话记录及自动生成的模型配置。
 - `/data/home/`：机器人使用的用户目录，包括 pi 登录配置。
 
 环境变量中的管理员名单在每次启动时同步到 `/data/backend/admin.json`；运行时修改该文件会被后端自动重载，但下一次容器启动仍会以 `TEAMASSISTANT_ADMIN_QQS` 为准。密码和模型密钥通过进程环境传入。管理员登录会话持久化在业务 SQLite 中，默认有效期 168 小时，可通过 `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` 调整。也可以将自己的 `admin.json` 只读挂载到该路径，此时从 `.env` 删除 `TEAMASSISTANT_ADMIN_QQS`，密码仍可使用 `TEAMASSISTANT_ADMIN_PASSWORD` 或 `TEAMASSISTANT_ADMIN_PASSWORD_SALT` / `TEAMASSISTANT_ADMIN_PASSWORD_HASH`。镜像构建会排除本地数据库、`.env`、管理员配置和机器人凭据。

@@ -71,7 +71,6 @@ RUN apt-get update \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && mkdir -p /app/qqbot /data/backend /data/qqbot /data/home \
     && ln -s /data/qqbot /app/qqbot/data \
-    && ln -s /data/qqbot/credentials.json /app/qqbot/credentials.json \
     && chown -R node:node /data
 WORKDIR /app
 COPY --from=frontend-build /app/frontend/dist ./frontend

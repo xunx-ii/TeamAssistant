@@ -48,6 +48,32 @@ constexpr long long kSlotLockTimeoutMs = 60'000;
 long long toInt64(const Value &value, long long fallback = 0);
 Value errorJson(const std::string &message);
 
+std::string trimAscii(std::string value) {
+    const auto notSpace = [](unsigned char ch) { return std::isspace(ch) == 0; };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
+std::string boundedText(const Value &value, std::size_t maxLength) {
+    if (!value.isString()) return {};
+    std::string text = trimAscii(value.asString());
+    for (char &ch : text) {
+        if (ch == '\r' || ch == '\n' || ch == '\t') ch = ' ';
+    }
+    if (text.size() > maxLength) text.resize(maxLength);
+    return text;
+}
+
+bool constantTimeStringEquals(const std::string &left, const std::string &right) {
+    if (left.size() != right.size()) return false;
+    unsigned char difference = 0;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        difference |= static_cast<unsigned char>(left[index] ^ right[index]);
+    }
+    return difference == 0;
+}
+
 struct SlotRecord {
     bool exists = false;
     std::string teamName;
@@ -93,9 +119,19 @@ struct AccessGateConfig {
     std::string updatedBy;
 };
 
-struct CreatedAdminSession {
+struct CreatedSession {
     std::string token;
     long long expiresAtMs = 0;
+};
+
+struct GroupMemberRecord {
+    std::string qq;
+    std::string nickname;
+    std::string card;
+    std::string role;
+    bool active = false;
+    long long joinedAtMs = 0;
+    long long updatedAtMs = 0;
 };
 
 class VersionEventHub {
@@ -401,10 +437,10 @@ public:
           remove_(std::move(remove)),
           expire_(std::move(expire)) {}
 
-    CreatedAdminSession create(const std::string &qq) {
+    CreatedSession create(const std::string &qq) {
         const long long now = nowMs();
         const long long expiresAtMs = now + sessionTtlMs();
-        CreatedAdminSession created;
+        CreatedSession created;
         created.token = generateToken();
         created.expiresAtMs = expiresAtMs;
         try {
@@ -465,6 +501,96 @@ private:
     static long long sessionTtlMs() {
         long long hours = 168;
         const char *configured = std::getenv("TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS");
+        if (configured != nullptr && *configured != '\0') {
+            try {
+                const long long parsed = std::stoll(configured);
+                if (parsed >= 1 && parsed <= 720) {
+                    hours = parsed;
+                }
+            } catch (...) {
+            }
+        }
+        return hours * 60LL * 60LL * 1000LL;
+    }
+};
+
+class MemberSessions {
+public:
+    using PersistSession = std::function<void(const std::string &, const std::string &, const std::string &, long long, long long)>;
+    using LookupSession = std::function<bool(const std::string &, const std::string &, const std::string &, long long)>;
+    using RemoveSession = std::function<void(const std::string &)>;
+    using ExpireSessions = std::function<void(long long)>;
+
+    MemberSessions(PersistSession persist, LookupSession lookup, RemoveSession remove, ExpireSessions expire)
+        : persist_(std::move(persist)),
+          lookup_(std::move(lookup)),
+          remove_(std::move(remove)),
+          expire_(std::move(expire)) {}
+
+    CreatedSession create(const std::string &qq, const std::string &groupId) {
+        const long long now = nowMs();
+        const long long expiresAtMs = now + sessionTtlMs();
+        CreatedSession created;
+        created.token = generateToken();
+        created.expiresAtMs = expiresAtMs;
+        try {
+            expire_(now);
+        } catch (...) {
+        }
+        persist_(hashToken(created.token), qq, groupId, now, expiresAtMs);
+        return created;
+    }
+
+    bool isValid(const std::string &qq, const std::string &groupId, const std::string &token) {
+        if (qq.empty() || groupId.empty() || token.empty()) {
+            return false;
+        }
+        try {
+            return lookup_(hashToken(token), qq, groupId, nowMs());
+        } catch (...) {
+            return false;
+        }
+    }
+
+    void revoke(const std::string &token) {
+        if (token.empty()) {
+            return;
+        }
+        try {
+            remove_(hashToken(token));
+        } catch (...) {
+        }
+    }
+
+private:
+    PersistSession persist_;
+    LookupSession lookup_;
+    RemoveSession remove_;
+    ExpireSessions expire_;
+
+    static long long nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    static std::string generateToken() {
+        std::array<unsigned char, 32> bytes{};
+        if (!trantor::utils::secureRandomBytes(bytes.data(), bytes.size())) {
+            std::random_device device;
+            for (auto &byte : bytes) {
+                byte = static_cast<unsigned char>(device());
+            }
+        }
+        return trantor::utils::toHexString(bytes.data(), bytes.size());
+    }
+
+    static std::string hashToken(const std::string &token) {
+        return trantor::utils::toHexString(trantor::utils::sha256(token));
+    }
+
+    static long long sessionTtlMs() {
+        long long hours = 168;
+        const char *configured = std::getenv("TEAMASSISTANT_MEMBER_SESSION_TTL_HOURS");
         if (configured != nullptr && *configured != '\0') {
             try {
                 const long long parsed = std::stoll(configured);
@@ -565,6 +691,246 @@ public:
         sqlite3_bind_int64(stmt, 1, nowMsValue);
         stepDone(stmt);
         sqlite3_finalize(stmt);
+    }
+
+    void saveMemberSession(
+        const std::string &tokenHash,
+        const std::string &qq,
+        const std::string &groupId,
+        long long createdAtMs,
+        long long expiresAtMs
+    ) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "INSERT OR REPLACE INTO member_sessions(token_hash, qq, group_id, created_at_ms, expires_at_ms) "
+            "VALUES(?, ?, ?, ?, ?)",
+            &stmt);
+        bindString(stmt, 1, tokenHash);
+        bindString(stmt, 2, qq);
+        bindString(stmt, 3, groupId);
+        sqlite3_bind_int64(stmt, 4, createdAtMs);
+        sqlite3_bind_int64(stmt, 5, expiresAtMs);
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    bool isMemberSessionValid(
+        const std::string &tokenHash,
+        const std::string &qq,
+        const std::string &groupId,
+        long long nowMsValue
+    ) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "SELECT 1 FROM member_sessions s "
+            "JOIN group_members m ON m.group_id = s.group_id AND m.qq = s.qq "
+            "WHERE s.token_hash = ? AND s.qq = ? AND s.group_id = ? "
+            "AND s.expires_at_ms > ? AND m.active = 1 LIMIT 1",
+            &stmt);
+        bindString(stmt, 1, tokenHash);
+        bindString(stmt, 2, qq);
+        bindString(stmt, 3, groupId);
+        sqlite3_bind_int64(stmt, 4, nowMsValue);
+        const bool valid = sqlite3_step(stmt) == SQLITE_ROW;
+        sqlite3_finalize(stmt);
+        return valid;
+    }
+
+    void revokeMemberSession(const std::string &tokenHash) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare("DELETE FROM member_sessions WHERE token_hash = ?", &stmt);
+        bindString(stmt, 1, tokenHash);
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    void cleanExpiredMemberSessions(long long nowMsValue) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare("DELETE FROM member_sessions WHERE expires_at_ms <= ?", &stmt);
+        sqlite3_bind_int64(stmt, 1, nowMsValue);
+        stepDone(stmt);
+        sqlite3_finalize(stmt);
+    }
+
+    std::optional<GroupMemberRecord> activeGroupMember(const std::string &groupId, const std::string &qq) {
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        sqlite3_stmt *stmt = nullptr;
+        prepare(
+            "SELECT qq, nickname, card, role, active, joined_at_ms, updated_at_ms "
+            "FROM group_members WHERE group_id = ? AND qq = ? LIMIT 1",
+            &stmt);
+        bindString(stmt, 1, groupId);
+        bindString(stmt, 2, qq);
+        std::optional<GroupMemberRecord> result;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            GroupMemberRecord member;
+            member.qq = textColumn(stmt, 0);
+            member.nickname = textColumn(stmt, 1);
+            member.card = textColumn(stmt, 2);
+            member.role = textColumn(stmt, 3);
+            member.active = sqlite3_column_int(stmt, 4) != 0;
+            member.joinedAtMs = sqlite3_column_int64(stmt, 5);
+            member.updatedAtMs = sqlite3_column_int64(stmt, 6);
+            if (member.active) result = std::move(member);
+        }
+        sqlite3_finalize(stmt);
+        return result;
+    }
+
+    Value replaceGroupMembers(const std::string &groupId, const Value &members) {
+        if (groupId.empty() || !members.isArray() || members.size() > 10000) {
+            return errorJson("Invalid group members payload");
+        }
+
+        std::unordered_map<std::string, GroupMemberRecord> incoming;
+        const long long now = nowMs();
+        for (const auto &item : members) {
+            if (!item.isObject()) return errorJson("Invalid group member");
+            const std::string qq = trimAscii(item["qq"].isString() ? item["qq"].asString() : "");
+            if (qq.size() < 5 || qq.size() > 20 || !std::all_of(qq.begin(), qq.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+                return errorJson("Invalid QQ in group members payload");
+            }
+            GroupMemberRecord member;
+            member.qq = qq;
+            member.nickname = boundedText(item["nickname"], 128);
+            member.card = boundedText(item["card"], 128);
+            const std::string role = item["role"].isString() ? item["role"].asString() : "member";
+            member.role = role == "owner" || role == "admin" ? role : "member";
+            member.active = true;
+            member.joinedAtMs = std::max(0LL, toInt64(item["joinTimeMs"]));
+            member.updatedAtMs = now;
+            incoming[qq] = std::move(member);
+        }
+
+        std::lock_guard lock(mutex_);
+        ensureSchema();
+        Value result;
+        Value added(Json::arrayValue);
+        Value removed(Json::arrayValue);
+        bool initialized = false;
+        bool changed = false;
+        exec("BEGIN IMMEDIATE;");
+        try {
+            std::unordered_map<std::string, GroupMemberRecord> previous;
+            sqlite3_stmt *raw = nullptr;
+            prepare(
+                "SELECT qq, nickname, card, role, active, joined_at_ms, updated_at_ms "
+                "FROM group_members WHERE group_id = ?",
+                &raw);
+            bindString(raw, 1, groupId);
+            while (sqlite3_step(raw) == SQLITE_ROW) {
+                GroupMemberRecord member;
+                member.qq = textColumn(raw, 0);
+                member.nickname = textColumn(raw, 1);
+                member.card = textColumn(raw, 2);
+                member.role = textColumn(raw, 3);
+                member.active = sqlite3_column_int(raw, 4) != 0;
+                member.joinedAtMs = sqlite3_column_int64(raw, 5);
+                member.updatedAtMs = sqlite3_column_int64(raw, 6);
+                if (member.active) previous[member.qq] = std::move(member);
+            }
+            sqlite3_finalize(raw);
+            initialized = previous.empty();
+
+            prepare("UPDATE group_members SET active = 0, updated_at_ms = ? WHERE group_id = ?", &raw);
+            sqlite3_bind_int64(raw, 1, now);
+            bindString(raw, 2, groupId);
+            stepDone(raw);
+            sqlite3_finalize(raw);
+
+            for (const auto &[qq, member] : incoming) {
+                const auto prior = previous.find(qq);
+                const bool isNew = prior == previous.end();
+                const bool differs = isNew || prior->second.nickname != member.nickname ||
+                    prior->second.card != member.card || prior->second.role != member.role;
+                if (differs) changed = true;
+                prepare(
+                    "INSERT INTO group_members(group_id, qq, nickname, card, role, active, joined_at_ms, updated_at_ms) "
+                    "VALUES(?, ?, ?, ?, ?, 1, ?, ?) "
+                    "ON CONFLICT(group_id, qq) DO UPDATE SET nickname = excluded.nickname, "
+                    "card = excluded.card, role = excluded.role, active = 1, "
+                    "joined_at_ms = CASE WHEN group_members.joined_at_ms > 0 THEN group_members.joined_at_ms ELSE excluded.joined_at_ms END, "
+                    "updated_at_ms = excluded.updated_at_ms",
+                    &raw);
+                bindString(raw, 1, groupId);
+                bindString(raw, 2, qq);
+                bindString(raw, 3, member.nickname);
+                bindString(raw, 4, member.card);
+                bindString(raw, 5, member.role);
+                sqlite3_bind_int64(raw, 6, member.joinedAtMs);
+                sqlite3_bind_int64(raw, 7, now);
+                stepDone(raw);
+                sqlite3_finalize(raw);
+
+                if (isNew) {
+                    Value entry;
+                    entry["qq"] = qq;
+                    entry["nickname"] = member.nickname;
+                    entry["card"] = member.card;
+                    added.append(entry);
+                }
+
+                const std::string profileName = member.card.empty()
+                    ? (member.nickname.empty() ? qq : member.nickname)
+                    : member.card;
+                if (!profileName.empty()) {
+                    std::string existingName;
+                    prepare("SELECT nickname FROM user_profiles WHERE qq = ?", &raw);
+                    bindString(raw, 1, qq);
+                    if (sqlite3_step(raw) == SQLITE_ROW) existingName = textColumn(raw, 0);
+                    sqlite3_finalize(raw);
+                    if (existingName != profileName) {
+                        prepare(
+                            "INSERT INTO user_profiles(qq, nickname) VALUES(?, ?) "
+                            "ON CONFLICT(qq) DO UPDATE SET nickname = excluded.nickname",
+                            &raw);
+                        bindString(raw, 1, qq);
+                        bindString(raw, 2, profileName);
+                        stepDone(raw);
+                        sqlite3_finalize(raw);
+                        changed = true;
+                    }
+                }
+            }
+
+            for (const auto &[qq, member] : previous) {
+                if (incoming.contains(qq)) continue;
+                changed = true;
+                Value entry;
+                entry["qq"] = qq;
+                entry["nickname"] = member.nickname;
+                entry["card"] = member.card;
+                removed.append(entry);
+                prepare("DELETE FROM member_sessions WHERE group_id = ? AND qq = ?", &raw);
+                bindString(raw, 1, groupId);
+                bindString(raw, 2, qq);
+                stepDone(raw);
+                sqlite3_finalize(raw);
+            }
+
+            if (initialized && !incoming.empty()) changed = true;
+            if (changed) bumpDataVersionAndClearPatchesUnlocked();
+            exec("COMMIT;");
+            result["ok"] = true;
+            result["initialized"] = initialized;
+            result["changed"] = changed;
+            result["groupSize"] = static_cast<Json::UInt64>(incoming.size());
+            result["added"] = std::move(added);
+            result["removed"] = std::move(removed);
+        } catch (...) {
+            exec("ROLLBACK;");
+            throw;
+        }
+        return result;
     }
 
     void exec(const std::string &sql) {
@@ -4274,7 +4640,9 @@ void addCorsHeaders(const HttpRequestPtr &request, const HttpResponsePtr &respon
     const auto &origin = request->getHeader("Origin");
     response->addHeader("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
     response->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    response->addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    response->addHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, X-Requested-With, X-TeamAssistant-Member-Token, X-TeamAssistant-Bot-Token");
     response->addHeader("Access-Control-Max-Age", "86400");
     response->addHeader("Vary", "Origin");
 }
@@ -4308,6 +4676,19 @@ int main() {
     const std::filesystem::path adminPath = std::getenv("TEAMASSISTANT_ADMIN_CONFIG") != nullptr
         ? std::getenv("TEAMASSISTANT_ADMIN_CONFIG")
         : "backend-cpp/admin.json";
+    const std::string configuredGroupId = std::getenv("TEAMASSISTANT_QQ_GROUP_ID") != nullptr
+        ? trimAscii(std::getenv("TEAMASSISTANT_QQ_GROUP_ID"))
+        : "1013228497";
+    if (configuredGroupId.size() < 5 || configuredGroupId.size() > 20 ||
+        !std::all_of(configuredGroupId.begin(), configuredGroupId.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+        throw std::runtime_error("TEAMASSISTANT_QQ_GROUP_ID must be a QQ group number");
+    }
+    const std::string configuredBotToken = std::getenv("TEAMASSISTANT_BOT_TOKEN") != nullptr
+        ? trimAscii(std::getenv("TEAMASSISTANT_BOT_TOKEN"))
+        : "";
+    if (!configuredBotToken.empty() && configuredBotToken.size() < 16) {
+        throw std::runtime_error("TEAMASSISTANT_BOT_TOKEN must contain at least 16 characters");
+    }
 
     auto db = std::make_shared<SqliteDb>(dbPath);
     auto admins = std::make_shared<AdminConfig>(adminPath);
@@ -4323,6 +4704,19 @@ int main() {
         },
         [db](long long nowMsValue) {
             db->cleanExpiredAdminSessions(nowMsValue);
+        });
+    auto memberSessions = std::make_shared<MemberSessions>(
+        [db](const std::string &tokenHash, const std::string &qq, const std::string &groupId, long long createdAtMs, long long expiresAtMs) {
+            db->saveMemberSession(tokenHash, qq, groupId, createdAtMs, expiresAtMs);
+        },
+        [db](const std::string &tokenHash, const std::string &qq, const std::string &groupId, long long nowMsValue) {
+            return db->isMemberSessionValid(tokenHash, qq, groupId, nowMsValue);
+        },
+        [db](const std::string &tokenHash) {
+            db->revokeMemberSession(tokenHash);
+        },
+        [db](long long nowMsValue) {
+            db->cleanExpiredMemberSessions(nowMsValue);
         });
     auto events = std::make_shared<VersionEventHub>();
     setupCors();
@@ -4417,6 +4811,69 @@ int main() {
         callback(jsonResponse(access, statusForResult(access)));
         return false;
     };
+    auto memberTokenFromRequest = [](const HttpRequestPtr &request, const Value *body = nullptr) {
+        if (body != nullptr && (*body)["memberToken"].isString()) {
+            return (*body)["memberToken"].asString();
+        }
+        const auto header = request->getHeader("X-TeamAssistant-Member-Token");
+        return header.empty() ? request->getParameter("memberToken") : header;
+    };
+    auto botTokenFromRequest = [](const HttpRequestPtr &request) {
+        const auto header = request->getHeader("X-TeamAssistant-Bot-Token");
+        return header.empty() ? request->getParameter("botToken") : header;
+    };
+    auto isBotRequest = [configuredBotToken, botTokenFromRequest](const HttpRequestPtr &request) {
+        return !configuredBotToken.empty() && constantTimeStringEquals(configuredBotToken, botTokenFromRequest(request));
+    };
+    auto isMemberRequest = [db, memberSessions, configuredGroupId, memberTokenFromRequest](
+        const HttpRequestPtr &request,
+        const std::string &qq,
+        const Value *body = nullptr
+    ) {
+        return db->activeGroupMember(configuredGroupId, qq).has_value() &&
+            memberSessions->isValid(qq, configuredGroupId, memberTokenFromRequest(request, body));
+    };
+    auto requestActorQq = [](const HttpRequestPtr &request, const Value *body = nullptr) {
+        auto qq = request->getParameter("actorQq");
+        if (qq.empty()) qq = request->getParameter("qq");
+        if (qq.empty() && body != nullptr && (*body)["actorQq"].isString()) qq = (*body)["actorQq"].asString();
+        if (qq.empty() && body != nullptr && (*body)["qq"].isString()) qq = (*body)["qq"].asString();
+        if (qq.empty() && body != nullptr && (*body)["member"].isObject() && (*body)["member"]["qq"].isString()) {
+            qq = (*body)["member"]["qq"].asString();
+        }
+        return trimAscii(qq);
+    };
+    auto unauthorizedResponse = [configuredGroupId](bool groupMember) {
+        Value result;
+        result["ok"] = false;
+        result["reason"] = groupMember ? "memberSessionRequired" : "notInGroup";
+        result["error"] = groupMember
+            ? "登录状态已失效，请使用 QQ 号重新登录"
+            : "请先加入 QQ 群 " + configuredGroupId + " 后再登录";
+        return result;
+    };
+    drogon::app().registerSyncAdvice([
+        db, admins, adminSessions, memberSessions, configuredGroupId,
+        adminTokenFromRequest, isBotRequest, isMemberRequest, requestActorQq, unauthorizedResponse
+    ](const HttpRequestPtr &request) -> HttpResponsePtr {
+        if (!isApiRequest(request) || request->method() == drogon::Options) return nullptr;
+        const std::string path = request->path();
+        if (path == "/api/v2/version" || path == "/api/v2/admin/check" ||
+            path == "/api/v2/admin/login" || path == "/api/v2/auth/qq/login" ||
+            path == "/api/v2/auth/qq/session" || path == "/api/v2/auth/qq/logout" ||
+            path == "/api/v2/events") {
+            return nullptr;
+        }
+        if (isBotRequest(request)) return nullptr;
+        const auto json = request->getJsonObject();
+        const Value *body = json.get();
+        const std::string qq = requestActorQq(request, body);
+        const bool activeMember = db->activeGroupMember(configuredGroupId, qq).has_value();
+        const bool admin = admins->isAdmin(qq) && activeMember &&
+            adminSessions->isValid(qq, adminTokenFromRequest(request, body));
+        if (admin || isMemberRequest(request, qq, body)) return nullptr;
+        return jsonResponse(unauthorizedResponse(activeMember), drogon::k401Unauthorized);
+    });
     drogon::app().getLoop()->runEvery(5.0, [db, publishVersion]() {
         if (db->expireRuntimeLocks()) {
             publishVersion();
@@ -4437,8 +4894,9 @@ int main() {
             std::chrono::system_clock::now().time_since_epoch()).count();
         try {
             db->cleanExpiredAdminSessions(now);
+            db->cleanExpiredMemberSessions(now);
         } catch (const std::exception &error) {
-            std::cerr << "[admin-session] cleanup failed: " << error.what() << "\n";
+            std::cerr << "[session] cleanup failed: " << error.what() << "\n";
         }
     });
     drogon::app().getLoop()->runEvery(kAutomaticBackupIntervalSeconds, [db]() {
@@ -4459,15 +4917,122 @@ int main() {
         },
         {drogon::Get});
 
+    drogon::app().registerHandler("/api/v2/auth/qq/login",
+        [db, memberSessions, configuredGroupId](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            if (json == nullptr) {
+                callback(jsonResponse(errorJson("Missing QQ login body"), drogon::k400BadRequest));
+                return;
+            }
+            const std::string qq = trimAscii((*json)["qq"].isString() ? (*json)["qq"].asString() : "");
+            if (qq.size() < 5 || qq.size() > 20 ||
+                !std::all_of(qq.begin(), qq.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+                callback(jsonResponse(errorJson("请输入有效的 QQ 号"), drogon::k400BadRequest));
+                return;
+            }
+            try {
+                const auto member = db->activeGroupMember(configuredGroupId, qq);
+                if (!member.has_value()) {
+                    Value denied;
+                    denied["ok"] = false;
+                    denied["reason"] = "notInGroup";
+                    denied["error"] = "你的 QQ 号不在指定群 " + configuredGroupId + " 中，请先加入 QQ 群后再登录";
+                    denied["groupId"] = configuredGroupId;
+                    callback(jsonResponse(denied, drogon::k403Forbidden));
+                    return;
+                }
+                const auto session = memberSessions->create(qq, configuredGroupId);
+                Value result;
+                result["ok"] = true;
+                result["qq"] = qq;
+                result["nickname"] = member->card.empty()
+                    ? (member->nickname.empty() ? qq : member->nickname)
+                    : member->card;
+                result["groupId"] = configuredGroupId;
+                result["memberToken"] = session.token;
+                result["expiresAtMs"] = static_cast<Json::Int64>(session.expiresAtMs);
+                callback(jsonResponse(result));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler("/api/v2/auth/qq/session",
+        [db, isMemberRequest, configuredGroupId](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const std::string qq = trimAscii(request->getParameter("qq"));
+            try {
+                const auto member = db->activeGroupMember(configuredGroupId, qq);
+                const bool valid = member.has_value() && isMemberRequest(request, qq);
+                Value result;
+                result["ok"] = valid;
+                result["qq"] = qq;
+                result["groupId"] = configuredGroupId;
+                if (valid) {
+                    result["nickname"] = member->card.empty()
+                        ? (member->nickname.empty() ? qq : member->nickname)
+                        : member->card;
+                } else {
+                    result["reason"] = member.has_value() ? "memberSessionRequired" : "notInGroup";
+                    result["error"] = member.has_value()
+                        ? "登录状态已失效，请重新登录"
+                        : "你的 QQ 号不在指定群中，请先加入 QQ 群 " + configuredGroupId;
+                }
+                callback(jsonResponse(result, valid ? drogon::k200OK : drogon::k401Unauthorized));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Get});
+
+    drogon::app().registerHandler("/api/v2/auth/qq/logout",
+        [memberSessions, memberTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+            const auto json = request->getJsonObject();
+            memberSessions->revoke(memberTokenFromRequest(request, json.get()));
+            Value result;
+            result["ok"] = true;
+            callback(jsonResponse(result));
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler("/api/v2/internal/group-members/sync",
+        [db, isBotRequest, respondOkMutation, forbiddenResponse, configuredGroupId, configuredBotToken](
+            const HttpRequestPtr &request,
+            std::function<void(const HttpResponsePtr &)> &&callback
+        ) {
+            if (configuredBotToken.empty() || !isBotRequest(request)) {
+                callback(jsonResponse(forbiddenResponse(), drogon::k403Forbidden));
+                return;
+            }
+            const auto json = request->getJsonObject();
+            if (json == nullptr || !(*json)["members"].isArray()) {
+                callback(jsonResponse(errorJson("Missing group members"), drogon::k400BadRequest));
+                return;
+            }
+            const std::string groupId = trimAscii((*json)["groupId"].isString() ? (*json)["groupId"].asString() : "");
+            if (groupId != configuredGroupId) {
+                callback(jsonResponse(errorJson("Group ID does not match configured QQ group"), drogon::k400BadRequest));
+                return;
+            }
+            try {
+                respondOkMutation(std::move(callback), db->replaceGroupMembers(groupId, (*json)["members"]));
+            } catch (const std::exception &error) {
+                callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));
+            }
+        },
+        {drogon::Post});
+
     drogon::app().registerHandler("/api/v2/admin/check",
-        [admins, adminSessions, adminTokenFromRequest](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [db, admins, adminSessions, adminTokenFromRequest, configuredGroupId](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
             try {
                 const std::string actorQq = request->getParameter("actorQq");
                 const bool configuredAdmin = admins->isAdmin(actorQq);
+                const bool inGroup = db->activeGroupMember(configuredGroupId, actorQq).has_value();
                 Value result;
                 result["ok"] = true;
                 result["isAdmin"] = configuredAdmin;
-                result["sessionValid"] = configuredAdmin && adminSessions->isValid(actorQq, adminTokenFromRequest(request));
+                result["inGroup"] = inGroup;
+                result["sessionValid"] = configuredAdmin && inGroup && adminSessions->isValid(actorQq, adminTokenFromRequest(request));
                 result["passwordConfigured"] = admins->hasPassword();
                 callback(jsonResponse(result));
             } catch (const std::exception &error) {
@@ -4477,14 +5042,27 @@ int main() {
         {drogon::Get});
 
     drogon::app().registerHandler("/api/v2/admin/login",
-        [admins, adminSessions](const HttpRequestPtr &request, std::function<void(const HttpResponsePtr &)> &&callback) {
+        [admins, adminSessions, memberSessions, db, configuredGroupId, isBotRequest](
+            const HttpRequestPtr &request,
+            std::function<void(const HttpResponsePtr &)> &&callback
+        ) {
             const auto json = request->getJsonObject();
             if (json == nullptr) {
                 callback(jsonResponse(errorJson("Missing admin login body"), drogon::k400BadRequest));
                 return;
             }
-            const std::string actorQq = (*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "";
+            const std::string actorQq = trimAscii((*json)["actorQq"].isString() ? (*json)["actorQq"].asString() : "");
             const std::string password = (*json)["password"].isString() ? (*json)["password"].asString() : "";
+            const auto member = db->activeGroupMember(configuredGroupId, actorQq);
+            if (!member.has_value() && !isBotRequest(request)) {
+                Value denied;
+                denied["ok"] = false;
+                denied["reason"] = "notInGroup";
+                denied["error"] = "管理员 QQ 号不在指定群中，请先加入 QQ 群 " + configuredGroupId;
+                denied["groupId"] = configuredGroupId;
+                callback(jsonResponse(denied, drogon::k403Forbidden));
+                return;
+            }
             if (!admins->isAdmin(actorQq)) {
                 Value forbidden;
                 forbidden["ok"] = false;
@@ -4511,12 +5089,20 @@ int main() {
             }
 
             try {
-                const auto session = adminSessions->create(actorQq);
+                const auto adminSession = adminSessions->create(actorQq);
+                const auto memberSession = memberSessions->create(actorQq, configuredGroupId);
                 Value result;
                 result["ok"] = true;
                 result["isAdmin"] = true;
-                result["adminToken"] = session.token;
-                result["expiresAtMs"] = static_cast<Json::Int64>(session.expiresAtMs);
+                result["qq"] = actorQq;
+                result["nickname"] = member.has_value()
+                    ? (member->card.empty() ? (member->nickname.empty() ? actorQq : member->nickname) : member->card)
+                    : actorQq;
+                result["adminToken"] = adminSession.token;
+                result["expiresAtMs"] = static_cast<Json::Int64>(adminSession.expiresAtMs);
+                result["memberToken"] = memberSession.token;
+                result["memberExpiresAtMs"] = static_cast<Json::Int64>(memberSession.expiresAtMs);
+                result["groupId"] = configuredGroupId;
                 callback(jsonResponse(result));
             } catch (const std::exception &error) {
                 callback(jsonResponse(errorJson(error.what()), drogon::k500InternalServerError));

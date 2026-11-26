@@ -176,6 +176,21 @@ export interface AdminLoginResult {
   isAdmin?: boolean
   adminToken?: string
   expiresAtMs?: number
+  memberToken?: string
+  memberExpiresAtMs?: number
+  nickname?: string
+  groupId?: string
+  reason?: string
+  error?: string
+}
+
+export interface MemberLoginResult {
+  ok: boolean
+  qq?: string
+  nickname?: string
+  groupId?: string
+  memberToken?: string
+  expiresAtMs?: number
   reason?: string
   error?: string
 }
@@ -183,6 +198,7 @@ export interface AdminLoginResult {
 export interface AdminCheckResult {
   ok: boolean
   isAdmin?: boolean
+  inGroup?: boolean
   sessionValid?: boolean
   passwordConfigured?: boolean
   reason?: string
@@ -197,6 +213,7 @@ type BodyParseError = typeof HTML_RESPONSE_ERROR | typeof NON_JSON_RESPONSE_ERRO
 
 let inviteToken = ''
 let adminToken = ''
+let memberToken = ''
 
 export function getAdminToken() {
   return adminToken
@@ -208,6 +225,18 @@ export function setAdminToken(token: string | null | undefined) {
 
 export function clearAdminToken() {
   adminToken = ''
+}
+
+export function getMemberToken() {
+  return memberToken
+}
+
+export function setMemberToken(token: string | null | undefined) {
+  memberToken = token ?? ''
+}
+
+export function clearMemberToken() {
+  memberToken = ''
 }
 
 function readInviteTokenFromUrl() {
@@ -349,13 +378,20 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
   | { ok: true, data: T }
   | { ok: false, kind: 'parse' | 'network'; error?: BodyParseError }
 > {
+  const authenticatedInit = withMemberHeaders(init)
   try {
-    const resp = await fetch(input, init)
+    const resp = await fetch(input, authenticatedInit)
     const parsed = await readJsonBody<T>(resp)
     return parsed.ok ? parsed : { ok: false, kind: 'parse', error: parsed.error as BodyParseError }
   } catch {
     return { ok: false, kind: 'network' }
   }
+}
+
+function withMemberHeaders(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  if (memberToken) headers.set('X-TeamAssistant-Member-Token', memberToken)
+  return { ...init, headers }
 }
 
 function shouldTryDirectApi(result: { ok: false, kind: 'parse' | 'network'; error?: BodyParseError }) {
@@ -402,8 +438,9 @@ async function requestResult<T extends { ok: boolean }>(input: RequestInfo | URL
 }
 
 async function requestBlob(input: RequestInfo | URL, init?: RequestInit): Promise<BackupDownloadResult> {
+  const authenticatedInit = withMemberHeaders(init)
   const fetchBlob = async (target: RequestInfo | URL) => {
-    const response = await fetch(target, init)
+    const response = await fetch(target, authenticatedInit)
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
     if (contentType.includes('text/html')) {
       return { ok: false as const, kind: 'html' as const, error: HTML_RESPONSE_ERROR }
@@ -762,6 +799,25 @@ export async function loginAdmin(actorQq: string, password: string): Promise<Adm
     setAdminToken(result.adminToken)
   }
   return result
+}
+
+export async function loginQQ(actorQq: string): Promise<MemberLoginResult> {
+  clearMemberToken()
+  const result = await requestResult<MemberLoginResult>(`${API}/auth/qq/login`, jsonRequest('POST', { qq: actorQq }))
+  if (result.ok && result.memberToken) setMemberToken(result.memberToken)
+  return result
+}
+
+export async function checkQQSession(actorQq: string, signal?: AbortSignal): Promise<MemberLoginResult> {
+  const params = new URLSearchParams({ qq: actorQq })
+  return requestResult<MemberLoginResult>(`${API}/auth/qq/session?${params}`, { ...noCache, signal })
+}
+
+export async function logoutQQ(): Promise<boolean> {
+  const tokenAtStart = memberToken
+  const result = await requestResult<{ ok: boolean }>(`${API}/auth/qq/logout`, jsonRequest('POST', {}))
+  if (memberToken === tokenAtStart) clearMemberToken()
+  return result.ok
 }
 
 export async function checkAdminQq(actorQq: string): Promise<AdminCheckResult> {

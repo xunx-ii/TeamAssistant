@@ -354,6 +354,33 @@ test('admin login stores returned token for later requests', async () => {
   assert.equal(calls[1].input, '/api/v2/sync?dataVersion=1&lockVersion=1&qq=10001&adminToken=stored-admin-token')
 })
 
+test('QQ-only login stores member session token for protected requests', async () => {
+  const calls = []
+  await withMockedFetch(async (input, init = {}) => {
+    calls.push({ input: String(input), init })
+    if (String(input).endsWith('/auth/qq/login')) {
+      return createJsonResponse({
+        ok: true,
+        qq: '10001',
+        nickname: '张三',
+        groupId: '1013228497',
+        memberToken: 'member-session-token-abcdefghijklmnopqrstuvwxyz',
+        expiresAtMs: 1777770000000,
+      })
+    }
+    return createJsonResponse({ ok: true, dataVersion: 2, lockVersion: 3, dataChanged: false, lockChanged: false })
+  }, async () => {
+    const mod = await import(`../src/api.ts?case=${Date.now()}-member-login`)
+    const login = await mod.loginQQ('10001')
+    assert.equal(login.ok, true)
+    assert.equal(mod.getMemberToken(), login.memberToken)
+    await mod.fetchServerChanges(1, 1, '10001')
+  })
+
+  assert.equal(calls[0].input, '/api/v2/auth/qq/login')
+  assert.equal(new Headers(calls[1].init.headers).get('X-TeamAssistant-Member-Token'), 'member-session-token-abcdefghijklmnopqrstuvwxyz')
+})
+
 test('admin logout cannot clear a newer login token', async () => {
   let mod
   await withMockedFetch(async () => {
@@ -523,7 +550,7 @@ test('backup API helpers use the backup endpoints', async () => {
   assert.equal(calls[4].input, '/api/v2/backups/backup-2026-01-01T00-00-00-000Z.json.gz')
   assert.equal(calls[4].init.method, 'DELETE')
   assert.equal(calls[5].input, '/api/v2/backups/import')
-  assert.equal(calls[5].init.headers['Content-Type'], 'application/octet-stream')
+  assert.equal(new Headers(calls[5].init.headers).get('Content-Type'), 'application/octet-stream')
 })
 
 test('downloadBackup falls back to direct backend when proxy returns html', async () => {

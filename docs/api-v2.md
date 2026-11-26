@@ -50,6 +50,9 @@ npm run dev
 | `TEAMASSISTANT_ADMIN_PASSWORD_SALT` | 空 | 管理员密码盐值 |
 | `TEAMASSISTANT_ADMIN_PASSWORD_HASH` | 空 | `SHA-256(salt + password)` 的大写十六进制值 |
 | `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` | `168` | 管理员登录有效期，范围 1 到 720 小时 |
+| `TEAMASSISTANT_MEMBER_SESSION_TTL_HOURS` | `168` | 群成员登录有效期，范围 1 到 720 小时 |
+| `TEAMASSISTANT_QQ_GROUP_ID` | `1013228497` | 唯一允许登录和报名的 QQ 群 |
+| `TEAMASSISTANT_BOT_TOKEN` | 空 | OpenQQ 机器人同步群成员使用的内部服务令牌 |
 
 例如：
 
@@ -84,7 +87,7 @@ node scripts/admin-password-hash.mjs "请替换为强密码"
 - 槽位下标 `slotIndex` 范围为 `0` 到 `24`，每个团队固定 25 个槽位。
 - 武学下标 `martialArtIndex` 为前端武学数组的 0-based 下标，范围为 `0` 到 `31`。
 - 成功响应通常包含 `ok: true`；失败响应包含 `ok: false`，并尽量提供稳定的 `reason`。
-- API 支持 CORS，并允许 `Content-Type`、`Authorization`、`X-Requested-With` 请求头。
+- API 支持 CORS，并允许 `Content-Type`、`Authorization`、`X-Requested-With`、`X-TeamAssistant-Member-Token` 和 `X-TeamAssistant-Bot-Token` 请求头。
 
 管理员 Token 可以放在以下任意位置：
 
@@ -117,7 +120,17 @@ Authorization: Bearer <adminToken>
 - `lockVersion`：当前进程内存锁版本，后端重启后会重新从 1 开始。
 - 槽位锁和运行时团队锁都只存在内存中，重启后不会恢复。
 
-### 2.2 管理员权限
+### 2.2 群成员权限
+
+除健康检查、管理员检查、管理员登录和会员登录外，所有 API 都要求以下条件之一：
+
+1. 有效的会员 Token，并且 QQ 仍在 `TEAMASSISTANT_QQ_GROUP_ID` 对应群内；
+2. 有效的管理员 Token，并且管理员 QQ 仍在群内；
+3. OpenQQ 机器人携带正确的 `TEAMASSISTANT_BOT_TOKEN`。
+
+会员 Token 放在 `X-TeamAssistant-Member-Token` 请求头。Token 只以哈希形式保存，默认有效 168 小时。群成员退出后，会员会话立即失效，无需等待 Token 到期。
+
+### 2.3 管理员权限
 
 管理员请求必须同时满足：
 
@@ -126,7 +139,7 @@ Authorization: Bearer <adminToken>
 
 管理员登录 Token 默认有效期为 168 小时（7 天），可以通过 `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` 调整。Token 只以哈希形式保存在 SQLite 中，后端或容器重启后仍然有效；管理员主动退出时立即失效。
 
-### 2.3 本人或管理员权限
+### 2.4 本人或管理员权限
 
 以下类型的接口允许目标用户本人操作，也允许管理员代操作：
 
@@ -136,7 +149,7 @@ Authorization: Bearer <adminToken>
 
 本人操作时，请保证请求体的 `actorQq` 与路径中的目标 QQ 一致。管理员代操作时，`actorQq` 应填写管理员 QQ，并携带有效 Token。
 
-### 2.4 团队可见范围
+### 2.5 团队可见范围
 
 每个团队通过 `config.publicSignup` 和 `config.publicAtMs` 设置公开报名。普通用户的可见条件为：
 
@@ -208,7 +221,7 @@ publicSignup && 当前时间 >= publicAtMs
 |---|---|---|
 | `qq` | string | 成员 QQ，保存时必填 |
 | `martialArtIndex` | string | 武学下标，服务端用于角色限制校验 |
-| `gearScore` | string | 装分 |
+| `gearScore` | string | 装分/层数，可留空；空值不在报名列表展示 |
 | `characterId` | string | 角色标识或角色名 |
 | `note` | string | 备注 |
 | `hasOrangeWeapon` | boolean | 是否有橙武，可选 |
@@ -238,7 +251,59 @@ publicSignup && 当前时间 >= publicAtMs
 
 ## 4. 管理员登录和门禁 API
 
-### 4.1 检查管理员 QQ
+### 4.1 QQ 群成员登录
+
+```http
+POST /api/v2/auth/qq/login
+Content-Type: application/json
+```
+
+```json
+{
+  "qq": "10001"
+}
+```
+
+仅允许目标 QQ 群当前成员登录。成功时返回会员 Token：
+
+```json
+{
+  "ok": true,
+  "qq": "10001",
+  "nickname": "群昵称",
+  "groupId": "1013228497",
+  "memberToken": "随机 Token",
+  "expiresAtMs": 1780000000000
+}
+```
+
+非群成员返回 HTTP 403，`reason` 为 `notInGroup`。恢复会话使用：
+
+```http
+GET /api/v2/auth/qq/session?qq=10001
+X-TeamAssistant-Member-Token: <memberToken>
+```
+
+退出使用 `POST /api/v2/auth/qq/logout`。OpenQQ 机器人通过以下受保护接口原子同步完整成员列表：
+
+```http
+POST /api/v2/internal/group-members/sync
+X-TeamAssistant-Bot-Token: <TEAMASSISTANT_BOT_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "groupId": "1013228497",
+  "members": [
+    { "qq": "10001", "nickname": "张三", "card": "队长", "role": "owner", "joinTimeMs": 1780000000000 }
+  ]
+}
+```
+
+响应返回 `initialized`、`changed`、`groupSize`、`added` 和 `removed`，机器人根据 `added` / `removed` 在群内发送变动通知。
+
+### 4.2 检查管理员 QQ
 
 ```http
 GET /api/v2/admin/check?actorQq=89906502
@@ -250,6 +315,7 @@ GET /api/v2/admin/check?actorQq=89906502
 {
   "ok": true,
   "isAdmin": true,
+  "inGroup": true,
   "sessionValid": false,
   "passwordConfigured": true
 }
@@ -257,7 +323,7 @@ GET /api/v2/admin/check?actorQq=89906502
 
 `isAdmin` 表示 QQ 是否在管理员名单中；`sessionValid` 表示请求携带的 `adminToken` 是否仍有效。未携带 Token 时两者分别为 `true` 和 `false`。
 
-### 4.2 管理员登录
+### 4.3 管理员登录
 
 ```http
 POST /api/v2/admin/login
@@ -289,8 +355,9 @@ Content-Type: application/json
 | `forbidden` | QQ 不在管理员列表中 |
 | `adminPasswordMissing` | 后端没有配置密码 |
 | `invalidPassword` | 密码错误 |
+| `notInGroup` | 管理员 QQ 不在目标群，或群成员白名单尚未同步 |
 
-### 4.3 管理员退出
+### 4.4 管理员退出
 
 ```http
 POST /api/v2/admin/logout
@@ -304,7 +371,7 @@ Content-Type: application/json
 }
 ```
 
-### 4.4 查询门禁
+### 4.5 查询门禁
 
 ```http
 GET /api/v2/access-gate?actorQq=89906502
@@ -327,7 +394,7 @@ Authorization: Bearer <adminToken>
 }
 ```
 
-### 4.5 批量设置已有团队的公开时间（兼容接口）
+### 4.6 批量设置已有团队的公开时间（兼容接口）
 
 ```http
 PUT /api/v2/access-gate
@@ -344,7 +411,7 @@ Content-Type: application/json
 
 该接口仅为旧客户端保留，会把当前所有活动团队设为 `publicSignup: true` 并使用指定的公开时间，不影响后续新建团队。新客户端应在创建团队时写入 `config.publicSignup` / `config.publicAtMs`，或使用 `PATCH /api/v2/teams/{teamId}` 单独更新。
 
-### 4.6 重新生成邀请码
+### 4.7 重新生成邀请码
 
 ```http
 POST /api/v2/access-gate/token
@@ -372,6 +439,7 @@ GET /api/v2/version
 
 ```http
 GET /api/v2/bootstrap?qq=10001&inviteToken=<inviteToken>
+X-TeamAssistant-Member-Token: <memberToken>
 ```
 
 响应包含：
@@ -402,7 +470,7 @@ GET /api/v2/bootstrap?qq=10001&inviteToken=<inviteToken>
 }
 ```
 
-`bootstrap` 返回 HTTP 200，只包含当前请求有权查看的团队及相关历史；没有可见团队时返回空列表。日志及取消记录的数量和截断标志也按可见范围计算。`accessGate` 保留兼容字段，页面本身始终开放，公开时间以每个团队的配置为准。
+`bootstrap` 返回 HTTP 200，只包含当前请求有权查看的团队及相关历史；没有可见团队时返回空列表。非群成员或会员会话失效时返回 HTTP 401。日志及取消记录的数量和截断标志也按可见范围计算。`accessGate` 保留兼容字段。
 
 ### 5.3 增量同步
 

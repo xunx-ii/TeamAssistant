@@ -27,8 +27,8 @@ try {
   }
   if (hash && !/^[a-f\d]{64}$/i.test(hash)) throw new Error('管理员密码哈希必须是 64 位十六进制 SHA-256')
 
-  if (process.env.QQBOT_ENABLED === 'true' && !config.hasCredentials()) {
-    throw new Error('请设置 QQ_APP_ID / QQ_APP_SECRET，或先扫码绑定；仅运行网站时设置 QQBOT_ENABLED=false')
+  if (process.env.QQBOT_ENABLED === 'true' && !config.hasBotCredentials()) {
+    throw new Error('请设置 OPENQQ_WS_URL、OPENQQ_ACCESS_TOKEN、TEAMASSISTANT_BOT_TOKEN；仅运行网站时设置 QQBOT_ENABLED=false')
   }
 
   // 环境变量只更新管理员名单；密码与机器人密钥始终由进程环境读取。

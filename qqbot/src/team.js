@@ -56,9 +56,9 @@ function buildMember(qq, { martialArtIndex = "", gearScore = "", characterId = "
 
 /**
  * TeamAssistant API 客户端。
- * @param {object} opts - { baseUrl, inviteToken, timeoutMs }，超时默认 10 秒，包含读取响应体。
+ * @param {object} opts - { baseUrl, inviteToken, botToken, timeoutMs }，超时默认 10 秒，包含读取响应体。
  */
-export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = config.teamInviteToken, timeoutMs = 10_000 } = {}) {
+export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = config.teamInviteToken, botToken = config.teamBotToken, timeoutMs = 10_000 } = {}) {
   const apiBase = baseUrl.replace(/\/+$/, "");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
     throw new RangeError("timeoutMs must be a positive finite duration");
@@ -75,7 +75,10 @@ export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = c
     try {
       const res = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(botToken ? { "X-TeamAssistant-Bot-Token": botToken } : {}),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal,
       });
@@ -106,16 +109,9 @@ export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = c
     return request("GET", `/bootstrap?qq=${encodeURIComponent(qq)}`);
   }
 
-  /** 判断 QQ 号是否管理员（GET /admin/check，无需鉴权） */
-  async function checkAdmin(qq) {
-    const json = await request("GET", `/admin/check?actorQq=${encodeURIComponent(qq)}`);
-    return json.isAdmin === true;
-  }
-
-  /** 管理员密码登录（POST /admin/login），失败抛 TeamApiError */
-  async function adminLogin(qq, password) {
-    const json = await request("POST", "/admin/login", { actorQq: qq, password });
-    return json.adminToken;
+  /** 将 OpenQQ 拉取的完整群成员列表原子同步到白名单。 */
+  async function syncGroupMembers(groupId, members) {
+    return request("POST", "/internal/group-members/sync", { groupId: String(groupId), members });
   }
 
   /** 获取槽位锁，返回 lockToken；被占用时抛 TeamApiError(lockedBy) */
@@ -183,5 +179,5 @@ export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = c
     }
   }
 
-  return { bootstrap, signup, withdraw, request, checkAdmin, adminLogin };
+  return { bootstrap, signup, withdraw, request, syncGroupMembers };
 }

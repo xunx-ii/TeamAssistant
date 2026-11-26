@@ -7,38 +7,33 @@
  *   - handled: false 不是指令，交由 AI 闲聊
  */
 import { config } from "./config.js";
-import { deleteBinding, getBinding, setBinding } from "./db.js";
 import { findMartialArt } from "./martial-arts.js";
 import { createTeamClient, describeError } from "./team.js";
 
 const HELP_TEXT = `📖 指令帮助
-/绑定 <昵称> <QQ号> 绑定你的昵称和 QQ 号（首次使用必做；重复绑定会更新）
-/解绑             解除当前绑定
 /报名 <团队> <角色名> <武学> [装分] [#槽位]
-                  报名（武学必填），不指定槽位时自动选第一个空位
+                  报名（武学必填，装分可省略），不指定槽位时自动选第一个空位
                   例：/报名 一团 张三 天策·傲血战意 12000
 /退出 <团队>      退出该团队的报名
 /团队 [名称]      团队列表，或查看指定团队详情
 /帮助             显示本帮助`;
 
-/** 剥离群聊消息中的 @ 提及标签，如 <@!openid>、<@openid> */
+/** 剥离兼容旧 SDK 的提及标签；OneBot 提已在消息解析阶段移除。 */
 export function stripMentions(text) {
   return text.replace(/<@!?[^>]+>/g, "").trim();
 }
 
 /**
  * 创建指令处理器。
- * @returns {{ handle(senderId: string, text: string): Promise<{handled: boolean, reply?: string}> }}
+ * @param {object} options
+ * @param {(qq: string) => Promise<boolean>} options.isGroupMember 实时群成员校验
+ * @returns {{ handle(message: {senderId: string, text: string, kind?: string}): Promise<{handled: boolean, reply?: string}> }}
  */
-export function createCommandHandler() {
+export function createCommandHandler({ isGroupMember } = {}) {
   const team = createTeamClient();
   // 轻量节流：senderId -> 上次指令时间（复用 BOT_USER_RATE_LIMIT 配置）
   const lastCommandAt = new Map();
   const throttleMs = config.userRateLimitSec * 1000;
-  // 管理员密码待验证状态：senderId -> { qq, expiresAt, attempts }
-  const pendingAdminAuth = new Map();
-  const ADMIN_AUTH_TIMEOUT_MS = 60_000; // 密码输入窗口
-  const ADMIN_AUTH_MAX_ATTEMPTS = 3; // 密码最多尝试次数
 
   /** 检查调用频率；超限时返回提示文本，正常返回 null */
   function checkThrottle(senderId) {
@@ -53,13 +48,15 @@ export function createCommandHandler() {
     return null;
   }
 
-  /** 需要绑定 QQ 号才能使用的指令：返回绑定信息或错误提示 */
-  function requireBinding(senderId) {
-    const binding = getBinding(senderId);
-    if (!binding) {
-      return { error: "你还没有绑定 QQ 号，请先发送：/绑定 <昵称> <QQ号>" };
+  /** OneBot 已提供真实 QQ 号，只需校验该号是否仍在目标群。 */
+  async function requireMembership(senderId) {
+    if (typeof senderId !== "string" || !/^\d{5,20}$/.test(senderId)) {
+      return { error: "无法识别你的 QQ 号，请通过 OpenQQ 通道使用指令" };
     }
-    return { qq: binding.qq, playerId: binding.player_id };
+    if (isGroupMember && !(await isGroupMember(senderId))) {
+      return { error: `请先加入 QQ 群 ${config.qqGroupId} 后再使用报名机器人` };
+    }
+    return { qq: senderId };
   }
 
   /** 按名称查找团队：精确 → 前缀 → 包含；多个匹配返回 null 并给出候选 */
@@ -124,87 +121,10 @@ export function createCommandHandler() {
 
   // ── 指令实现 ──
 
-  /**
-   * 绑定指令：/绑定 <昵称> <QQ号>（昵称可省略，省略时从后端自动同步）。
-   * 省略昵称时自动从后端 userProfiles 同步该 QQ 的昵称；显式输入昵称优先。
-   * 同一用户重复绑定会直接更新；目标 QQ 为管理员时走密码验证流程。
-   */
-  async function cmdBind(senderId, args, kind) {
-    let id = (args[0] || "").trim();
-    let qq = (args[1] || "").trim();
-    // 兼容单参数：/绑定 <QQ号>，昵称由后端自动同步
-    if (!qq && /^\d{5,12}$/.test(id)) {
-      qq = id;
-      id = "";
-    }
-    if (!qq || !/^\d{5,12}$/.test(qq)) {
-      return "❌ 格式不正确，请发送：/绑定 <昵称> <QQ号>（QQ 号为纯数字）";
-    }
-    const existing = getBinding(senderId);
-
-    // 管理员检测（GET /admin/check，无需鉴权；后端不可用时阻止绑定，防冒充）
-    let isAdmin;
-    try {
-      isAdmin = await team.checkAdmin(qq);
-    } catch (err) {
-      return `❌ 无法验证 QQ 号是否为管理员（${describeError(err)}），请确认后端已启动后重试`;
-    }
-
-    // 未显式输入昵称时，从后端 userProfiles 同步（尽力而为，失败不影响绑定）
-    if (!id) {
-      try {
-        const snapshot = await team.bootstrap(qq);
-        id = snapshot.userProfiles?.[qq]?.nickname ?? "";
-      } catch {
-        // 昵称同步失败：保持为空
-      }
-    }
-
-    if (isAdmin) {
-      if (kind === "group") {
-        return "⚠️ 该 QQ 号是管理员，只能私聊绑定，请私聊机器人完成绑定。";
-      }
-      // 私聊：进入密码验证
-      pendingAdminAuth.set(senderId, { qq, playerId: id, expiresAt: Date.now() + ADMIN_AUTH_TIMEOUT_MS, attempts: 0 });
-      return `🔐 检测到管理员 QQ（${qq}），请输入管理员密码完成绑定（${ADMIN_AUTH_TIMEOUT_MS / 1000} 秒内有效，最多 ${ADMIN_AUTH_MAX_ATTEMPTS} 次尝试）：`;
-    }
-
-    const result = setBinding(senderId, qq, id);
-    if (!result.ok) return `❌ 绑定失败：${result.reason}`;
-    const idText = id ? `，昵称：${id}` : "";
-    if (existing) return `✅ 已更新绑定${idText}，QQ ${qq}`;
-    return `✅ 绑定成功${idText}！QQ：${qq}`;
-  }
-
-  /** 提交管理员密码：验证通过后完成绑定 */
-  async function submitAdminPassword(senderId, pending, password) {
-    pending.attempts++;
-    try {
-      await team.adminLogin(pending.qq, password);
-    } catch (err) {
-      if (pending.attempts >= ADMIN_AUTH_MAX_ATTEMPTS) {
-        pendingAdminAuth.delete(senderId);
-        return `❌ ${describeError(err)}（已超过 ${ADMIN_AUTH_MAX_ATTEMPTS} 次尝试，请重新发送 /绑定）`;
-      }
-      return `❌ ${describeError(err)}（还可尝试 ${ADMIN_AUTH_MAX_ATTEMPTS - pending.attempts} 次）`;
-    }
-    const result = setBinding(senderId, pending.qq, pending.playerId);
-    pendingAdminAuth.delete(senderId);
-    if (!result.ok) return `❌ 绑定失败：${result.reason}`;
-    const idText = pending.playerId ? `，昵称：${pending.playerId}` : "";
-    return `✅ 管理员验证通过，绑定成功${idText}！QQ：${pending.qq}`;
-  }
-
-  async function cmdUnbind(senderId) {
-    if (!getBinding(senderId)) return "你还没有绑定 QQ 号";
-    deleteBinding(senderId);
-    return "✅ 已解除绑定";
-  }
-
   async function cmdSignup(senderId, args) {
-    const binding = requireBinding(senderId);
-    if (binding.error) return binding.error;
-    const qq = binding.qq;
+    const membership = await requireMembership(senderId);
+    if (membership.error) return membership.error;
+    const qq = membership.qq;
 
     const [teamName, ...rest] = args;
     if (!teamName || !rest.length) {
@@ -264,9 +184,9 @@ export function createCommandHandler() {
   }
 
   async function cmdWithdraw(senderId, args) {
-    const binding = requireBinding(senderId);
-    if (binding.error) return binding.error;
-    const qq = binding.qq;
+    const membership = await requireMembership(senderId);
+    if (membership.error) return membership.error;
+    const qq = membership.qq;
 
     const teamName = (args[0] || "").trim();
     if (!teamName) return "❌ 请发送：/退出 <团队>";
@@ -293,9 +213,9 @@ export function createCommandHandler() {
   }
 
   async function cmdTeams(senderId, args) {
-    const binding = requireBinding(senderId);
-    if (binding.error) return binding.error;
-    const qq = binding.qq;
+    const membership = await requireMembership(senderId);
+    if (membership.error) return membership.error;
+    const qq = membership.qq;
 
     let snapshot;
     try {
@@ -378,8 +298,6 @@ export function createCommandHandler() {
   }
 
   const COMMANDS = {
-    "绑定": cmdBind,
-    "解绑": cmdUnbind,
     "报名": cmdSignup,
     "退出": cmdWithdraw,
     "团队": cmdTeams,
@@ -388,42 +306,18 @@ export function createCommandHandler() {
 
   /**
    * 主入口：匹配并执行指令。不匹配返回 { handled: false }。
-   * @param {string} senderId QQ openid
-   * @param {string} rawText 原始消息文本
-   * @param {string} kind 消息场景：'c2c'（私聊）/ 'group'（群聊）
+   * @param {{senderId: string, text: string, kind?: string}} message OneBot 消息
    */
-  async function handle(senderId, rawText, kind = "c2c") {
+  async function handle({ senderId, text: rawText, kind = "private" } = {}) {
     const text = stripMentions(rawText ?? "");
     const match = text.match(/^\/([\u4e00-\u9fa5A-Za-z]+)\s*(.*)$/s);
-
-    // 管理员密码验证窗口：过期则清除
-    const pending = pendingAdminAuth.get(senderId);
-    if (pending && Date.now() >= pending.expiresAt) {
-      pendingAdminAuth.delete(senderId);
-    }
-
-    // 非指令消息：若正在等待管理员密码，视为密码提交
-    if (!match) {
-      const active = pendingAdminAuth.get(senderId);
-      if (active && text.trim()) {
-        try {
-          return { handled: true, reply: await submitAdminPassword(senderId, active, text) };
-        } catch (err) {
-          console.error("[cmd] 密码验证失败:", err.message ?? err);
-          return { handled: true, reply: `❌ 密码验证出错：${describeError(err)}` };
-        }
-      }
-      return { handled: false };
-    }
+    if (!match) return { handled: false };
 
     const [name, rest] = [match[1], match[2]];
     const cmd = COMMANDS[name];
     if (!cmd) {
       return { handled: true, reply: `❌ 未知指令 /${name}，发送 /帮助 查看可用指令` };
     }
-
-    // 验证期间发送了其他指令：放弃密码验证，正常执行
-    if (pendingAdminAuth.has(senderId)) pendingAdminAuth.delete(senderId);
 
     const throttleMsg = checkThrottle(senderId);
     if (throttleMsg) return { handled: true, reply: throttleMsg };

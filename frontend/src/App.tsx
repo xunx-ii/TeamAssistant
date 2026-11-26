@@ -11,7 +11,7 @@ import {
 } from './storage'
 import type { ArchivedTeam, Member, Cancellation, OperationLog, Team, TeamTemplate, SubsidyType, MemberSubsidySelection, SubsidyTarget, UserProfiles } from './types'
 import { getMartialArt, martialArts } from './data/martialArts'
-import { checkAdminQq, clearAdminToken, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, logoutAdmin, mutateData, pushTeamTemplate, removeTeamTemplate, setAdminToken, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
+import { checkAdminQq, checkQQSession, clearAdminToken, clearMemberToken, fetchLogsPage, fetchServerChanges, fetchServerVersion, initializeInviteTokenFromUrl, loginAdmin, loginQQ, logoutAdmin, logoutQQ, mutateData, pushTeamTemplate, removeTeamTemplate, setAdminToken, setMemberToken, subscribeServerEvents, type LockState, type MutationResult, type ServerData, type ServerEvent, type SlotLock, type TeamLockInfo } from './api'
 import { applyMutation, applyServerPatches as applySnapshotPatches, type LockToken, type Mutation, type Snapshot } from './dataStore'
 import { planMutationSync, shouldApplySyncVersion, unseenServerPatches } from './syncCursor'
 import { LOG_WINDOW } from './historyWindow'
@@ -26,6 +26,7 @@ import { startAdaptivePoll } from './polling'
 import { publicSnapshot } from './teamPublication'
 import { createTeamTemplateFromTeam, loadTeamTemplates, normalizeTeamTemplates, saveTeamTemplates } from './teamTemplates'
 import { clearStoredAdminSession, readStoredAdminSession, storeAdminSession } from './adminSession'
+import { clearMemberSession, readMemberSession, storeMemberSession } from './memberSession'
 import { getOperationLogsForScope, OPERATION_LOG_PAGE_SIZE, type OperationLogScope } from './operationLogs'
 import { TeamTabs } from './components/TeamTabs'
 import { AdminConfig } from './components/AdminConfig'
@@ -74,6 +75,7 @@ interface AppAlertOptions {
 interface LoginAttemptResult {
   requiresAdminPassword: boolean
   qq?: string
+  nickname?: string
 }
 
 const LOADING_MESSAGES = [
@@ -103,7 +105,17 @@ function pickLoadingMessage() {
 }
 
 function App() {
-  const [qq, setQq] = useState<string | null>(getStoredQQ)
+  const [qq, setQq] = useState<string | null>(() => {
+    const storedQq = getStoredQQ()
+    const session = readMemberSession(storedQq)
+    if (!storedQq || !session) {
+      if (storedQq) removeStoredQQ()
+      clearMemberToken()
+      return null
+    }
+    setMemberToken(session.token)
+    return storedQq
+  })
   const [teams, setTeams] = useState<Team[]>(() => {
     const stored = loadTeams()
     if (stored.length > 0) return stored
@@ -151,6 +163,7 @@ function App() {
   const [showAccessGate, setShowAccessGate] = useState(false)
   const [showNicknameDialog, setShowNicknameDialog] = useState(false)
   const [nicknameError, setNicknameError] = useState('')
+  const [loginNotice, setLoginNotice] = useState('')
   const [serverMode, setServerMode] = useState(false)
   const [initializing, setInitializing] = useState(true)
   const [showLoadingTransition, setShowLoadingTransition] = useState(true)
@@ -392,6 +405,42 @@ function App() {
     let active = true
     const controller = new AbortController()
     const initialize = async () => {
+      if (!qq) {
+        clearMemberToken()
+        clearMemberSession()
+        setInitializing(false)
+        return
+      }
+      const memberSession = readMemberSession(qq)
+      if (!memberSession) {
+        clearMemberToken()
+        clearMemberSession()
+        removeStoredQQ()
+        setQq(null)
+        setLoginNotice('登录状态已失效，请重新使用 QQ 号登录')
+        setInitializing(false)
+        return
+      }
+      setMemberToken(memberSession.token)
+      const memberCheck = await checkQQSession(qq, controller.signal)
+      if (!active) return
+      if (!memberCheck.ok) {
+        clearMemberToken()
+        clearMemberSession()
+        removeStoredQQ()
+        setQq(null)
+        setLoginNotice(memberCheck.error || '你的 QQ 号不在指定群中，请先加入 QQ 群')
+        setInitializing(false)
+        return
+      }
+      if (memberCheck.nickname?.trim()) {
+        const verifiedNickname = memberCheck.nickname.trim()
+        setUserProfiles(previous => {
+          const next = { ...previous, [qq]: { nickname: verifiedNickname } }
+          setUserProfilesLocal(next)
+          return next
+        })
+      }
       const storedAdminSession = readStoredAdminSession(qq)
       if (storedAdminSession) {
         setAdminToken(storedAdminSession.token)
@@ -400,7 +449,7 @@ function App() {
         applyAdminStatus(false)
       }
       // 登录页无需等待报名数据；进入看板时一次同步即可完成初始化。
-      const changes = qq ? await initializeServerData(qq, controller.signal) : null
+      const changes = await initializeServerData(qq, controller.signal)
       if (!active) return
       if (changes) {
         const viewerIsAdmin = changes.isAdmin === true
@@ -475,7 +524,7 @@ function App() {
       unsubscribe?.()
       controller.stop()
     }
-  }, [serverMode, syncServerChanges])
+  }, [qq, serverMode, syncServerChanges])
 
   useEffect(() => {
     if (!serverMode || !qq || !isAdmin) return
@@ -620,8 +669,15 @@ function App() {
     pendingServerEventRef.current = null
   }
 
-  const enterApp = (userQq: string) => {
+  const enterApp = (userQq: string, nickname?: string) => {
     setStoredQQ(userQq)
+    if (nickname?.trim()) {
+      setUserProfiles(previous => {
+        const next = { ...previous, [userQq]: { nickname: nickname.trim() } }
+        setUserProfilesLocal(next)
+        return next
+      })
+    }
     setInitializing(true)
     setShowLoadingTransition(true)
     setQq(userQq)
@@ -630,14 +686,32 @@ function App() {
   const handleLogin = async (userQq: string): Promise<LoginAttemptResult> => {
     resetServerCursor()
     clearAdminToken()
+    clearMemberToken()
     clearStoredAdminSession()
+    clearMemberSession()
     removeStoredQQ()
     setIsAdmin(false)
-    const check = await checkAdminQq(userQq)
-    if (check.ok && check.isAdmin) {
-      return { requiresAdminPassword: true, qq: userQq }
+    setLoginNotice('')
+    const member = await loginQQ(userQq)
+    if (!member.ok || !member.memberToken || !member.expiresAtMs) {
+      throw new Error(member.error || 'QQ 号验证失败，请先加入指定 QQ 群')
     }
-    enterApp(userQq)
+    setMemberToken(member.memberToken)
+    const check = await checkAdminQq(userQq)
+    if (!check.ok) {
+      throw new Error(check.error || '无法验证管理员状态，请稍后重试')
+    }
+    if (check.isAdmin) {
+      return { requiresAdminPassword: true, qq: userQq, nickname: member.nickname }
+    }
+    storeMemberSession({
+      qq: userQq,
+      token: member.memberToken,
+      expiresAtMs: member.expiresAtMs,
+      nickname: member.nickname?.trim() || userQq,
+      groupId: member.groupId ?? '',
+    })
+    enterApp(userQq, member.nickname?.trim() || userQq)
     return { requiresAdminPassword: false }
   }
   const handleAdminPasswordLogin = async (userQq: string, password: string) => {
@@ -650,22 +724,37 @@ function App() {
     if (!result.ok || !result.adminToken || !result.expiresAtMs) {
       throw new Error(result.error || '管理员密码验证失败')
     }
+    if (!result.memberToken || !result.memberExpiresAtMs) {
+      throw new Error('会员登录状态无效，请重新使用 QQ 号登录')
+    }
     storeAdminSession({
       qq: userQq,
       token: result.adminToken,
       expiresAtMs: result.expiresAtMs,
     })
+    storeMemberSession({
+      qq: userQq,
+      token: result.memberToken,
+      expiresAtMs: result.memberExpiresAtMs,
+      nickname: result.nickname?.trim() || userQq,
+      groupId: result.groupId ?? '1013228497',
+    })
+    setMemberToken(result.memberToken)
     setIsAdmin(true)
-    enterApp(userQq)
+    enterApp(userQq, result.nickname?.trim() || userQq)
   }
   const handleLogout = () => {
     void logoutAdmin(qq)
+    void logoutQQ()
     clearAdminToken()
+    clearMemberToken()
     clearStoredAdminSession()
+    clearMemberSession()
     resetServerCursor()
     removeStoredQQ()
     setQq(null)
     setIsAdmin(false)
+    setLoginNotice('')
     setShowNicknameDialog(false)
     setNicknameError('')
     setMutationError('')
@@ -971,7 +1060,7 @@ function App() {
       note: normalizeTextInput(data.note, { maxLength: TEXT_INPUT_LIMITS.note }),
       hasOrangeWeapon: data.hasOrangeWeapon,
     }
-    if (!memberData.martialArtIndex || !memberData.gearScore || !memberData.characterId) return
+    if (!memberData.martialArtIndex || !memberData.characterId) return
     const selectedMartialArt = martialArts[parseInt(memberData.martialArtIndex)]
     if (activeTeam.config.onlyTnSignup && selectedMartialArt?.role === 'DPS') {
       setMutationError('当前团队仅限T/奶报名')
@@ -1106,7 +1195,7 @@ function App() {
     return (
       <>
         <div className="app-enter">
-          <LoginPage onLogin={handleLogin} onAdminPasswordLogin={handleAdminPasswordLogin} />
+          <LoginPage initialError={loginNotice} onLogin={handleLogin} onAdminPasswordLogin={handleAdminPasswordLogin} />
         </div>
         {loadingOverlay}
       </>
@@ -1579,22 +1668,24 @@ function App() {
 }
 
 function LoginPage({
+  initialError,
   onLogin,
   onAdminPasswordLogin,
 }: {
+  initialError?: string
   onLogin: (qq: string) => Promise<LoginAttemptResult>
   onAdminPasswordLogin: (qq: string, password: string) => Promise<void>
 }) {
   const [inputQq, setInputQq] = useState('')
   const [adminPasswordQq, setAdminPasswordQq] = useState<string | null>(null)
   const [adminPassword, setAdminPassword] = useState('')
-  const [loginError, setLoginError] = useState('')
+  const [loginError, setLoginError] = useState(initialError ?? '')
   const [passwordError, setPasswordError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [passwordSubmitting, setPasswordSubmitting] = useState(false)
   const qqInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value: inputQq,
-    onChange: e => setInputQq(sanitizeTextInput(e.target.value, { maxLength: TEXT_INPUT_LIMITS.qq })),
+    onChange: e => setInputQq(e.target.value.replace(/\D/g, '').slice(0, TEXT_INPUT_LIMITS.qq)),
   })
   const passwordInputHandlers = useImeSafeInputHandlers<HTMLInputElement>({
     value: adminPassword,
@@ -1605,7 +1696,10 @@ function LoginPage({
     if (submitting) return
     setLoginError('')
     const t = normalizeTextInput(inputQq, { maxLength: TEXT_INPUT_LIMITS.qq })
-    if (!t) return
+    if (!/^\d{5,20}$/.test(t)) {
+      setLoginError('请输入有效的 QQ 号')
+      return
+    }
     setSubmitting(true)
     try {
       const result = await onLogin(t)
@@ -1687,7 +1781,7 @@ function LoginPage({
               <input
                 type="text"
                 className="pixel-input w-full h-12 px-4 py-2 text-sm text-center font-mono tracking-wider"
-                placeholder="输入QQ号"
+                placeholder="输入群成员QQ号"
                 maxLength={TEXT_INPUT_LIMITS.qq}
                 {...qqInputHandlers}
                 onDrop={event => {

@@ -13,6 +13,8 @@ import { createTeamClient, TeamApiError } from '../../qqbot/src/team.js'
 const root = resolve(import.meta.dirname, '../..')
 const tempRoot = join(root, '.temp')
 const adminQq = '10001'
+const botToken = 'integration-test-bot-token-32-chars'
+const groupId = '1013228497'
 const password = randomUUID()
 let tempDir, backend, baseUrl, adminToken, migratedSnapshot, migratedPublicSnapshot
 const legacyPublicAt = Date.now() + 3_600_000
@@ -33,6 +35,8 @@ function backendEnvironment(port) {
     TEAMASSISTANT_ADMIN_PASSWORD: password,
     TEAMASSISTANT_ADMIN_PASSWORD_HASH: '',
     TEAMASSISTANT_ADMIN_PASSWORD_SALT: '',
+    TEAMASSISTANT_BOT_TOKEN: botToken,
+    TEAMASSISTANT_QQ_GROUP_ID: groupId,
   }
 }
 
@@ -48,7 +52,17 @@ async function allocatePort() {
 async function request(path, method = 'GET', body) {
   const response = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-TeamAssistant-Bot-Token': botToken },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(5_000),
+  })
+  return { status: response.status, ...await response.json() }
+}
+
+async function requestWithoutBot(path, method = 'GET', body, headers = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(5_000),
   })
@@ -138,7 +152,7 @@ test('team publication filters snapshots for public, invited and authenticated a
 test('hidden teams cannot leak through patches, locks or forged signup and subsidy requests', async () => {
   const inviteToken = await seedPublicationData()
   const baseline = await request('/version')
-  const invited = createTeamClient({ baseUrl, inviteToken })
+  const invited = createTeamClient({ baseUrl, inviteToken, botToken })
   await invited.signup('20001', 'private-team', 0, { martialArtIndex: '0', characterId: '提前用户' })
   const lock = await request('/slot-locks', 'POST', { teamId: 'private-team', slotIndex: 1, qq: '20002', inviteToken })
   assert.equal(lock.ok, true)
@@ -444,7 +458,7 @@ test('admin config changes apply without restarting the backend', async () => {
     const added = await request('/admin/check?actorQq=313389778')
     assert.equal(added.isAdmin, true)
 
-    await delay(20)
+    await delay(1_100)
     writeFileSync(configPath, original)
     const removed = await request('/admin/check?actorQq=313389778')
     assert.equal(removed.isAdmin, false)
@@ -496,6 +510,15 @@ before(async () => {
     throw new Error(`后端启动超时: ${output}`)
   }
   await Promise.race([ready(), exited])
+  const membership = await request('/internal/group-members/sync', 'POST', {
+    groupId,
+    members: [
+      { qq: adminQq, nickname: '管理员', card: '管理员', role: 'owner', joinTimeMs: 1 },
+      { qq: '20001', nickname: '测试成员', card: '测试成员', role: 'member', joinTimeMs: 2 },
+      { qq: '20002', nickname: '测试成员二', card: '', role: 'member', joinTimeMs: 3 },
+    ],
+  })
+  assert.equal(membership.ok, true)
   const login = await request('/admin/login', 'POST', { actorQq: adminQq, password })
   assert.equal(login.ok, true)
   adminToken = login.adminToken
@@ -509,6 +532,62 @@ beforeEach(async () => {
     teams: [emptyTeam()], cancellations: [], archivedTeams: [], logs: [], userProfiles: {}, subsidyPresets: [], teamTemplates: [],
   }))
   assert.equal(result.ok, true)
+})
+
+test('QQ group membership gates login, sessions and registration access', async () => {
+  const initialSync = await request('/internal/group-members/sync', 'POST', {
+    groupId,
+    members: [
+      { qq: adminQq, nickname: '管理员', card: '管理员', role: 'owner', joinTimeMs: 1 },
+      { qq: '20001', nickname: '张三', card: '队长张三', role: 'member', joinTimeMs: 2 },
+      { qq: '20002', nickname: '李四', card: '', role: 'member', joinTimeMs: 3 },
+    ],
+  })
+  assert.equal(initialSync.ok, true)
+  assert.equal(initialSync.groupSize, 3)
+
+  const outsider = await requestWithoutBot('/auth/qq/login', 'POST', { qq: '99999' })
+  assert.equal(outsider.status, 403)
+  assert.equal(outsider.reason, 'notInGroup')
+
+  const member = await requestWithoutBot('/auth/qq/login', 'POST', { qq: '20002' })
+  assert.equal(member.status, 200)
+  assert.equal(member.nickname, '李四')
+  assert.match(member.memberToken, /^[a-fA-F0-9]{64}$/)
+  const memberHeaders = { 'X-TeamAssistant-Member-Token': member.memberToken }
+
+  const unauthenticated = await requestWithoutBot('/bootstrap?qq=20002')
+  assert.equal(unauthenticated.status, 401)
+  assert.equal(unauthenticated.reason, 'memberSessionRequired')
+
+  const snapshot = await requestWithoutBot('/bootstrap?qq=20002', 'GET', undefined, memberHeaders)
+  assert.equal(snapshot.status, 200)
+  assert.equal(snapshot.userProfiles['20002'].nickname, '李四')
+
+  const blockedLock = await requestWithoutBot('/slot-locks', 'POST', { teamId: 'team-1', slotIndex: 0, qq: '20002' })
+  assert.equal(blockedLock.status, 401)
+  const memberLock = await requestWithoutBot(
+    '/slot-locks', 'POST', { teamId: 'team-1', slotIndex: 0, qq: '20002' }, memberHeaders,
+  )
+  assert.equal(memberLock.status, 200)
+  assert.equal(memberLock.ok, true)
+
+  const unauthorizedSync = await requestWithoutBot('/internal/group-members/sync', 'POST', { groupId, members: [] })
+  assert.equal(unauthorizedSync.status, 401)
+
+  const removed = await request('/internal/group-members/sync', 'POST', {
+    groupId,
+    members: [{ qq: adminQq, nickname: '管理员', card: '管理员', role: 'owner', joinTimeMs: 1 }],
+  })
+  assert.equal(removed.ok, true)
+  assert.deepEqual(removed.removed.map(item => item.qq).sort(), ['20001', '20002'])
+
+  const expiredSession = await requestWithoutBot('/auth/qq/session?qq=20002', 'GET', undefined, memberHeaders)
+  assert.equal(expiredSession.status, 401)
+  assert.equal(expiredSession.reason, 'notInGroup')
+  const blockedBootstrap = await requestWithoutBot('/bootstrap?qq=20002', 'GET', undefined, memberHeaders)
+  assert.equal(blockedBootstrap.status, 401)
+  assert.equal(blockedBootstrap.reason, 'notInGroup')
 })
 
 after(async () => {
@@ -542,24 +621,23 @@ test('legacy databases migrate their columns before the sorting index is created
   }
 })
 
-test('bot admin detection retains actorQq when an invite token is configured', async () => {
+test('bot bootstrap retains actorQq and invite access', async () => {
   const gate = await request('/access-gate', 'PUT', adminBody({ publicAtMs: Date.now() + 60_000 }))
-  const client = createTeamClient({ baseUrl, inviteToken: gate.inviteToken })
-  assert.equal(await client.checkAdmin(adminQq), true)
+  const client = createTeamClient({ baseUrl, inviteToken: gate.inviteToken, botToken })
   assert.equal((await client.bootstrap('20001')).teams.length, 1)
 })
 
 test('bot translates slot contention and preserves team lock errors', async () => {
   const first = await request('/slot-locks', 'POST', { teamId: 'team-1', slotIndex: 0, qq: '20001' })
   assert.equal(first.ok, true)
-  const client = createTeamClient({ baseUrl, inviteToken: '' })
+  const client = createTeamClient({ baseUrl, inviteToken: '', botToken })
   await assert.rejects(client.signup('20002', 'team-1', 0), error => error instanceof TeamApiError && error.reason === 'lockedBy')
   assert.equal((await request('/team-locks', 'POST', adminBody({ teamId: 'team-1' }))).ok, true)
   await assert.rejects(client.signup('20002', 'team-1', 1), error => error instanceof TeamApiError && error.reason === 'teamLocked')
 })
 
 test('future sync cursors receive a full snapshot after a server version reset', async () => {
-  const client = createTeamClient({ baseUrl, inviteToken: '' })
+  const client = createTeamClient({ baseUrl, inviteToken: '', botToken })
   await client.signup('20001', 'team-1', 0, { martialArtIndex: '0', characterId: '玩家' })
   const version = await request('/version')
   const changes = await request(`/sync?dataVersion=${version.dataVersion + 100}&lockVersion=0`)
@@ -569,7 +647,7 @@ test('future sync cursors receive a full snapshot after a server version reset',
 
 test('concurrent signups survive incremental sync and release their locks', async () => {
   const baseline = await request('/version')
-  const client = createTeamClient({ baseUrl, inviteToken: '' })
+  const client = createTeamClient({ baseUrl, inviteToken: '', botToken })
   await Promise.all([
     ...Array.from({ length: 25 }, (_, index) => client.signup(String(20000 + index), 'team-1', index, {
       martialArtIndex: '0', characterId: `玩家${index}`,
@@ -594,7 +672,7 @@ test('concurrent signups survive incremental sync and release their locks', asyn
 })
 
 test('signup rejects a stale member expectation without replacing the player', async () => {
-  const client = createTeamClient({ baseUrl, inviteToken: '' })
+  const client = createTeamClient({ baseUrl, inviteToken: '', botToken })
   await client.signup('20001', 'team-1', 0, { martialArtIndex: '0', characterId: '玩家甲' })
   await assert.rejects(client.signup('20002', 'team-1', 0, { martialArtIndex: '0' }), error => error.reason === 'slotChanged')
   assert.equal((await client.bootstrap('20001')).teams[0].slots[0].member.qq, '20001')

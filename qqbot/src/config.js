@@ -1,29 +1,15 @@
 /**
  * 配置模块
  *
- * 读取 .env（若存在）并合并环境变量，解析 QQ 凭据与 pi 模型配置。
- * 凭据优先级：环境变量 > credentials.json（扫码绑定产物）。
+ * 读取 .env（若存在）并合并环境变量，解析 OpenQQ OneBot 与 pi 模型配置。
  */
 import { config as loadDotenv } from "dotenv";
-import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 loadDotenv({ path: join(ROOT, ".env") });
-
-const CREDENTIALS_PATH = join(ROOT, "credentials.json");
-
-/** 读取扫码绑定产生的凭据文件，不存在则返回 null */
-function loadCredentialsFile() {
-  if (!existsSync(CREDENTIALS_PATH)) return null;
-  try {
-    return JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8"));
-  } catch {
-    return null;
-  }
-}
 
 /** 解析可选的 JSON 环境变量（如自定义请求头），非法时返回 undefined */
 function parseOptionalJson(value) {
@@ -47,9 +33,6 @@ const API_KEY_ENV = {
   openrouter: "OPENROUTER_API_KEY",
   mistral: "MISTRAL_API_KEY",
 };
-
-// 凭据文件只解析一次（appId/appSecret 共用一个读取结果）
-const credentialsFile = loadCredentialsFile();
 
 /**
  * 自定义模型配置（CUSTOM_* 系列，见 .env.example）
@@ -75,17 +58,16 @@ const customModel = {
 };
 
 export const config = {
-  /** QQ 环境：production 正式环境 / sandbox 沙箱环境 */
-  qqEnv: process.env.QQ_ENV === "sandbox" ? "sandbox" : "production",
-  /** QQ OpenAPI 域名（沙箱与正式不同，可被 QQ_BASE_URL 覆盖） */
-  qqBaseUrl:
-    process.env.QQ_BASE_URL ||
-    (process.env.QQ_ENV === "sandbox"
-      ? "https://api.sandbox.qq.com"
-      : "https://api.sgroup.qq.com"),
-  /** 扫码绑定的凭据（环境变量优先） */
-  appId: process.env.QQ_APP_ID ?? credentialsFile?.appId ?? "",
-  appSecret: process.env.QQ_APP_SECRET ?? credentialsFile?.appSecret ?? "",
+  /** OpenQQ 正向 OneBot v11 WebSocket 地址 */
+  oneBotUrl: process.env.OPENQQ_WS_URL || "ws://127.0.0.1:3001/",
+  /** OpenQQ OneBot Access Token */
+  oneBotAccessToken: process.env.OPENQQ_ACCESS_TOKEN || "",
+  /** TeamAssistant 只有群成员可登录的目标 QQ 群 */
+  qqGroupId: process.env.TEAMASSISTANT_QQ_GROUP_ID || "1013228497",
+  /** 群成员同步间隔，允许范围 15 秒到 30 分钟 */
+  groupSyncIntervalMs: Math.min(30 * 60_000, Math.max(15_000, Number(process.env.TEAMASSISTANT_GROUP_SYNC_INTERVAL_MS) || 60_000)),
+  /** 内置机器人访问 TeamAssistant 内部接口时的服务令牌 */
+  teamBotToken: process.env.TEAMASSISTANT_BOT_TOKEN || "",
   /** pi 模型配置 */
   model: process.env.PI_MODEL || "", // 形如 "anthropic/claude-sonnet-4-5"，留空自动选择
   /** 机器人人设提示词 */
@@ -109,7 +91,7 @@ export const config = {
   teamBaseUrl: process.env.TEAMASSISTANT_BASE_URL || "http://127.0.0.1:23219/api/v2",
   /** 门禁关闭时的邀请码（可选，门禁开放时无需配置） */
   teamInviteToken: process.env.TEAMASSISTANT_INVITE_TOKEN || "",
-  /** QQ 消息使用 markdown（需在 QQ 开放平台开通 markdown 消息权限，团队详情渲染为表格） */
+  /** 使用 Markdown 风格纯文本展示团队详情；OneBot 通道统一按纯文本发送 */
   qqMarkdown: process.env.QQ_MARKDOWN === "true",
   /** 模型 API Key（pi 通过 ModelRuntime.setRuntimeApiKey 使用） */
   apiKeys: Object.fromEntries(
@@ -135,12 +117,17 @@ export const config = {
     if (process.env.PI_MODELS_FILE) return process.env.PI_MODELS_FILE;
     return this.hasCustomModel() ? join(ROOT, "data", "pi-models.json") : undefined;
   },
-  /** 是否已配置 QQ 凭据 */
-  hasCredentials() {
-    return Boolean(this.appId && this.appSecret);
-  },
-  get credentialsPath() {
-    return CREDENTIALS_PATH;
+  /** 是否已配置 OpenQQ 与 TeamAssistant 内部鉴权 */
+  hasBotCredentials() {
+    if (this.oneBotAccessToken.length < 16 || this.teamBotToken.length < 16 || !/^\d{5,20}$/.test(this.qqGroupId)) {
+      return false;
+    }
+    try {
+      const url = new URL(this.oneBotUrl);
+      return url.protocol === "ws:" || url.protocol === "wss:";
+    } catch {
+      return false;
+    }
   },
 };
 

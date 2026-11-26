@@ -238,10 +238,6 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
       setError('当前团队仅限T/奶报名')
       return
     }
-    if (!textGearScore) {
-      setError(isDPS ? '请填写装分' : '请填写层数')
-      return
-    }
     if (!textCharacterId) {
       setError('请填写角色ID')
       return
@@ -469,13 +465,13 @@ export function SignupModal({ open, qq, nickname, lockOwnerQq, existing, isAdmin
           </div>
           <div className="flex items-end gap-2">
             <div className="flex-1 space-y-1.5">
-              <Label>{isDPS ? '装分' : '层数'}</Label>
+              <Label>{isDPS ? '装分（可选）' : '层数（可选）'}</Label>
               <Input
                 ref={gearScoreRef}
                 type="number"
                 value={gearScore}
                 onChange={e => { if (!readOnly) setGearScore(sanitizeIntegerInput(e.target.value, TEXT_INPUT_LIMITS.gearScore)) }}
-                placeholder={isDPS ? '装分' : '层数'}
+                placeholder="可留空"
                 disabled={readOnly}
               />
             </div>

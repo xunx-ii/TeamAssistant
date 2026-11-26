@@ -29,8 +29,10 @@ function fixture(t) {
       TEAMASSISTANT_ADMIN_PASSWORD_SALT: '',
       TEAMASSISTANT_ADMIN_PASSWORD_HASH: '',
       QQBOT_ENABLED: 'false',
-      QQ_APP_ID: '',
-      QQ_APP_SECRET: '',
+      OPENQQ_WS_URL: '',
+      OPENQQ_ACCESS_TOKEN: '',
+      TEAMASSISTANT_BOT_TOKEN: '',
+      TEAMASSISTANT_QQ_GROUP_ID: '1013228497',
       ...env,
     },
   })
@@ -73,11 +75,14 @@ test('environment accepts a password hash without persisting it', t => {
   assert.deepEqual(JSON.parse(readFileSync(configPath, 'utf8')), { adminQQs: ['10001'] })
 })
 
-test('enabled bot accepts runtime QQ credentials without persisting them', t => {
+test('enabled bot accepts runtime OneBot credentials without persisting them', t => {
   const { configPath, run } = fixture(t)
   const result = run({
     TEAMASSISTANT_ADMIN_QQS: '10001', TEAMASSISTANT_ADMIN_PASSWORD: 'test-password',
-    QQBOT_ENABLED: 'true', QQ_APP_ID: 'test-app-id', QQ_APP_SECRET: 'test-app-secret',
+    QQBOT_ENABLED: 'true',
+    OPENQQ_WS_URL: 'ws://host.docker.internal:3001/',
+    OPENQQ_ACCESS_TOKEN: 'openqq-access-token-123456',
+    TEAMASSISTANT_BOT_TOKEN: 'teamassistant-bot-token-123456',
   })
   assert.equal(result.status, 0, result.stderr)
   assert.deepEqual(JSON.parse(readFileSync(configPath, 'utf8')), { adminQQs: ['10001'] })
@@ -89,8 +94,8 @@ for (const [name, env, message] of [
   ['empty QQ list item', { TEAMASSISTANT_ADMIN_QQS: '10001,' }, /TEAMASSISTANT_ADMIN_QQS/],
   ['missing password', { TEAMASSISTANT_ADMIN_PASSWORD: '' }, /TEAMASSISTANT_ADMIN_PASSWORD/],
   ['invalid password hash', { TEAMASSISTANT_ADMIN_PASSWORD_HASH: 'invalid' }, /64/],
-  ['missing bot credentials', { QQBOT_ENABLED: 'true' }, /QQ_APP_ID/],
-  ['partial bot credentials', { QQBOT_ENABLED: 'true', QQ_APP_ID: 'configured-id' }, /QQ_APP_ID/],
+  ['missing bot credentials', { QQBOT_ENABLED: 'true' }, /OPENQQ_WS_URL/],
+  ['partial bot credentials', { QQBOT_ENABLED: 'true', OPENQQ_WS_URL: 'ws://127.0.0.1:3001/' }, /OPENQQ_ACCESS_TOKEN/],
 ]) {
   test(`configuration rejects ${name} before writing state`, t => {
     const { configPath, run } = fixture(t)

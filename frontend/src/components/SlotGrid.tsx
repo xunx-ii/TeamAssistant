@@ -7,6 +7,7 @@ import {
   canInteractWithSlotLock,
   getAssignedReservationLabel,
   getAvailableSlotLabel,
+  getGearScoreDisplay,
   getFixedSlotLabel,
   getOccupiedSlotDisplay,
   getReservedSlotLabel,
@@ -187,6 +188,8 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
                               'text-blue-600 bg-blue-100 border-blue-300'
             const assignedReservationLabel = getAssignedReservationLabel(slot, userProfiles)
             const signupName = getUserDisplayName(m.qq, userProfiles)
+            const gearScoreMobile = getGearScoreDisplay(m.gearScore, ma?.role, true)
+            const gearScoreDesktop = getGearScoreDisplay(m.gearScore, ma?.role)
             content = (
               <>
                 <span className="absolute top-1 left-1 z-[1] text-[10px] text-muted-foreground font-mono sm:left-2">#{slot.index + 1}</span>
@@ -211,10 +214,12 @@ export const SlotGrid = memo(function SlotGrid({ slots, config, currentQQ, userP
                     </div>
                   ) : (
                     <>
-                      <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
-                        <span className="sm:hidden">{ma?.role === 'DPS' ? m.gearScore : `${m.gearScore}层`}</span>
-                        <span className="hidden sm:inline sm:truncate">{ma?.role === 'DPS' ? `装分：${m.gearScore}` : `层数：${m.gearScore}`}</span>
-                      </div>
+                      {gearScoreMobile && (
+                        <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
+                          <span className="sm:hidden">{gearScoreMobile}</span>
+                          <span className="hidden sm:inline sm:truncate">{gearScoreDesktop}</span>
+                        </div>
+                      )}
                       <div className="w-full text-[10px] leading-3 text-muted-foreground sm:text-[11px] sm:leading-4">
                         <span className="sm:hidden">{m.characterId}</span>
                         <span className="hidden sm:inline sm:truncate">ID：{m.characterId}</span>

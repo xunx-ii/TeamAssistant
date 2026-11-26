@@ -47,7 +47,7 @@ asset=$(printf '%s' "$page" | sed -n 's/.*src="\.\/\(assets\/[^" ]*\.js\)".*/\1/
 curl --fail --silent --show-error --max-time 10 "$address/$asset" >/dev/null
 curl --fail --silent --show-error --max-time 10 "$address/api/v2/version" | jq --exit-status '.ok == true' >/dev/null
 docker exec --workdir /app/qqbot "$container" node --input-type=module --eval \
-    "await import('./src/agent.js'); await import('./src/qq.js'); await import('@tencent-connect/qqbot-connector');"
+    "await import('./src/agent.js'); await import('./src/qq.js'); await import('./src/onebot.js'); await import('ws');"
 
 login=$(jq -n --arg password "$password" '{actorQq: "10001", password: $password}')
 token=$(curl --fail --silent --show-error --max-time 10 \

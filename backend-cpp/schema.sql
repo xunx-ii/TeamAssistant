@@ -77,6 +77,26 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   nickname TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id TEXT NOT NULL,
+  qq TEXT NOT NULL,
+  nickname TEXT NOT NULL DEFAULT '',
+  card TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'member',
+  active INTEGER NOT NULL DEFAULT 1,
+  joined_at_ms INTEGER NOT NULL DEFAULT 0,
+  updated_at_ms INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (group_id, qq)
+);
+
+CREATE TABLE IF NOT EXISTS member_sessions (
+  token_hash TEXT PRIMARY KEY,
+  qq TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS subsidy_presets (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL
@@ -131,3 +151,6 @@ CREATE INDEX IF NOT EXISTS idx_archives_archived_at ON archives(archived_at DESC
 CREATE INDEX IF NOT EXISTS idx_cancellations_timestamp ON cancellations(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_team_templates_updated_at ON team_templates(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at ON admin_sessions(expires_at_ms);
+CREATE INDEX IF NOT EXISTS idx_group_members_active ON group_members(group_id, active, qq);
+CREATE INDEX IF NOT EXISTS idx_member_sessions_expires_at ON member_sessions(expires_at_ms);
+CREATE INDEX IF NOT EXISTS idx_member_sessions_qq ON member_sessions(group_id, qq);

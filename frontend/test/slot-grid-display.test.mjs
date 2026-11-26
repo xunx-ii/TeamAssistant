@@ -6,6 +6,7 @@ import {
   getAssignedReservationLabel,
   getAvailableSlotLabel,
   getFixedSlotLabel,
+  getGearScoreDisplay,
   getOccupiedSlotDisplay,
   getReservedSlotLabel,
   getSlotLockOwnerLabel,
@@ -46,6 +47,13 @@ test('fixed slots show a readable availability hint when not locked', () => {
     getFixedSlotLabel({ fixedRole: 'DPS', fixedMartialArtIndex: null }, true),
     '⏳ 报名中',
   )
+})
+
+test('optional gear score is hidden when empty and shown otherwise', () => {
+  assert.equal(getGearScoreDisplay('', 'DPS'), null)
+  assert.equal(getGearScoreDisplay('   ', 'T'), null)
+  assert.equal(getGearScoreDisplay('12000', 'DPS'), '装分：12000')
+  assert.equal(getGearScoreDisplay('8', '治疗', true), '8层')
 })
 
 test('users can reopen a slot that is locked by their own QQ', () => {

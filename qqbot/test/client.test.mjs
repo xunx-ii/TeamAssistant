@@ -24,7 +24,7 @@ before(async () => {
     if (url.pathname === '/null') res.end('null')
     else if (url.pathname === '/array') res.end('[]')
     else if (url.pathname === '/conflict') res.end(JSON.stringify({ ok: false, lockedBy: '20001' }))
-    else res.end(JSON.stringify({ ok: true, query: Object.fromEntries(url.searchParams) }))
+    else res.end(JSON.stringify({ ok: true, query: Object.fromEntries(url.searchParams), headers: req.headers }))
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -42,6 +42,13 @@ test('request preserves existing parameters and encodes the invite token once', 
   const client = createTeamClient({ baseUrl, inviteToken })
   const response = await client.request('GET', '/query?actorQq=10001&other=value')
   assert.deepEqual(response.query, { actorQq: '10001', other: 'value', inviteToken })
+})
+
+test('request forwards the TeamAssistant bot token', async () => {
+  const botToken = 'test-bot-token-at-least-16-characters'
+  const client = createTeamClient({ baseUrl, inviteToken: '', botToken })
+  const response = await client.request('GET', '/query')
+  assert.equal(response.headers['x-teamassistant-bot-token'], botToken)
 })
 
 test('request times out while waiting for headers and while reading the body', async () => {
