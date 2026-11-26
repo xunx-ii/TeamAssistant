@@ -30,6 +30,7 @@ COPY qqbot/src ./src
 COPY qqbot/test ./test
 RUN npm run test:client
 COPY docker/prepare-config.mjs /app/docker/prepare-config.mjs
+COPY docker/smoke-test.sh /app/docker/smoke-test.sh
 COPY docker/test /app/docker/test
 RUN node --test /app/docker/test/*.test.mjs
 
