@@ -5,6 +5,9 @@ image=${1:?请指定待验证的镜像}
 container="teamassistant-test-${RANDOM}-${RANDOM}"
 volume="${container}-data"
 password="test-${RANDOM}-${RANDOM}-${RANDOM}"
+bot_token="test-bot-${RANDOM}-${RANDOM}-${RANDOM}-${RANDOM}"
+group_id="1013228497"
+member_qq="10001"
 
 cleanup() {
     local status=$?
@@ -36,6 +39,8 @@ docker run --detach --name "$container" \
     --env QQBOT_ENABLED=false \
     --env TEAMASSISTANT_ADMIN_QQS=10001 \
     --env "TEAMASSISTANT_ADMIN_PASSWORD=${password}" \
+    --env "TEAMASSISTANT_BOT_TOKEN=${bot_token}" \
+    --env "TEAMASSISTANT_QQ_GROUP_ID=${group_id}" \
     "$image" >/dev/null
 wait_healthy
 address="http://$(docker port "$container" 8080/tcp)"
@@ -49,16 +54,37 @@ curl --fail --silent --show-error --max-time 10 "$address/api/v2/version" | jq -
 docker exec --workdir /app/qqbot "$container" node --input-type=module --eval \
     "await import('./src/agent.js'); await import('./src/qq.js'); await import('./src/onebot.js'); await import('ws');"
 
-login=$(jq -n --arg password "$password" '{actorQq: "10001", password: $password}')
-token=$(curl --fail --silent --show-error --max-time 10 \
+membership=$(jq -n --arg group "$group_id" --arg qq "$member_qq" '{
+    groupId: $group,
+    members: [{qq: $qq, nickname: "Docker Admin", card: "Docker Admin", role: "owner", joinTimeMs: 1}]
+}')
+curl --fail --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' \
+    --header "X-TeamAssistant-Bot-Token: ${bot_token}" \
+    --data "$membership" \
+    "$address/api/v2/internal/group-members/sync" \
+    | jq --exit-status '.ok == true and .groupSize == 1' >/dev/null
+
+member_login=$(jq -n --arg qq "$member_qq" '{qq: $qq}')
+member_token=$(curl --fail --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' --data "$member_login" \
+    "$address/api/v2/auth/qq/login" \
+    | jq --exit-status --raw-output '.memberToken | select(type == "string" and length > 0)')
+
+login=$(jq -n --arg qq "$member_qq" --arg password "$password" '{actorQq: $qq, password: $password}')
+admin_login=$(curl --fail --silent --show-error --max-time 10 \
     --header 'Content-Type: application/json' --data "$login" \
-    "$address/api/v2/admin/login" | jq --exit-status --raw-output '.adminToken | select(type == "string" and length > 0)')
-team=$(jq -n --arg token "$token" '{
-    actorQq: "10001", adminToken: $token,
+    "$address/api/v2/admin/login")
+token=$(printf '%s' "$admin_login" | jq --exit-status --raw-output '.adminToken | select(type == "string" and length > 0)')
+member_token=$(printf '%s' "$admin_login" | jq --exit-status --raw-output '.memberToken | select(type == "string" and length > 0)')
+
+team=$(jq -n --arg qq "$member_qq" --arg token "$token" '{
+    actorQq: $qq, adminToken: $token,
     teams: [{id: "docker-test", name: "Docker持久化验证", note: "", config: {reservedSlots: [], locked: false},
         slots: [range(25) | {index: ., status: "empty", member: null, fixedRole: null, fixedMartialArtIndex: null}]}]
 }')
 curl --fail --silent --show-error --max-time 10 \
+    --header "X-TeamAssistant-Member-Token: ${member_token}" \
     --header 'Content-Type: application/json' --data "$team" \
     "$address/api/v2/teams/batch" | jq --exit-status '.ok == true' >/dev/null
 
@@ -74,7 +100,16 @@ docker run --detach --name "$container" \
     "$image" >/dev/null
 wait_healthy
 address="http://$(docker port "$container" 8080/tcp)"
-curl --fail --silent --show-error --max-time 10 "$address/api/v2/bootstrap" \
+status=$(curl --silent --show-error --max-time 10 --output /dev/null --write-out '%{http_code}' \
+    "$address/api/v2/bootstrap?qq=${member_qq}")
+[[ "$status" == 401 ]]
+member_token=$(curl --fail --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' --data "$member_login" \
+    "$address/api/v2/auth/qq/login" \
+    | jq --exit-status --raw-output '.memberToken | select(type == "string" and length > 0)')
+curl --fail --silent --show-error --max-time 10 \
+    --header "X-TeamAssistant-Member-Token: ${member_token}" \
+    "$address/api/v2/bootstrap?qq=${member_qq}" \
     | jq --exit-status 'any(.teams[]; .id == "docker-test")' >/dev/null
 
 # 后端意外退出时，入口进程必须停止容器，避免继续返回静态页面掩盖故障。
