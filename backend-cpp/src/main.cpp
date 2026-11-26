@@ -4754,8 +4754,20 @@ int main() {
         }
         return request->getParameter("adminToken");
     };
-    auto isAdminRequest = [admins, adminSessions, adminTokenFromRequest](const HttpRequestPtr &request, const std::string &actorQq, const Value *body = nullptr) {
-        return admins->isAdmin(actorQq) && adminSessions->isValid(actorQq, adminTokenFromRequest(request, body));
+    auto botTokenFromRequest = [](const HttpRequestPtr &request) {
+        const auto header = request->getHeader("X-TeamAssistant-Bot-Token");
+        return header.empty() ? request->getParameter("botToken") : header;
+    };
+    auto isBotRequest = [configuredBotToken, botTokenFromRequest](const HttpRequestPtr &request) {
+        return !configuredBotToken.empty() && constantTimeStringEquals(configuredBotToken, botTokenFromRequest(request));
+    };
+    auto isAdminRequest = [admins, adminSessions, adminTokenFromRequest, isBotRequest](
+                              const HttpRequestPtr &request,
+                              const std::string &actorQq,
+                              const Value *body = nullptr
+                          ) {
+        return admins->isAdmin(actorQq) &&
+            (isBotRequest(request) || adminSessions->isValid(actorQq, adminTokenFromRequest(request, body)));
     };
     auto requireAdminQq = [isAdminRequest, forbiddenResponse](const HttpRequestPtr &request, const std::string &actorQq, std::function<void(const HttpResponsePtr &)> &callback, const Value *body = nullptr) {
         if (isAdminRequest(request, actorQq, body)) {
@@ -4817,13 +4829,6 @@ int main() {
         }
         const auto header = request->getHeader("X-TeamAssistant-Member-Token");
         return header.empty() ? request->getParameter("memberToken") : header;
-    };
-    auto botTokenFromRequest = [](const HttpRequestPtr &request) {
-        const auto header = request->getHeader("X-TeamAssistant-Bot-Token");
-        return header.empty() ? request->getParameter("botToken") : header;
-    };
-    auto isBotRequest = [configuredBotToken, botTokenFromRequest](const HttpRequestPtr &request) {
-        return !configuredBotToken.empty() && constantTimeStringEquals(configuredBotToken, botTokenFromRequest(request));
     };
     auto isMemberRequest = [db, memberSessions, configuredGroupId, memberTokenFromRequest](
         const HttpRequestPtr &request,

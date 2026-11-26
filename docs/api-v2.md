@@ -135,7 +135,11 @@ Authorization: Bearer <adminToken>
 管理员请求必须同时满足：
 
 1. `actorQq` 在 `admin.json` 的管理员列表中。
-2. `adminToken` 是后端签发、尚未过期且已持久化到 SQLite 的 Token。
+2. 请求满足以下任一条件：
+   - `adminToken` 是后端签发、尚未过期且已持久化到 SQLite 的 Token；
+   - 请求携带正确的 `X-TeamAssistant-Bot-Token`，用于受信任的 OpenQQ 机器人代管理员执行指令。
+
+机器人令牌路径仍要求 `actorQq` 位于管理员列表。该令牌可以访问管理员接口，必须与 `OPENQQ_ACCESS_TOKEN` 分开配置并妥善保管，不能下发给浏览器客户端。
 
 管理员登录 Token 默认有效期为 168 小时（7 天），可以通过 `TEAMASSISTANT_ADMIN_SESSION_TTL_HOURS` 调整。Token 只以哈希形式保存在 SQLite 中，后端或容器重启后仍然有效；管理员主动退出时立即失效。
 
@@ -147,7 +151,7 @@ Authorization: Bearer <adminToken>
 - 删除取消记录；
 - 登记团队或归档团队的补贴。
 
-本人操作时，请保证请求体的 `actorQq` 与路径中的目标 QQ 一致。管理员代操作时，`actorQq` 应填写管理员 QQ，并携带有效 Token。
+本人操作时，请保证请求体的 `actorQq` 与路径中的目标 QQ 一致。管理员代操作时，`actorQq` 应填写管理员 QQ，并携带有效管理员 Token 或受信任的机器人令牌。
 
 ### 2.5 团队可见范围
 

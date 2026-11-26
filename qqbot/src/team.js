@@ -4,6 +4,7 @@
  * 对接 https://docs/api-v2.md 描述的 HTTP API（Drogon + SQLite）。
  * 报名/退出遵循「获取槽位锁 → 写入 → 释放锁」流程，失败时也会释放锁。
  */
+import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 
 /** 后端业务错误：携带 HTTP 状态码与 reason */
@@ -52,6 +53,25 @@ export function describeError(err) {
 function buildMember(qq, { martialArtIndex = "", gearScore = "", characterId = "", note = "" } = {}) {
   const member = { qq, martialArtIndex: String(martialArtIndex), gearScore: String(gearScore), characterId, note };
   return member;
+}
+
+/** 创建与 Web 端一致的空团队，槽位由后端统一补全。 */
+export function createDefaultTeam(name, { weekStart = "" } = {}) {
+  return {
+    id: `team-${randomUUID()}`,
+    name,
+    note: "",
+    ...(weekStart ? { weekStart } : {}),
+    config: {
+      reservedSlots: [],
+      locked: false,
+      onlyTnSignup: false,
+      uniqueQqSignup: false,
+      publicSignup: true,
+      publicAtMs: 0,
+    },
+    slots: [],
+  };
 }
 
 /**
@@ -112,6 +132,11 @@ export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = c
   /** 将 OpenQQ 拉取的完整群成员列表原子同步到白名单。 */
   async function syncGroupMembers(groupId, members) {
     return request("POST", "/internal/group-members/sync", { groupId: String(groupId), members });
+  }
+
+  /** 查询 QQ 是否为后端配置的管理员。 */
+  async function checkAdmin(qq) {
+    return request("GET", `/admin/check?actorQq=${encodeURIComponent(qq)}`);
   }
 
   /** 获取槽位锁，返回 lockToken；被占用时抛 TeamApiError(lockedBy) */
@@ -179,5 +204,74 @@ export function createTeamClient({ baseUrl = config.teamBaseUrl, inviteToken = c
     }
   }
 
-  return { bootstrap, signup, withdraw, request, syncGroupMembers };
+  /** 取消报名并写取消记录。管理员可以把 actorQq 与 expectedMemberQq 分开传入。 */
+  async function cancelSlot(actorQq, teamId, slotIndex, expectedMemberQq, reason = "") {
+    const lockToken = await acquireSlotLock(actorQq, teamId, slotIndex);
+    try {
+      return await request("POST", `/teams/${encodeURIComponent(teamId)}/slots/${slotIndex}/cancel`, {
+        actorQq,
+        cancelledBy: actorQq,
+        reason,
+        lockToken,
+        expectedMemberQq,
+        inviteToken,
+      });
+    } finally {
+      await releaseSlotLock(actorQq, teamId, slotIndex, lockToken);
+    }
+  }
+
+  /** 管理员创建团队。 */
+  async function createTeam(actorQq, team) {
+    return request("POST", "/teams", { actorQq, team });
+  }
+
+  /** 管理员修改团队名称、规则或备注。 */
+  async function updateTeam(actorQq, teamId, patch) {
+    return request("PATCH", `/teams/${encodeURIComponent(teamId)}`, { actorQq, ...patch });
+  }
+
+  /** 管理员删除团队；删除最后一个团队时可由调用方提供备用团队。 */
+  async function deleteTeam(actorQq, teamId, fallbackTeam) {
+    return request("DELETE", `/teams/${encodeURIComponent(teamId)}`, {
+      actorQq,
+      ...(fallbackTeam ? { fallbackTeam } : {}),
+    });
+  }
+
+  /** 暂停团队报名并获取运行时锁。 */
+  async function lockTeam(actorQq, teamId) {
+    return request("POST", "/team-locks", { actorQq, teamId });
+  }
+
+  /** 解除团队运行时锁。 */
+  async function unlockTeam(actorQq, teamId) {
+    return request("DELETE", `/team-locks/${encodeURIComponent(teamId)}?actorQq=${encodeURIComponent(actorQq)}`);
+  }
+
+  /** 管理员按职业或具体武学预留槽位。 */
+  async function quickReserve(actorQq, teamId, reserveType, count, martialArtIndex = null) {
+    return request("POST", `/teams/${encodeURIComponent(teamId)}/quick-reserve`, {
+      actorQq,
+      reserveType,
+      count,
+      martialArtIndex,
+    });
+  }
+
+  return {
+    bootstrap,
+    signup,
+    withdraw,
+    cancelSlot,
+    checkAdmin,
+    createTeam,
+    updateTeam,
+    deleteTeam,
+    lockTeam,
+    unlockTeam,
+    quickReserve,
+    request,
+    syncGroupMembers,
+  };
 }

@@ -54,6 +54,8 @@ printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u 你的GitHub用户名 --pass
 
 QQ 机器人通过 OpenQQ OneBot v11 正向 WebSocket 连接。机器人启动后会拉取目标群完整成员列表，定时同步并在入群、退群、群名片变化时立即刷新白名单。群成员无需绑定即可使用 QQ 号登录，退群成员会失去登录与报名权限。仅运行网站时设置 `QQBOT_ENABLED=false`；正常启用机器人时，缺少 `OPENQQ_WS_URL`、`OPENQQ_ACCESS_TOKEN` 或 `TEAMASSISTANT_BOT_TOKEN` 会让容器启动失败。
 
+群聊中 @机器人 后直接发送“报名”“取消”“我的报名”等指令，无需 `/` 前缀。管理员可以在群内完成快速开团、锁团、代取消、快速预留和报名规则设置，完整指令见 `qqbot/README.md`。
+
 报名网站的普通用户只输入 QQ 号登录。后端会同时校验会员 Token 和当前群成员白名单，非群成员会收到加入 QQ 群的提示。报名中的装分/层数可留空，空值不会在报名列表展示。
 
 ### 数据与更新

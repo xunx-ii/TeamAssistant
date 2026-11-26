@@ -141,7 +141,9 @@ test('team publication filters snapshots for public, invited and authenticated a
   assert.deepEqual((await request('/bootstrap?inviteToken=invalid')).teams.map(team => team.id), ['public-team'])
   assert.equal((await request(`/bootstrap?inviteToken=${inviteToken}`)).teams.length, 3)
   assert.equal((await request(`/bootstrap?qq=${adminQq}&adminToken=${adminToken}`)).teams.length, 3)
-  assert.equal((await request(`/bootstrap?qq=${adminQq}`)).teams.length, 1, '管理员 QQ 本身不能绕过权限')
+  const adminWithoutSession = await requestWithoutBot(`/bootstrap?qq=${adminQq}`)
+  assert.equal(adminWithoutSession.status, 401, '管理员 QQ 本身不能绕过浏览器会话')
+  assert.equal(adminWithoutSession.reason, 'memberSessionRequired')
   assert.equal(normal.visibilityKey, 'public')
   assert.equal(JSON.stringify(normal).includes('private-team'), false)
   assert.equal(JSON.stringify(normal).includes('future-team'), false)
@@ -287,9 +289,9 @@ test('publication changes, revoked links and lost admin sessions replace the vis
   const revoked = await request(`/sync?dataVersion=${invited.dataVersion}&lockVersion=${invited.lockVersion}&visibilityKey=${encodeURIComponent(invited.visibilityKey)}&inviteToken=${inviteToken}`)
   assert.deepEqual(revoked.data.teams.map(team => team.id), ['public-team'])
   const adminSnapshot = await request(`/sync?qq=${adminQq}&adminToken=${adminToken}`)
-  const noSession = await request(`/sync?qq=${adminQq}&dataVersion=${adminSnapshot.dataVersion}&lockVersion=${adminSnapshot.lockVersion}&visibilityKey=admin`)
-  assert.equal(noSession.dataChanged, true)
-  assert.deepEqual(noSession.data.teams.map(team => team.id), ['public-team'])
+  const noSession = await requestWithoutBot(`/sync?qq=${adminQq}&dataVersion=${adminSnapshot.dataVersion}&lockVersion=${adminSnapshot.lockVersion}&visibilityKey=admin`)
+  assert.equal(noSession.status, 401)
+  assert.equal(noSession.reason, 'memberSessionRequired')
   const ordinary = await request('/sync')
   assert.equal((await request('/teams/public-team', 'PATCH', adminBody({ publicSignup: false, publicAtMs: 0 }))).ok, true)
   const hidden = await request(`/sync?dataVersion=${ordinary.dataVersion}&lockVersion=${ordinary.lockVersion}`)
@@ -625,6 +627,39 @@ test('bot bootstrap retains actorQq and invite access', async () => {
   const gate = await request('/access-gate', 'PUT', adminBody({ publicAtMs: Date.now() + 60_000 }))
   const client = createTeamClient({ baseUrl, inviteToken: gate.inviteToken, botToken })
   assert.equal((await client.bootstrap('20001')).teams.length, 1)
+})
+
+test('trusted bot token authorizes configured admins without a browser session', async () => {
+  const candidateTeam = emptyTeam('bot-authorized-team')
+  const rejected = await request('/teams', 'POST', { actorQq: '20001', team: candidateTeam })
+  assert.equal(rejected.status, 403)
+  assert.equal(rejected.reason, 'forbidden')
+
+  const created = await request('/teams', 'POST', { actorQq: adminQq, team: candidateTeam })
+  assert.equal(created.ok, true)
+  assert.equal((await request('/team-locks', 'POST', { actorQq: adminQq, teamId: candidateTeam.id })).ok, true)
+  assert.equal((await request(`/team-locks/${candidateTeam.id}?actorQq=${adminQq}`, 'DELETE')).ok, true)
+})
+
+test('bot admin client manages a team through the protected API', async () => {
+  const client = createTeamClient({ baseUrl, inviteToken: '', botToken })
+  const team = emptyTeam('bot-admin-client-team')
+  team.name = '机器人管理测试'
+
+  assert.equal((await client.createTeam(adminQq, team)).ok, true)
+  assert.equal((await client.updateTeam(adminQq, team.id, { name: '机器人管理测试二队', onlyTnSignup: true })).ok, true)
+  assert.equal((await client.quickReserve(adminQq, team.id, 'T', 1)).ok, true)
+
+  const snapshot = await client.bootstrap(adminQq)
+  const managed = snapshot.teams.find(item => item.id === team.id)
+  assert.equal(managed.name, '机器人管理测试二队')
+  const emptySlot = managed.slots.find(slot => slot.status === 'empty')
+  assert.ok(emptySlot)
+  await client.signup('20001', team.id, emptySlot.index, { martialArtIndex: '1', characterId: '测试铁牢' })
+  assert.equal((await client.cancelSlot(adminQq, team.id, emptySlot.index, '20001', '管理员测试取消')).ok, true)
+  assert.equal((await client.lockTeam(adminQq, team.id)).ok, true)
+  assert.equal((await client.unlockTeam(adminQq, team.id)).ok, true)
+  assert.equal((await client.deleteTeam(adminQq, team.id)).ok, true)
 })
 
 test('bot translates slot contention and preserves team lock errors', async () => {
