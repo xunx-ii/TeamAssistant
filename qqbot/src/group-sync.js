@@ -4,6 +4,13 @@ function memberLabel(member) {
   return member?.card || member?.nickname || member?.qq || "未知成员";
 }
 
+function memberLogLabel(member) {
+  const qq = String(member?.qq ?? "").trim();
+  const name = String(member?.card || member?.nickname || "").trim();
+  if (name && qq) return `${name}(${qq})`;
+  return name || qq || "未知成员";
+}
+
 export function createGroupMembershipSync({
   oneBot,
   teamClient,
@@ -45,7 +52,7 @@ export function createGroupMembershipSync({
           await safeNotify(`新成员 ${memberLabel(member)} 已自动加入报名系统白名单，可直接使用 QQ 号登录。`);
         }
         if (removed.length > 0) {
-          logger.info?.(`[membership] 已回收 ${removed.length} 名退群成员的报名权限`);
+          logger.info?.(`[membership] 已回收 ${removed.length} 名退群成员的报名权限: ${removed.map(memberLogLabel).join("、")}`);
         }
       }
       return result;

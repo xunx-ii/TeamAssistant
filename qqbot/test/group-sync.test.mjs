@@ -77,5 +77,5 @@ test("removed members lose access without a public group announcement", async ()
   assert.equal(await sync.hasMember("10002"), false);
   assert.equal(notifications.length, notificationCount);
   assert.equal(notifications.some(message => /李四|退出群/.test(message)), false);
-  assert.equal(logs.some(message => /回收 1 名退群成员/.test(message)), true);
+  assert.equal(logs.some(message => /回收 1 名退群成员/.test(message) && /李四\(10002\)/.test(message)), true);
 });
