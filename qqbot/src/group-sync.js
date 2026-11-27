@@ -44,8 +44,8 @@ export function createGroupMembershipSync({
         for (const member of added) {
           await safeNotify(`新成员 ${memberLabel(member)} 已自动加入报名系统白名单，可直接使用 QQ 号登录。`);
         }
-        for (const member of removed) {
-          await safeNotify(`成员 ${memberLabel(member)} 已退出群，报名登录与报名权限已同步移除。`);
+        if (removed.length > 0) {
+          logger.info?.(`[membership] 已回收 ${removed.length} 名退群成员的报名权限`);
         }
       }
       return result;
